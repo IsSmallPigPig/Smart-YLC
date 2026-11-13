@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from datetime import datetime
@@ -35,7 +34,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
-from app.constants import CONFIG_FILE
+from app.services import store
 from app.services.api import SiteClient
 
 HEALTH_LABEL = {
@@ -179,6 +178,26 @@ class SettingsPage(QWidget):
         ros_lay.addLayout(row3)
         lay.addWidget(ros)
 
+        # 每日通知 + 自启动卡片
+        daily = CardWidget()
+        daily_lay = QVBoxLayout(daily)
+        daily_lay.setContentsMargins(20, 16, 20, 16)
+        daily_lay.addWidget(SubtitleLabel("每日团员情况通知 / 后台自启动"))
+        row4 = QHBoxLayout()
+        row4.addWidget(BodyLabel("每天"))
+        self.notify_time_edit = LineEdit()
+        self.notify_time_edit.setFixedWidth(80)
+        self.notify_time_edit.setPlaceholderText("08:00")
+        self.notify_time_edit.setClearButtonEnabled(False)
+        row4.addWidget(self.notify_time_edit)
+        row4.addWidget(BodyLabel("通过系统通知推送团员情况（后台模式生效）"))
+        row4.addStretch(1)
+        self.autostart_btn = PushButton()
+        self.autostart_btn.clicked.connect(self._toggle_autostart)
+        row4.addWidget(self.autostart_btn)
+        daily_lay.addLayout(row4)
+        lay.addWidget(daily)
+
         self._load_config()
         self._refresh_table()
 
@@ -193,20 +212,12 @@ class SettingsPage(QWidget):
     # ---------- 配置持久化 ----------
 
     def _load_config(self):
-        try:
-            with open(CONFIG_FILE, encoding="utf-8") as f:
-                cfg = json.load(f)
-        except (OSError, ValueError):
-            return
+        cfg = store.load()
         self.accounts = list(cfg.get("accounts") or [])
-        # 兼容旧版单账号格式（自动迁移，不丢数据）
-        if not self.accounts and cfg.get("userName") and cfg.get("password"):
-            self.accounts = [{
-                "userName": cfg["userName"], "password": cfg["password"], "remark": "",
-                "health": {"status": "unknown", "message": "", "checkedAt": ""},
-            }]
         self.active_user = cfg.get("activeUser") or (self.accounts[0]["userName"] if self.accounts else "")
         self.roster_edit.setText(cfg.get("rosterPath", ""))
+        self.notify_time_edit.setText(store.notify_time(cfg))
+        self._refresh_autostart_btn()
         if cfg.get("rosterPath") and os.path.isfile(cfg["rosterPath"]):
             try:
                 self._load_roster(cfg["rosterPath"])
@@ -214,15 +225,40 @@ class SettingsPage(QWidget):
                 self.roster_info.setText(f"名单加载失败：{e}")
 
     def _save_config(self):
-        cfg = {
+        cfg = store.load()
+        cfg.update({
             "activeUser": self.active_user,
             "rosterPath": self.roster_edit.text().strip(),
             "accounts": self.accounts,
-        }
-        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            "notifyTime": self.notify_time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME,
+        })
+        store.save(cfg)
         self._client = None
+
+    # ---------- 自启动 / 每日通知 ----------
+
+    def _refresh_autostart_btn(self):
+        from app.services import autostart
+
+        if autostart.is_installed():
+            self.autostart_btn.setText("关闭开机自启动")
+        else:
+            self.autostart_btn.setText("开启开机自启动（后台静默）")
+
+    def _toggle_autostart(self):
+        from app.services import autostart
+
+        if autostart.is_installed():
+            autostart.uninstall()
+            InfoBar.info(self, "已关闭自启动", "后台托盘不再开机运行", duration=3000, parent=self)
+        else:
+            if not self.accounts:
+                InfoBar.warning(self, "先配置账号", "自启动的后台模式每天要检查团员情况，请先在上方添加账号", duration=4000, parent=self)
+                return
+            path = autostart.install()
+            InfoBar.success(self, "已开启自启动", f"LaunchAgent：{path}", duration=4000, parent=self)
+        self._refresh_autostart_btn()
+
 
     # ---------- 账号增删 / 去重 / 冲突 ----------
 
