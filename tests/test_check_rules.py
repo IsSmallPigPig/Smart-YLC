@@ -72,3 +72,22 @@ def test_cross_check_match():
     roster = Roster("r", [RosterRow("张三", "13800000000")])
     r = cross_check_roster([member(org_name="高一3班")], roster, "all", [])
     assert r.matched_count == 1 and r.orgs == ["高一3班"]
+
+
+def test_daily_summary():
+    from app.domain.check_rules import build_daily_summary, CheckResult
+    from app.domain.naming import Roster, RosterRow
+
+    members = [member(), member(name="李四")]
+    results = [
+        CheckResult("identity", member(), True, []),
+        CheckResult("fees", member(name="李四", unpaid_total=3.5), True, [], 3.5, 1, "欠缴"),
+    ]
+    cross_ok = cross_check_roster(members, Roster("r", [RosterRow("张三", "13800000000")]), "all", [])
+    s = build_daily_summary(members, results, cross_ok)
+    assert "在册团员 2 人" in s and "报到身份异常 1" in s and "欠缴 1 人（3.5 元）" in s
+    assert "⚠️" not in s
+
+    cross_bad = cross_check_roster(members, Roster("r", [RosterRow("王五", "13700000000")]), "all", [])
+    s2 = build_daily_summary(members, [], cross_bad)
+    assert "⚠️" in s2 and "团费无欠缴" in s2

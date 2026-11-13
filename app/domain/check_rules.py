@@ -220,3 +220,24 @@ def cross_check_roster(
         else f"共匹配到预设团员 {matched} 人，分布于 {len(by_org)} 个团支部"
     )
     return RosterCrossCheck(matched, detected, list(by_org.keys()), msg, diagnostics)
+
+
+def build_daily_summary(
+    members: list[MemberRecord],
+    results: list[CheckResult],
+    cross: RosterCrossCheck,
+) -> str:
+    """每日通知用的摘要（纯函数，可单测）。"""
+    by_kind = {"identity": 0, "report": 0, "fees": 0}
+    for r in results:
+        by_kind[r.kind] = by_kind.get(r.kind, 0) + 1
+    unpaid_amount = sum(r.amount for r in results if r.kind == "fees")
+    parts = [
+        f"在册团员 {len(members)} 人",
+        f"报到身份异常 {by_kind['identity']}",
+        f"报到情况异常 {by_kind['report']}",
+        f"欠缴 {by_kind['fees']} 人（{unpaid_amount:g} 元）" if by_kind["fees"] else "团费无欠缴",
+    ]
+    if cross.detected:
+        parts.append("⚠️ 未匹配到任何预设团员，请核对名单与账号")
+    return "；".join(parts)
