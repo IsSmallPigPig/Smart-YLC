@@ -110,13 +110,13 @@ class CheckPage(FluentPage):
     def _start(self):
         client = self.window_ref.settings_page.client()
         if client is None:
-            InfoBar.error(self, "未配置账号", "请先到「系统配置」填写团支部账号", duration=3000, parent=self)
+            InfoBar.error("未配置账号", "请先到「系统配置」填写团支部账号", duration=3000, parent=self)
             return
         verdict = client.session_account()
         if not verdict.ok and not client.logged_in:
             verdict = client.login()
             if not verdict.ok:
-                InfoBar.error(self, "登录失败", verdict.message, duration=4000, parent=self)
+                InfoBar.error("登录失败", verdict.message, duration=4000, parent=self)
                 return
         self.scan_btn.setEnabled(False)
         self.stat.setText("正在拉取团员列表…")
@@ -131,7 +131,7 @@ class CheckPage(FluentPage):
     def _on_failed(self, msg: str):
         self.scan_btn.setEnabled(True)
         self.stat.setText(f"检查失败：{msg}")
-        InfoBar.error(self, "检查失败", msg, duration=5000, parent=self)
+        InfoBar.error("检查失败", msg, duration=5000, parent=self)
 
     def _on_done(self, payload, cross):
         self.scan_btn.setEnabled(True)
@@ -157,7 +157,7 @@ class CheckPage(FluentPage):
             f"{cross.message}；异常 {len(results)} 条"
             + (f"（另有 {len(diags)} 条解析诊断）" if diags else "")
         )
-        InfoBar.success(self, "检查完成", f"异常 {len(results)} 条，{cross.message}", duration=4000, parent=self)
+        InfoBar.success("检查完成", f"异常 {len(results)} 条，{cross.message}", duration=4000, parent=self)
 
     def _export(self):
         path, _ = QFileDialog.getSaveFileName(self, "导出异常清单", "异常清单.xlsx", "Excel (*.xlsx)")
@@ -174,4 +174,4 @@ class CheckPage(FluentPage):
             point = "；".join(d.reason for d in r.diffs) or (r.basis if r.kind == "fees" else "")
             ws.append([KIND_LABEL[r.kind], m.name, m.mobile, m.org_name or m.oid, point, r.basis or "与模板不一致"])
         wb.save(path)
-        InfoBar.success(self, "导出完成", path, duration=4000, parent=self)
+        InfoBar.success("导出完成", path, duration=4000, parent=self)

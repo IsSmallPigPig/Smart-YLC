@@ -30,11 +30,12 @@ from qfluentwidgets import (
     MessageBox,
     PrimaryPushButton,
     PushButton,
+    StrongBodyLabel,
     SubtitleLabel,
     TableWidget,
 )
 
-from app.ui.page import FluentPage
+from app.ui.page import FluentPage, note_label
 from app.services import store
 from app.services.api import SiteClient
 
@@ -87,7 +88,9 @@ class HealthWorker(QThread):
                     "passwordChange": "passwordChange",
                     "needMemberName": "needMemberName",
                 }
-                self.account_checked.emit(user, mapping.get(verdict.kind, "failed"), verdict.message)
+                # login() 返回 ApiResult，kind 在 data 里（而非 LoginVerdict 对象）
+                kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
+                self.account_checked.emit(user, mapping.get(kind, "failed"), verdict.message)
             except Exception as e:
                 self.account_checked.emit(user, "network", str(e))
 
@@ -110,7 +113,9 @@ class SettingsPage(FluentPage):
         top = CardWidget()
         top_lay = QVBoxLayout(top)
         top_lay.setContentsMargins(20, 16, 20, 16)
-        top_lay.addWidget(SubtitleLabel("当前使用的团支部账号"))
+        top_lay.addWidget(StrongBodyLabel("当前使用的团支部账号"))
+        top_lay.addWidget(note_label("测活先只读探测会话，会话有效不触发登录，避免误增密码错误次数"))
+        top_lay.addSpacing(4)
         row0 = QHBoxLayout()
         self.active_combo = ComboBox()
         self.active_combo.currentTextChanged.connect(self._on_active_changed)
@@ -134,7 +139,9 @@ class SettingsPage(FluentPage):
         add = CardWidget()
         add_lay = QVBoxLayout(add)
         add_lay.setContentsMargins(20, 16, 20, 16)
-        add_lay.addWidget(SubtitleLabel("添加 / 导入账号（自动去重）"))
+        add_lay.addWidget(StrongBodyLabel("添加 / 导入账号"))
+        add_lay.addWidget(note_label("同账号同密码自动去重；同名账号密码不同时会询问如何处理"))
+        add_lay.addSpacing(4)
         row1 = QHBoxLayout()
         self.new_user = LineEdit()
         self.new_user.setPlaceholderText("账号")
@@ -164,7 +171,9 @@ class SettingsPage(FluentPage):
         ros = CardWidget()
         ros_lay = QVBoxLayout(ros)
         ros_lay.setContentsMargins(20, 16, 20, 16)
-        ros_lay.addWidget(SubtitleLabel("预设团员名单（xlsx，列：姓名 / 手机号码）"))
+        ros_lay.addWidget(StrongBodyLabel("预设团员名单"))
+        ros_lay.addWidget(note_label("xlsx 格式，包含「姓名」「手机号码」两列"))
+        ros_lay.addSpacing(4)
         row3 = QHBoxLayout()
         self.roster_edit = LineEdit()
         self.roster_edit.setPlaceholderText("选择名单文件")
@@ -181,7 +190,9 @@ class SettingsPage(FluentPage):
         daily = CardWidget()
         daily_lay = QVBoxLayout(daily)
         daily_lay.setContentsMargins(20, 16, 20, 16)
-        daily_lay.addWidget(SubtitleLabel("每日团员情况通知 / 后台自启动"))
+        daily_lay.addWidget(StrongBodyLabel("每日通知与后台自启动"))
+        daily_lay.addWidget(note_label("到点通过系统通知推送团员情况；开启自启动后开机即在后台运行"))
+        daily_lay.addSpacing(4)
         row4 = QHBoxLayout()
         row4.addWidget(BodyLabel("每天"))
         self.notify_time_edit = LineEdit()
@@ -189,7 +200,7 @@ class SettingsPage(FluentPage):
         self.notify_time_edit.setPlaceholderText("08:00")
         self.notify_time_edit.setClearButtonEnabled(False)
         row4.addWidget(self.notify_time_edit)
-        row4.addWidget(BodyLabel("通过系统通知推送团员情况（后台模式生效）"))
+        row4.addSpacing(6)
         row4.addStretch(1)
         self.autostart_btn = PushButton()
         self.autostart_btn.clicked.connect(self._toggle_autostart)
@@ -249,13 +260,13 @@ class SettingsPage(FluentPage):
 
         if autostart.is_installed():
             autostart.uninstall()
-            InfoBar.info(self, "已关闭自启动", "后台托盘不再开机运行", duration=3000, parent=self)
+            InfoBar.info("已关闭自启动", "后台托盘不再开机运行", duration=3000, parent=self)
         else:
             if not self.accounts:
-                InfoBar.warning(self, "先配置账号", "自启动的后台模式每天要检查团员情况，请先在上方添加账号", duration=4000, parent=self)
+                InfoBar.warning("先配置账号", "自启动的后台模式每天要检查团员情况，请先在上方添加账号", duration=4000, parent=self)
                 return
             path = autostart.install()
-            InfoBar.success(self, "已开启自启动", f"LaunchAgent：{path}", duration=4000, parent=self)
+            InfoBar.success("已开启自启动", f"LaunchAgent：{path}", duration=4000, parent=self)
         self._refresh_autostart_btn()
 
 
@@ -301,7 +312,7 @@ class SettingsPage(FluentPage):
     def _add_manual(self):
         user, pwd = self.new_user.text().strip(), self.new_pwd.text()
         if not user or not pwd:
-            InfoBar.warning(self, "账号或密码未填", "两栏都填好再点添加", duration=2500, parent=self)
+            InfoBar.warning("账号或密码未填", "两栏都填好再点添加", duration=2500, parent=self)
             return
         result = self._upsert_account(user, pwd, self.new_remark.text().strip())
         self.new_user.clear()
@@ -309,9 +320,9 @@ class SettingsPage(FluentPage):
         self.new_remark.clear()
         self._after_accounts_changed()
         if result == "dedup":
-            InfoBar.info(self, "已去重", f"账号 {user} 同密码已存在，自动跳过", duration=3000, parent=self)
+            InfoBar.info("已去重", f"账号 {user} 同密码已存在，自动跳过", duration=3000, parent=self)
         elif result == "kept":
-            InfoBar.info(self, "已保留", f"账号 {user} 保留了原密码", duration=3000, parent=self)
+            InfoBar.info("已保留", f"账号 {user} 保留了原密码", duration=3000, parent=self)
 
     def _import_accounts(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -320,14 +331,14 @@ class SettingsPage(FluentPage):
             return
         rows = self._read_account_file(path)
         if not rows:
-            InfoBar.warning(self, "没有读到账号", "每行应为：账号 密码（备注可选）；xlsx 需有「账号」「密码」列", duration=4000, parent=self)
+            InfoBar.warning("没有读到账号", "每行应为：账号 密码（备注可选）；xlsx 需有「账号」「密码」列", duration=4000, parent=self)
             return
         stat = {"added": 0, "dedup": 0, "overwritten": 0, "kept": 0}
         for user, pwd, remark in rows:
             stat[self._upsert_account(user, pwd, remark)] += 1
         self._after_accounts_changed()
         msg = f"新增 {stat['added']}，去重跳过 {stat['dedup']}，覆盖 {stat['overwritten']}，冲突保留 {stat['kept']}"
-        InfoBar.success(self, "导入完成", msg, duration=5000, parent=self)
+        InfoBar.success("导入完成", msg, duration=5000, parent=self)
 
     def _read_account_file(self, path: str) -> list[tuple[str, str, str]]:
         rows: list[tuple[str, str, str]] = []
@@ -367,7 +378,7 @@ class SettingsPage(FluentPage):
     def _delete_selected(self):
         row = self.table.currentRow()
         if row < 0 or row >= len(self.accounts):
-            InfoBar.warning(self, "未选中", "先在表格里点选要删除的账号", duration=2500, parent=self)
+            InfoBar.warning("未选中", "先在表格里点选要删除的账号", duration=2500, parent=self)
             return
         user = self.accounts[row]["userName"]
         box = MessageBox("删除账号", f"确定从列表删除 {user}？（不影响站点数据）", self.window())
@@ -444,7 +455,7 @@ class SettingsPage(FluentPage):
             self._load_roster(path)
             self._save_config()
         except Exception as e:
-            InfoBar.error(self, "名单导入失败", str(e), duration=5000, parent=self)
+            InfoBar.error("名单导入失败", str(e), duration=5000, parent=self)
 
     def _load_roster(self, path: str):
         from app.services.excel import import_roster

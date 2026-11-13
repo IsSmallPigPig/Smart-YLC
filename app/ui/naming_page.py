@@ -20,7 +20,7 @@ from qfluentwidgets import (
     InfoBar,
 )
 
-from app.ui.page import FluentPage
+from app.ui.page import FluentPage, note_label
 from app.constants import NAME_SUFFIX, PDF_EXT_RE
 from app.domain.naming import analyze_file_name, build_naming_report
 
@@ -70,7 +70,7 @@ class NamingPage(FluentPage):
         row.addWidget(self.rename_btn)
         lay.addLayout(row)
 
-        self.hint = BodyLabel("规则：姓名+手机号码+入团志愿书.pdf（半角 +，无空格）")
+        self.hint = note_label("规则：姓名+手机号码+入团志愿书.pdf（半角 +，无空格）")
         lay.addWidget(self.hint)
 
         self.table = TableWidget()
@@ -91,7 +91,7 @@ class NamingPage(FluentPage):
     def _scan(self):
         d = self.dir_edit.text().strip()
         if not d or not os.path.isdir(d):
-            InfoBar.warning(self, "路径无效", "请先选择一个存在的文件夹", duration=2500, parent=self)
+            InfoBar.warning("路径无效", "请先选择一个存在的文件夹", duration=2500, parent=self)
             return
         self.scan_btn.setEnabled(False)
         self.worker = ScanWorker(d, self._roster(), False)
@@ -140,5 +140,5 @@ class NamingPage(FluentPage):
                 continue
             os.rename(src, dst)
             renamed += 1
-        InfoBar.success(self, "改名完成", f"已按建议名重命名 {renamed} 个文件", duration=3000, parent=self)
+        InfoBar.success("改名完成", f"已按建议名重命名 {renamed} 个文件", duration=3000, parent=self)
         self._scan()

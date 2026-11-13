@@ -103,36 +103,36 @@ class UploadPage(FluentPage):
     def _start(self):
         d = self.dir_edit.text().strip()
         if not d or not os.path.isdir(d):
-            InfoBar.warning(self, "路径无效", "请先选择一个存在的文件夹", duration=2500, parent=self)
+            InfoBar.warning("路径无效", "请先选择一个存在的文件夹", duration=2500, parent=self)
             return
         if self.confirm_edit.text().strip() != CONFIRM_PHRASE:
-            InfoBar.warning(self, "请输入确认短语", f"手输「{CONFIRM_PHRASE}」才会开始真实上传", duration=3000, parent=self)
+            InfoBar.warning("请输入确认短语", f"手输「{CONFIRM_PHRASE}」才会开始真实上传", duration=3000, parent=self)
             return
         files = sorted(
             os.path.join(d, f) for f in os.listdir(d)
             if f.lower().endswith(".pdf") and os.path.isfile(os.path.join(d, f))
         )
         if not files:
-            InfoBar.warning(self, "没有 PDF", "所选文件夹里没有 .pdf 文件", duration=2500, parent=self)
+            InfoBar.warning("没有 PDF", "所选文件夹里没有 .pdf 文件", duration=2500, parent=self)
             return
         over = [{"name": os.path.basename(p), "size": os.path.getsize(p)} for p in files]
         limits = check_site_limits(over)
         if limits:
             for i, r in enumerate(limits[:5]):
                 self.stat.setText(r)
-            InfoBar.warning(self, "超出站点限制", "；".join(limits[:2]), duration=5000, parent=self)
+            InfoBar.warning("超出站点限制", "；".join(limits[:2]), duration=5000, parent=self)
             return
         client = self._client()
         if client is None:
-            InfoBar.error(self, "未配置账号", "请先到「系统配置」填写团支部账号", duration=3000, parent=self)
+            InfoBar.error("未配置账号", "请先到「系统配置」填写团支部账号", duration=3000, parent=self)
             return
         verdict = client.login()
         if not verdict.ok:
             kind = (verdict.data or {}).get("kind") if isinstance(verdict.data, dict) else ""
             if kind == "captcha":
-                InfoBar.warning(self, "需要验证码", "密码失败次数过多，请先在网页端登录一次再回来", duration=5000, parent=self)
+                InfoBar.warning("需要验证码", "密码失败次数过多，请先在网页端登录一次再回来", duration=5000, parent=self)
             else:
-                InfoBar.error(self, "登录失败", verdict.message, duration=5000, parent=self)
+                InfoBar.error("登录失败", verdict.message, duration=5000, parent=self)
             return
 
         self.table.setRowCount(len(files))

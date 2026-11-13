@@ -6,15 +6,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
-    BodyLabel,
     CardWidget,
     FluentIcon as FIF,
     PrimaryPushButton,
+    StrongBodyLabel,
     SubtitleLabel,
-    TitleLabel,
 )
 
-from app.ui.page import FluentPage
+from app.ui.page import FluentPage, note_label
 
 
 def _card(title: str, desc: str, on_click) -> CardWidget:
@@ -22,10 +21,10 @@ def _card(title: str, desc: str, on_click) -> CardWidget:
     lay = QHBoxLayout(card)
     lay.setContentsMargins(20, 16, 20, 16)
     left = QVBoxLayout()
-    t = SubtitleLabel(title)
-    d = BodyLabel(desc)
-    d.setWordWrap(True)
+    t = StrongBodyLabel(title)
+    d = note_label(desc)
     left.addWidget(t)
+    left.addSpacing(2)
     left.addWidget(d)
     lay.addLayout(left, 1)
     btn = PrimaryPushButton(FIF.CHEVRON_RIGHT, "开始")
@@ -41,8 +40,8 @@ class HomePage(FluentPage):
         self.window_ref = window
         lay = self.vBoxLayout
 
-        lay.addWidget(TitleLabel("智慧团建管理员辅助"))
-        lay.addWidget(BodyLabel("站点 tuan.12355.net · 接口协议来自只读侦察 · 上传后需在网页端点击「审核」"))
+        lay.addWidget(SubtitleLabel("智慧团建管理员辅助"))
+        lay.addWidget(note_label("站点 tuan.12355.net · 接口协议来自只读侦察 · 上传后需在网页端点击「审核」"))
 
         lay.addWidget(_card(
             "命名检查", "按「张三+13800000000+入团志愿书.pdf」校验符号、结构、重复与名单交叉",
