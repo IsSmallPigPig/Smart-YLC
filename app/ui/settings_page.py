@@ -34,6 +34,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
+from app.ui.page import FluentPage
 from app.services import store
 from app.services.api import SiteClient
 
@@ -91,7 +92,7 @@ class HealthWorker(QThread):
                 self.account_checked.emit(user, "network", str(e))
 
 
-class SettingsPage(QWidget):
+class SettingsPage(FluentPage):
     roster_changed = Signal(object)
 
     def __init__(self, parent=None):
@@ -103,9 +104,7 @@ class SettingsPage(QWidget):
         self._client: SiteClient | None = None
         self._worker: HealthWorker | None = None
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(36, 28, 36, 28)
-        lay.setSpacing(14)
+        lay = self.vBoxLayout
 
         # 当前使用账号
         top = CardWidget()
@@ -129,7 +128,7 @@ class SettingsPage(QWidget):
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["账号", "备注", "健康状态", "最近检查"])
         self.table.horizontalHeader().setStretchLastSection(True)
-        lay.addWidget(self.table, 2)
+        self.add_table(self.table, 2)
 
         # 添加账号
         add = CardWidget()

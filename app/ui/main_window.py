@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import FluentWindow, NavigationItemPosition
 
@@ -14,6 +16,24 @@ from app.ui.upload_page import UploadPage
 
 VERSION = "0.2.0-qt"
 
+if sys.platform == "darwin":
+    # qframelesswindow 的 StandardTitleBar 给标题 QLabel 写死了 'Segoe UI'
+    # （macOS 无此字体，每次启动触发 qt.qpa.fonts 别名填充告警，~135ms 开销）。
+    # 在任何窗口构造之前拦截：应用后把字体替换为本机中文渲染字体。
+    from qframelesswindow.titlebar import StandardTitleBar
+
+    _orig_init = StandardTitleBar.__init__
+
+    def _local_titlebar_font(self, parent):
+        _orig_init(self, parent)
+        lbl = getattr(self, "titleLabel", None)
+        if lbl is not None:
+            lbl.setStyleSheet(
+                lbl.styleSheet().replace("'Segoe UI'", "'PingFang SC'")
+            )
+
+    StandardTitleBar.__init__ = _local_titlebar_font
+
 
 class MainWindow(FluentWindow):
     def __init__(self):
@@ -24,10 +44,13 @@ class MainWindow(FluentWindow):
         from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QApplication
 
-        # 窗口大小自适应屏幕：小屏缩到 85%，大屏用默认 1180×760
+        # 窗口自适应屏幕：85% 可用区域（上限 1180×760），居中
         screen = QApplication.primaryScreen().availableGeometry()
         w, h = min(1180, int(screen.width() * 0.85)), min(760, int(screen.height() * 0.85))
         self.resize(w, h)
+        geo = self.frameGeometry()
+        geo.moveCenter(screen.center())
+        self.move(geo.topLeft())
 
         self.settings_page = SettingsPage()
         self.home_page = HomePage(self)

@@ -17,6 +17,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
+from app.ui.page import FluentPage
 from app.domain.check_rules import (
     CheckResult,
     CheckTemplate,
@@ -75,15 +76,12 @@ class CheckWorker(QThread):
         self.done.emit((results, diags), cross)
 
 
-class CheckPage(QWidget):
+class CheckPage(FluentPage):
     def __init__(self, window, parent=None):
-        super().__init__(parent)
-        self.setObjectName('page-check')
+        super().__init__('page-check', parent)
         self.window_ref = window
         self.results: list[CheckResult] = []
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(36, 28, 36, 28)
-        lay.setSpacing(12)
+        lay = self.vBoxLayout
 
         row = QHBoxLayout()
         self.kind_combo = ComboBox()
@@ -107,7 +105,7 @@ class CheckPage(QWidget):
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(["检查项", "姓名", "手机号", "团支部", "异常点", "判定依据"])
         self.table.horizontalHeader().setStretchLastSection(True)
-        lay.addWidget(self.table, 1)
+        self.add_table(self.table, 1)
 
     def _start(self):
         client = self.window_ref.settings_page.client()

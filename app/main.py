@@ -15,14 +15,12 @@ def run() -> int:
 
         return run_tray()
 
-    from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication
-    from qfluentwidgets import setTheme, Theme
 
     app = QApplication(sys.argv)
-    app.setFont(QFont("PingFang SC", 13))
-    # 跟随系统深浅色模式
-    setTheme(Theme.AUTO)
+    from app.setup import setup_app
+
+    setup_app()
 
     from app.ui.main_window import MainWindow
 

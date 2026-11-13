@@ -20,6 +20,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
 )
 
+from app.ui.page import FluentPage
 from app.constants import CONFIRM_PHRASE, LIMITS
 from app.domain.chunk_protocol import check_site_limits
 
@@ -51,15 +52,12 @@ class UploadWorker(QThread):
         self.all_done.emit(ok, len(self.files))
 
 
-class UploadPage(QWidget):
+class UploadPage(FluentPage):
     def __init__(self, window, parent=None):
-        super().__init__(parent)
-        self.setObjectName('page-upload')
+        super().__init__('page-upload', parent)
         self.window_ref = window
         self.worker = None
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(36, 28, 36, 28)
-        lay.setSpacing(12)
+        lay = self.vBoxLayout
 
         row = QHBoxLayout()
         self.dir_edit = LineEdit()
@@ -92,7 +90,7 @@ class UploadPage(QWidget):
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["文件", "结果", "说明"])
         self.table.horizontalHeader().setStretchLastSection(True)
-        lay.addWidget(self.table, 1)
+        self.add_table(self.table, 1)
 
     def _pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")
