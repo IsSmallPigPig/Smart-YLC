@@ -33,3 +33,15 @@ def test_summarize_counts_abnormal_member_once():
 def test_empty():
     s = summarize_members([], [])
     assert s.total == 0 and s.ratio == 0.0
+
+
+def test_summarize_by_kind_dedup():
+    m1 = member()
+    m2 = member(member_id="m2", name="李四", mobile="13900000000", unpaid_total=3.5)
+    results = [
+        CheckResult("identity", m2, True, []),
+        CheckResult("fees", m2, True, [], 3.5, 1, "欠缴"),
+    ]
+    s = summarize_members([m1, m2], results)
+    assert s.abnormal == 1  # 一人多项异常只计一次
+    assert s.by_kind["identity"] == 1 and s.by_kind["fees"] == 1 and s.by_kind["report"] == 0
