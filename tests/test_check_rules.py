@@ -91,3 +91,4 @@ def test_daily_summary():
     cross_bad = cross_check_roster(members, Roster("r", [RosterRow("王五", "13700000000")]), "all", [])
     s2 = build_daily_summary(members, [], cross_bad)
     assert "⚠️" in s2 and "团费无欠缴" in s2
+
