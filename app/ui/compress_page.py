@@ -115,14 +115,14 @@ class CompressPage(FluentPage):
     def _start(self):
         d = self.dir_edit.text().strip()
         if not d or not os.path.isdir(d):
-            InfoBar.warning(self, "路径无效", "请先选择一个存在的文件夹", duration=2500, parent=self)
+            InfoBar.warning("路径无效", "请先选择一个存在的文件夹", duration=2500, parent=self)
             return
         files = sorted(
             os.path.join(d, f) for f in os.listdir(d)
             if f.lower().endswith(".pdf") and os.path.isfile(os.path.join(d, f))
         )
         if not files:
-            InfoBar.warning(self, "没有 PDF", "所选文件夹里没有 .pdf 文件", duration=2500, parent=self)
+            InfoBar.warning("没有 PDF", "所选文件夹里没有 .pdf 文件", duration=2500, parent=self)
             return
         out_dir = os.path.join(d, "压缩结果")
         os.makedirs(out_dir, exist_ok=True)
@@ -171,4 +171,4 @@ class CompressPage(FluentPage):
         self.stop_btn.setEnabled(False)
         self.ring.setValue(100)
         self.stat.setText(f"完成：{ok}/{total} 个文件已输出到「压缩结果」子目录")
-        InfoBar.success(self, "压缩完成", f"{ok}/{total} 个文件完成", duration=3500, parent=self)
+        InfoBar.success("压缩完成", f"{ok}/{total} 个文件完成", duration=3500, parent=self)
