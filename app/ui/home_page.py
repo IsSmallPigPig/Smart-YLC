@@ -9,8 +9,10 @@ from qfluentwidgets import (
     CardWidget,
     FluentIcon as FIF,
     PrimaryPushButton,
+    PushButton,
     StrongBodyLabel,
     SubtitleLabel,
+    TitleLabel,
 )
 
 from app.ui.page import FluentPage, note_label
@@ -40,8 +42,23 @@ class HomePage(FluentPage):
         self.window_ref = window
         lay = self.vBoxLayout
 
-        lay.addWidget(SubtitleLabel("智慧团建管理员辅助"))
-        lay.addWidget(note_label("站点 tuan.12355.net · 接口协议来自只读侦察 · 上传后需在网页端点击「审核」"))
+        # 欢迎区：大标题左对齐，第二行字号略大
+        lay.addWidget(SubtitleLabel("欢迎，"))
+        lay.addWidget(TitleLabel("团委管理员"))
+        lay.addSpacing(4)
+
+        row = QHBoxLayout()
+        upload_btn = PrimaryPushButton(FIF.CLOUD, "上传档案")
+        upload_btn.setFixedWidth(140)
+        upload_btn.clicked.connect(lambda: window.switchTo(window.upload_page))
+        org_btn = PushButton(FIF.PIE_SINGLE, "组织状况")
+        org_btn.setFixedWidth(140)
+        org_btn.clicked.connect(lambda: window.switchTo(window.org_page))
+        row.addWidget(upload_btn)
+        row.addWidget(org_btn)
+        row.addStretch(1)
+        lay.addLayout(row)
+        lay.addSpacing(6)
 
         lay.addWidget(_card(
             "命名检查", "按「张三+13800000000+入团志愿书.pdf」校验符号、结构、重复与名单交叉",
