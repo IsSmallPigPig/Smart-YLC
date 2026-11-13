@@ -19,9 +19,15 @@ class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("智慧团建管理员辅助")
-        self.resize(1180, 760)
+        self.setMinimumSize(960, 640)
 
         from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QApplication
+
+        # 窗口大小自适应屏幕：小屏缩到 85%，大屏用默认 1180×760
+        screen = QApplication.primaryScreen().availableGeometry()
+        w, h = min(1180, int(screen.width() * 0.85)), min(760, int(screen.height() * 0.85))
+        self.resize(w, h)
 
         self.settings_page = SettingsPage()
         self.home_page = HomePage(self)

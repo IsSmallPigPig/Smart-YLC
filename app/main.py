@@ -12,7 +12,8 @@ def run() -> int:
 
     app = QApplication(sys.argv)
     app.setFont(QFont("PingFang SC", 13))
-    setTheme(Theme.DARK)
+    # 跟随系统深浅色模式
+    setTheme(Theme.AUTO)
 
     from app.ui.main_window import MainWindow
 
