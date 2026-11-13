@@ -14,6 +14,8 @@ from qfluentwidgets import (
     TitleLabel,
 )
 
+from app.ui.page import FluentPage
+
 
 def _card(title: str, desc: str, on_click) -> CardWidget:
     card = CardWidget()
@@ -33,15 +35,11 @@ def _card(title: str, desc: str, on_click) -> CardWidget:
     return card
 
 
-class HomePage(QWidget):
+class HomePage(FluentPage):
     def __init__(self, window, parent=None):
-        super().__init__(parent)
-        self.setObjectName('page-home')
+        super().__init__('page-home', parent)
         self.window_ref = window
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(36, 28, 36, 28)
-        lay.setSpacing(14)
-        lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        lay = self.vBoxLayout
 
         lay.addWidget(TitleLabel("智慧团建管理员辅助"))
         lay.addWidget(BodyLabel("站点 tuan.12355.net · 接口协议来自只读侦察 · 上传后需在网页端点击「审核」"))

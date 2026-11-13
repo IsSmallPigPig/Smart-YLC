@@ -144,8 +144,9 @@ class TrayDaemon(QObject):
 def run_tray() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    app.setFont(__import__("PySide6.QtGui", fromlist=["QFont"]).QFont("PingFang SC", 13))
-    setTheme(Theme.AUTO)
+    from app.setup import setup_app
+
+    setup_app()
     daemon = TrayDaemon(app)
     # 抑制未使用告警
     _ = daemon

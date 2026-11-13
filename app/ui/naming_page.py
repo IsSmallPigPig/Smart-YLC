@@ -20,6 +20,7 @@ from qfluentwidgets import (
     InfoBar,
 )
 
+from app.ui.page import FluentPage
 from app.constants import NAME_SUFFIX, PDF_EXT_RE
 from app.domain.naming import analyze_file_name, build_naming_report
 
@@ -45,15 +46,12 @@ class ScanWorker(QThread):
         self.done.emit(build_naming_report(self.scan_dir, issues, self.roster))
 
 
-class NamingPage(QWidget):
+class NamingPage(FluentPage):
     def __init__(self, window, parent=None):
-        super().__init__(parent)
-        self.setObjectName('page-naming')
+        super().__init__('page-naming', parent)
         self.window_ref = window
         self.report = None
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(36, 28, 36, 28)
-        lay.setSpacing(12)
+        lay = self.vBoxLayout
 
         # 目录选择行
         row = QHBoxLayout()
@@ -80,7 +78,7 @@ class NamingPage(QWidget):
         self.table.setBorderRadius(8)
         self.table.setWordWrap(False)
         self.table.horizontalHeader().setStretchLastSection(True)
-        lay.addWidget(self.table, 1)
+        self.add_table(self.table, 1)
 
     def _pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")

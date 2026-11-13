@@ -22,6 +22,7 @@ from qfluentwidgets import (
     InfoBar,
 )
 
+from app.ui.page import FluentPage
 from app.constants import LIMITS, MB, human_size
 from app.services.compress import compress_pdf
 
@@ -63,15 +64,12 @@ class CompressWorker(QThread):
         self.all_done.emit(ok, len(self.files))
 
 
-class CompressPage(QWidget):
+class CompressPage(FluentPage):
     def __init__(self, window, parent=None):
-        super().__init__(parent)
-        self.setObjectName('page-compress')
+        super().__init__('page-compress', parent)
         self.window_ref = window
         self.worker = None
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(36, 28, 36, 28)
-        lay.setSpacing(12)
+        lay = self.vBoxLayout
 
         row = QHBoxLayout()
         self.dir_edit = LineEdit()
@@ -107,7 +105,7 @@ class CompressPage(QWidget):
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(["文件", "原大小", "压缩后", "结果", "参数", "输出路径"])
         self.table.horizontalHeader().setStretchLastSection(True)
-        lay.addWidget(self.table, 1)
+        self.add_table(self.table, 1)
 
     def _pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")
