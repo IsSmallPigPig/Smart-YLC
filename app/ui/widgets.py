@@ -216,29 +216,22 @@ class StatusList(QWidget):
 
 
 class BadgeIcon(QWidget):
-    """彩色实心图标：直接画 filled 实体图标，不用描边线条。
+    """官方彩色图标：直接渲染 Microsoft Fluent color SVG 的原始渐变配色。
 
-    素材是 Fluent UI System Icons 的 filled 变体（MIT），存在
-    app/assets/icons/ 下，配色由调用方指定。"""
+    素材见 app/ui/icons.py。这里不画底板、不给图标染色，深浅主题都用同一份
+    官方配色。"""
 
-    def __init__(self, name: str = "", color: str = "#0067f4", size: int = 28,
-                 parent=None):
+    def __init__(self, name: str = "", size: int = 32, parent=None):
         super().__init__(parent)
         self._name = name
-        self._color = QColor(color)
         self.setFixedSize(size, size)
-
-    def set_color(self, color: str):
-        self._color = QColor(color)
-        self.update()
 
     def paintEvent(self, e):
         if not self._name:
             return
-        from app.ui.icons import colored_pixmap
+        from app.ui.icons import native_pixmap
 
-        pm = colored_pixmap(self._name, self._color.name(),
-                             max(self.width(), self.height()))
+        pm = native_pixmap(self._name, max(self.width(), self.height()))
         if pm.isNull():
             return
         p = QPainter(self)
@@ -257,8 +250,7 @@ class StatTile(CardWidget):
     clicked = Signal()
 
     def __init__(self, title: str, value: str = "0", note: str = "",
-                 icon: str = "", tone: str = "info", parent=None,
-                 icon_color: str = ""):
+                 icon: str = "", tone: str = "info", parent=None):
         super().__init__(parent)
         self.setBorderRadius(8)
         self.setClickEnabled(True)
@@ -271,8 +263,7 @@ class StatTile(CardWidget):
         head.setSpacing(10)
         self.icon_box = None
         if icon:
-            color = icon_color or TONE_COLOR.get(tone, TONE_COLOR["info"])
-            self.icon_box = BadgeIcon(icon, color)
+            self.icon_box = BadgeIcon(icon)
             head.addWidget(self.icon_box, 0, Qt.AlignmentFlag.AlignVCenter)
         head.addWidget(theme_font(BodyLabel(title), 14, int(QFont.Weight.DemiBold)))
         head.addStretch(1)

@@ -1,11 +1,11 @@
-"""彩色实心图标：从 app/assets/icons/ 里的 SVG 渲染成指定颜色的图标。
+"""首页卡片图标：Microsoft 官方 Fluent UI System Icons 的 color 图标（MIT）。
 
-素材来自 Fluent UI System Icons 的 filled 变体（MIT 协议，Microsoft），
-经 Iconify 分发的单色 SVG：图形本身是实心填充，不是描边线条，配色由
-调用方给一个颜色即可。
+素材取自 microsoft/fluentui-system-icons 仓库的 `*_24_color.svg`：彩色渐变
+实心图形，不是线条描边，也不是给单色图标染色。SVG 自带渐变与配色，直接
+按原色渲染，深浅主题下都不需要额外处理。
 
-fluent 自带的图标只有黑白描边两版；这里要的是首页卡片上那种彩色实心
-图标，所以单独存一份 SVG 资源，用 QSvgRenderer 按颜色渲染。
+打包时 app/assets 整个目录都进了可执行文件（见 release.yml 的 --add-data），
+新增图标不需要改打包脚本。
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 
 
 def icons_dir() -> Path:
@@ -29,26 +29,22 @@ def icon_path(name: str) -> Path:
     return icons_dir() / f"{name}.svg"
 
 
-def colored_icon(name: str, color: str = "#0067f4", size: int = 24) -> QIcon:
-    """按颜色渲染一个 filled 实体图标。"""
+def native_pixmap(name: str, size: int = 32) -> QPixmap:
+    """按 SVG 原始配色渲染，不做任何染色或字符串替换。"""
     path = icon_path(name)
     if not path.is_file():
-        return QIcon()
+        return QPixmap()
 
     from PySide6.QtCore import QByteArray
     from PySide6.QtSvg import QSvgRenderer
 
-    # SVG 里写的是 currentColor，QSvgRenderer 不认它（渲染成空），
-    # 所以先把 currentColor 换成目标色再交给渲染器。
     try:
-        svg = path.read_text(encoding="utf-8")
+        data = path.read_bytes()
     except OSError:
-        return QIcon()
-    svg = svg.replace("currentColor", QColor(color).name())
-
-    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+        return QPixmap()
+    renderer = QSvgRenderer(QByteArray(data))
     if not renderer.isValid():
-        return QIcon()
+        return QPixmap()
 
     pm = QPixmap(size, size)
     pm.fill(Qt.GlobalColor.transparent)
@@ -56,13 +52,13 @@ def colored_icon(name: str, color: str = "#0067f4", size: int = 24) -> QIcon:
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     renderer.render(painter)
     painter.end()
+    return pm
 
+
+def native_icon(name: str, size: int = 32) -> QIcon:
+    """同 native_pixmap，返回 QIcon。"""
     icon = QIcon()
-    icon.addPixmap(pm)
+    pm = native_pixmap(name, size)
+    if not pm.isNull():
+        icon.addPixmap(pm)
     return icon
-
-
-def colored_pixmap(name: str, color: str = "#0067f4", size: int = 24) -> QPixmap:
-    """同 colored_icon，但返回位图。"""
-    icon = colored_icon(name, color, size)
-    return icon.pixmap(QSize(size, size))
