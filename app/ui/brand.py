@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt
-from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QIcon, QImage, QPainter, QPainterPath, QPixmap
 
 from app.ui.hidpi import hidpi_canvas, scale_to
 
@@ -67,8 +67,17 @@ def app_tile_pixmap(size: int = 64) -> QPixmap:
         renderer = QSvgRenderer(str(svg))
         if renderer.isValid():
             renderer.setViewBox(QRectF(4, 4, 92, 92))
-            return hidpi_canvas(
-                size, lambda p: renderer.render(p, QRectF(0, 0, size, size)))
+            # 斜向反光条与投影是照着「完整图标」画的，压在方块外的部分会从圆角
+            # 边上渗出来，在深色背景上看成一圈白雾；按方块圆角裁掉
+            radius = 22 / 92 * size
+
+            def paint(p: QPainter):
+                path = QPainterPath()
+                path.addRoundedRect(QRectF(0, 0, size, size), radius, radius)
+                p.setClipPath(path)
+                renderer.render(p, QRectF(0, 0, size, size))
+
+            return hidpi_canvas(size, paint)
 
     # 没有矢量资源时回退到位图裁剪
     png = icon_path("smart-ylc@512.png")
