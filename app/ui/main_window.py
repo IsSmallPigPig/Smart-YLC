@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer
 from qfluentwidgets import FluentIcon as FIF
-from qfluentwidgets import MSFluentWindow, NavigationItemPosition, qrouter
+from qfluentwidgets import MSFluentWindow, NavigationItemPosition, ToolButton, qrouter
 
 from app.ui.check_page import CheckPage
 from app.ui.compress_page import CompressPage
@@ -67,20 +69,23 @@ class MainWindow(MSFluentWindow):
         self.addSubInterface(self.check_page, FIF.CERTIFICATE, "批量检查")
         self.addSubInterface(self.org_page, FIF.PIE_SINGLE, "组织状况")
         # 文档类工具与配置放底部，常用网络功能留在上方
-        self.addSubInterface(self.naming_page, FIF.EDIT, "文档检查", NavigationItemPosition.BOTTOM)
-        self.addSubInterface(self.compress_page, FIF.ZOOM, "批量压缩", NavigationItemPosition.BOTTOM)
+        self.addSubInterface(self.naming_page, FIF.EDIT, "文档检查", position=NavigationItemPosition.BOTTOM)
+        self.addSubInterface(self.compress_page, FIF.ZOOM, "批量压缩", position=NavigationItemPosition.BOTTOM)
         self.addSubInterface(
-            self.settings_page, FIF.SETTING, "系统配置", NavigationItemPosition.BOTTOM
+            self.settings_page, FIF.SETTING, "系统配置", position=NavigationItemPosition.BOTTOM
         )
 
-        # 侧边栏顶部返回按钮：行为与旧版 NavigationInterface 的 returnButton 一致，
-        # 沿 qrouter 历史回退，无历史时置灰
-        back_item = self.navigationInterface.addItem(
-            "return", FIF.RETURN, "", onClick=qrouter.pop,
-            selectable=False, position=NavigationItemPosition.TOP)
+        # 标题栏返回按钮：在窗口标题左侧，沿 qrouter 历史回退，无历史时置灰
+        back_btn = ToolButton(FIF.RETURN, self.titleBar)
+        back_btn.setToolTip("返回上一页")
+        tb = self.titleBar.hBoxLayout
+        idx = tb.indexOf(self.titleBar.titleLabel)
+        tb.insertSpacing(idx, 6)
+        tb.insertWidget(idx, back_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        back_btn.clicked.connect(lambda: qrouter.pop())
 
         def _enable_back(empty: bool):
-            back_item.setEnabled(not empty)
+            back_btn.setEnabled(not empty)
 
         qrouter.emptyChanged.connect(_enable_back)
         _enable_back(not qrouter.history)

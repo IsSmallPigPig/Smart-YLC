@@ -92,8 +92,8 @@ class HomePage(FluentPage):
         body_lay.setContentsMargins(36, 24, 36, 0)
         body_lay.setSpacing(8)
 
-        # 欢迎大字块：弹性留白撑在横幅与按钮之间，左对齐；两行文字紧贴
-        body_lay.addStretch(1)
+        # 欢迎大字块：紧跟头图下方，占上半区；两行文字紧贴
+        body_lay.addSpacing(16)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
         body_lay.addWidget(self.hello_label)
