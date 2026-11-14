@@ -1,6 +1,7 @@
-"""组织状况仪表盘：上传进度圆环 + 异常分类条形图 + 逐账号明细。
+"""组织状况仪表盘：上传进度圆环 + 异常分类条形图 + 错误团员名单（可导出）。
 
 异常分类：信息错误（报到身份）/ 没有报道（报到情况）/ 欠缴团费（团员缴费）。
+名单只列错误级异常的团员，每行末尾是所属支部（账号备注，无备注回退账号名）。
 """
 
 from __future__ import annotations
@@ -8,6 +9,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QHBoxLayout, QTableWidgetItem, QVBoxLayout
 
 from qfluentwidgets import (
@@ -15,6 +17,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     InfoBar,
     PrimaryPushButton,
+    PushButton,
     StrongBodyLabel,
     TableWidget,
 )
@@ -24,8 +27,8 @@ from app.domain.check_rules import (
     build_identity_results,
     build_report_results,
 )
-from app.domain.org_stats import KIND_LABEL, summarize_members
-from app.domain.transfer import fetch_transfer_applies, is_graduated, TransferSummary
+from app.domain.org_stats import KIND_LABEL, build_error_rows, summarize_members
+from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services.api import SiteClient
 from app.ui.charts import BarRowWidget, ProgressDonut
 from app.ui.check_page import default_identity_template, default_report_template
@@ -46,12 +49,12 @@ TRANSFER_COLOR = "#1565c0"
 
 
 class OrgWorker(QThread):
-    """并发逐账号：会话探测 → 失效才登录 → 拉取团员 → 三项检查 + 转接申请统计。只读查询。
+    """并发逐账号：会话探测 → 失效才登录 → 拉取团员 → 三项检查 + 错误团员名单 + 转接统计。只读查询。
 
     单账号失败（密码错误/网络异常）只影响它自己一行，不阻塞其他账号。"""
 
-    account_done = Signal(str, int, int, int, dict, str, str, object)
-    # user, total, uploaded, abnormal, by_kind, status, message, TransferSummary|None
+    account_done = Signal(str, str, int, int, int, dict, str, str, object, object)
+    # user, branch, total, uploaded, abnormal, by_kind, status, message, TransferSummary|None, error_rows
     all_done = Signal()
 
     MAX_WORKERS = 4  # 团员列表是重接口，并发数低于测活
@@ -66,8 +69,9 @@ class OrgWorker(QThread):
 
     def _check_one(self, acc: dict):
         user, pwd = acc.get("userName", ""), acc.get("password", "")
+        branch = acc.get("remark") or user
         if not user or not pwd:
-            return user, 0, 0, 0, {}, "empty", "账号或密码为空", None
+            return user, branch, 0, 0, 0, {}, "empty", "账号或密码为空", None, []
         try:
             client = SiteClient(user, pwd)
             probe = client.session_account()
@@ -75,7 +79,7 @@ class OrgWorker(QThread):
                 verdict = client.login()
                 kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
                 if kind != "ok":
-                    return user, 0, 0, 0, {}, kind, verdict.message, None
+                    return user, branch, 0, 0, 0, {}, kind, verdict.message, None, []
             members, _ = client.get_all_members()
             id_tpl, rep_tpl = default_identity_template(), default_report_template()
             results = (
@@ -84,15 +88,16 @@ class OrgWorker(QThread):
                 + build_fee_results(members)
             )
             s = summarize_members(members, results)
+            rows = build_error_rows(results, branch)
             # 转接申请统计（作为转出方，按支部过滤）
             oid = members[0].oid if members else ""
             transfer = fetch_transfer_applies(client, oid)
             transfer.total = s.total
             if is_graduated(acc):
                 user = f"{user}（毕业应转出）"
-            return user, s.total, s.uploaded, s.abnormal, dict(s.by_kind), "ok", "", transfer
+            return user, branch, s.total, s.uploaded, s.abnormal, dict(s.by_kind), "ok", "", transfer, rows
         except Exception as e:
-            return user, 0, 0, 0, {}, "network", str(e), None
+            return user, branch, 0, 0, 0, {}, "network", str(e), None, []
 
     def run(self):
         workers = min(self.MAX_WORKERS, max(1, len(self.accounts)))
@@ -104,7 +109,7 @@ class OrgWorker(QThread):
                 try:
                     self.account_done.emit(*fut.result())
                 except Exception as e:
-                    self.account_done.emit("", 0, 0, 0, {}, "network", f"统计线程异常：{e}", None)
+                    self.account_done.emit("", "", 0, 0, 0, {}, "network", f"统计线程异常：{e}", None, [])
         self.all_done.emit()
 
 
@@ -117,6 +122,8 @@ class OrgPage(FluentPage):
         self._uploaded = 0
         self._by_kind = {"identity": 0, "report": 0, "fees": 0}
         self._members_max = 10
+        self._error_rows: list = []
+        self._transfer_applied = 0
 
         lay = self.vBoxLayout
 
@@ -153,25 +160,28 @@ class OrgPage(FluentPage):
         row = QHBoxLayout()
         self.start_btn = PrimaryPushButton(FIF.SYNC, "开始统计")
         self.start_btn.clicked.connect(self._start)
+        self.export_btn = PushButton(FIF.SAVE, "导出表格")
+        self.export_btn.setEnabled(False)
+        self.export_btn.clicked.connect(self._export)
         row.addWidget(self.start_btn)
+        row.addWidget(self.export_btn)
         row.addStretch(1)
         card_lay.addLayout(row)
         lay.addWidget(card)
 
-        # 明细表：全部只读，列宽按内容自适应，状态与错误信息完整展示
+        # 错误团员名单表：只读，末列为所属支部；账号级失败也占一行便于排查
         self.table = TableWidget()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(8)
-        self.table.setColumnCount(7)
-        self.table.setHorizontalHeaderLabels(
-            ["账号", "在册", "已上传", "信息错误", "没有报道", "欠缴团费", "转接申请"])
+        self.table.setWordWrap(False)
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["姓名", "手机号码", "类别", "问题", "支部"])
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
-        for col in range(7):
+        for col in (0, 1, 2, 4):
             header.setSectionResizeMode(col, header.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, header.ResizeMode.Stretch)
         self.add_table(self.table, 1)
-
-        self._transfer_applied = 0
 
     def _set_ratio(self, total: int, uploaded: int):
         self.donut.set_value(uploaded, total)
@@ -191,8 +201,10 @@ class OrgPage(FluentPage):
         self._by_kind = {"identity": 0, "report": 0, "fees": 0}
         self._members_max = 10
         self._transfer_applied = 0
+        self._error_rows = []
         self.transfer_note.setText("转接明细：—")
         self.table.setRowCount(0)
+        self.export_btn.setEnabled(False)
         self._set_ratio(0, 0)
         self._update_bars()
         self.worker = OrgWorker(accounts)
@@ -200,7 +212,7 @@ class OrgPage(FluentPage):
         self.worker.all_done.connect(lambda: self.start_btn.setEnabled(True))
         self.worker.start()
 
-    def _on_account(self, user, total, uploaded, abnormal, by_kind, status, message, transfer):
+    def _on_account(self, user, branch, total, uploaded, abnormal, by_kind, status, message, transfer, rows):
         self._total += total
         self._uploaded += uploaded
         self._set_ratio(self._total, self._uploaded)
@@ -216,22 +228,41 @@ class OrgPage(FluentPage):
                 f"{detail}（接转成功 {transfer.succeeded} · 审核中 {transfer.pending} · 被退回 {transfer.returned}）")
         self._update_bars()
 
+        if status != "ok":
+            # 账号级失败：不参与名单，只占一行提示，避免静默丢账号
+            self._append_row("—", "—", "—", f"账号 {user or '（空）'} 检查失败："
+                             f"{STATUS_LABEL.get(status, status)}：{message}", branch, None)
+        for r in rows:
+            self._error_rows.append(r)
+            self._append_row(r.name, r.mobile, r.kinds, r.problems, r.branch, r.kinds)
+        if self._error_rows:
+            self.export_btn.setEnabled(True)
+
+    def _append_row(self, name, mobile, kind, problem, branch, kind_for_color):
         r = self.table.rowCount()
         self.table.setRowCount(r + 1)
-        transfer_cell = f"{transfer.applied}/{transfer.total}" if transfer and total else "-"
-        vals = [
-            user or "（空）",
-            str(total) if total else "-",
-            str(uploaded) if total else "-",
-            str(by_kind.get("identity", "-")) if total else "-",
-            str(by_kind.get("report", "-")) if total else "-",
-            str(by_kind.get("fees", "-")) if total else "-",
-            transfer_cell,
-        ]
+        vals = [name or "—", mobile or "—", kind or "—", problem or "—", branch or "—"]
         readonly = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if status != "ok":
-            vals[0] = f"{user or '（空）'}　⚠ {STATUS_LABEL.get(status, status)}：{message}"
+        color = QColor(next((KIND_COLOR[k] for k in KIND_COLOR if k in (kind_for_color or "")), None)) \
+            if kind_for_color else None
         for col, v in enumerate(vals):
             item = QTableWidgetItem(v)
             item.setFlags(readonly)
+            if color is not None and col == 2:
+                item.setForeground(color)
             self.table.setItem(r, col, item)
+
+    def _export(self):
+        if not self._error_rows:
+            InfoBar.warning("没有可导出的名单", "先「开始统计」，有错误团员后才能导出", duration=3000, parent=self)
+            return
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出错误团员名单", "错误团员名单.xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        from app.services.excel import save_error_rows
+
+        n = save_error_rows(path, self._error_rows)
+        InfoBar.success("已导出", f"{n} 名错误团员 → {path}", duration=5000, parent=self)

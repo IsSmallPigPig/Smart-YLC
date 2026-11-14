@@ -73,3 +73,23 @@ def save_roster_template(path: str) -> int:
         ws.column_dimensions[col].width = width
     wb.save(path)
     return 2
+
+
+ERROR_ROW_HEADERS = ["姓名", "手机号码", "类别", "问题", "支部"]
+
+
+def save_error_rows(path: str, rows) -> int:
+    """导出错误团员名单 xlsx（rows: ErrorMemberRow 可迭代），返回写入行数。"""
+    from openpyxl import Workbook
+
+    items = list(rows)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "错误团员名单"
+    ws.append(ERROR_ROW_HEADERS)
+    for r in items:
+        ws.append([r.name, r.mobile, r.kinds, r.problems, r.branch])
+    for col, width in zip("ABCDE", (14, 18, 16, 60, 22)):
+        ws.column_dimensions[col].width = width
+    wb.save(path)
+    return len(items)

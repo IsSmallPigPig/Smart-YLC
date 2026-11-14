@@ -297,6 +297,24 @@ class SettingsPage(FluentPage):
         ros_lay.addLayout(row3)
         lay.addWidget(ros)
 
+        # 文档检查配置（命名 + 总页数）
+        doc = CardWidget()
+        doc_lay = QVBoxLayout(doc)
+        doc_lay.setContentsMargins(20, 16, 20, 16)
+        doc_lay.addWidget(StrongBodyLabel("文档检查（入团志愿书 PDF）"))
+        doc_lay.addWidget(note_label("「文档检查」页除命名外，还核对 PDF 总页数是否等于预期页数；留空则不核对页数"))
+        doc_lay.addSpacing(4)
+        row6 = QHBoxLayout()
+        row6.addWidget(BodyLabel("预期页数"))
+        self.expected_pages_edit = LineEdit()
+        self.expected_pages_edit.setPlaceholderText("如 4；留空则不核对页数")
+        self.expected_pages_edit.setFixedWidth(160)
+        self.expected_pages_edit.editingFinished.connect(self._save_config)
+        row6.addWidget(self.expected_pages_edit)
+        row6.addStretch(1)
+        doc_lay.addLayout(row6)
+        lay.addWidget(doc)
+
         # 工作区卡片
         ws = CardWidget()
         ws_lay = QVBoxLayout(ws)
@@ -391,6 +409,18 @@ class SettingsPage(FluentPage):
         if ws_dir and os.path.isdir(ws_dir):
             self._setup_watcher(ws_dir)
 
+        # 文档检查：预期页数
+        pages = cfg.get("expectedPages", "")
+        self.expected_pages_edit.setText(str(pages) if pages else "")
+
+    def expected_pages(self) -> int:
+        """文档检查的预期页数；未填或非法时返回 0（不核对页数）。"""
+        t = self.expected_pages_edit.text().strip()
+        try:
+            return max(0, int(t))
+        except ValueError:
+            return 0
+
     def _save_config(self):
         cfg = store.load()
         cfg.update({
@@ -399,6 +429,7 @@ class SettingsPage(FluentPage):
             "rosters": dict(self._roster_paths),
             "workspaceDir": self.ws_edit.text().strip(),
             "notifyTime": self.notify_time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME,
+            "expectedPages": self.expected_pages(),
         })
         store.save(cfg)
         self._client = None

@@ -35,6 +35,47 @@ class OrgStats:
         return self.uploaded / self.total if self.total else 0.0
 
 
+@dataclass
+class ErrorMemberRow:
+    """错误团员名单一行：一个团员一项或多类错误级异常。"""
+    name: str
+    mobile: str
+    kinds: str  # 类别，多个用「、」连接
+    problems: str  # 问题明细，多条用「；」连接
+    branch: str  # 所属支部（账号备注或账号名）
+
+
+def build_error_rows(results: list[CheckResult], branch: str) -> list[ErrorMemberRow]:
+    """从检查结果提取错误级异常团员名单（按团员去重合并；警告级不进名单）。
+
+    支部取产生该批数据的账号备注（无备注回退账号名），保证导出表格能按支部区分。"""
+    by_member: dict[str, dict] = {}
+    for r in results:
+        if r.kind == "fees":
+            if not r.abnormal:
+                continue
+            problems = [r.basis or "欠缴团费"]
+        else:
+            problems = [d.reason for d in r.diffs if d.severity == "error"]
+            if not problems:
+                continue  # 仅警告级（如职业未填）不算错误
+        m = r.member
+        e = by_member.setdefault(m.member_id or f"{m.name}::{m.mobile}", {
+            "name": m.name, "mobile": m.mobile, "kinds": [], "problems": [],
+        })
+        e["kinds"].append(KIND_LABEL.get(r.kind, r.kind))
+        e["problems"].extend(problems)
+    return [
+        ErrorMemberRow(
+            name=e["name"], mobile=e["mobile"],
+            kinds="、".join(dict.fromkeys(e["kinds"])),
+            problems="；".join(dict.fromkeys(e["problems"])),
+            branch=branch,
+        )
+        for e in by_member.values()
+    ]
+
+
 def summarize_members(members: list[MemberRecord], results: list[CheckResult]) -> OrgStats:
     """按团员去重统计异常（一个团员多项异常只计一次；分类计数按类别各计一次）。
 

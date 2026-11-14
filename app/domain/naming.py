@@ -164,6 +164,33 @@ def chunk_list(items: list, size: int = MAX_BATCH) -> list[list]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+# ---------- 文档检查：命名之外，再核对 PDF 总页数 ----------
+
+def page_verdict(pages: int | None, expected: int) -> tuple[str, str] | None:
+    """页数核对：返回 (problem, reason)；页数正确或未启用（expected<=0）返回 None。
+
+    pages=None 表示 PDF 无法读取（损坏或非 PDF 内容），同样判为问题。"""
+    if expected <= 0:
+        return None
+    if pages is None:
+        return "无法读取 PDF 页数", "文件可能损坏或不是有效 PDF，请重新导出后再上传"
+    if pages != expected:
+        return f"总页数 {pages} 页，应为 {expected} 页", f"志愿书应完整 {expected} 页，请检查是否漏扫或多扫"
+    return None
+
+
+def apply_page_verdict(analysis: NameAnalysis, verdict: tuple[str, str] | None) -> NameAnalysis:
+    """把页数核对结果并入命名分析（就地修改，与重复/名单检查同一追加风格）。"""
+    if verdict is None:
+        return analysis
+    problem, reason = verdict
+    analysis.codes.append("PAGE_COUNT_MISMATCH")
+    analysis.severity = "issue"
+    analysis.problem = ("" if analysis.problem == "无" else analysis.problem + "；") + problem
+    analysis.reason = ("" if analysis.reason == "符合上传说明" else analysis.reason + "；") + reason
+    return analysis
+
+
 def _key(name: str, mobile: str) -> str:
     return f"{name}::{mobile}"
 

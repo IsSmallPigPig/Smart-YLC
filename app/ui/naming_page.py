@@ -1,13 +1,16 @@
-"""命名检查页：扫描目录 → 纯函数判定 → 表格展示 → 一键改名。"""
+"""文档检查页：扫描目录 → 命名判定 + PDF 总页数核对 → 表格展示 → 一键改名。
+
+页数核对：预期页数在「系统配置」设置，留空则只查命名不查页数。
+"""
 
 from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QTableWidgetItem
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout
 
 from qfluentwidgets import (
     BodyLabel,
@@ -22,27 +25,44 @@ from qfluentwidgets import (
 
 from app.ui.page import FluentPage, note_label
 from app.constants import NAME_SUFFIX, PDF_EXT_RE
-from app.domain.naming import analyze_file_name, build_naming_report
+from app.domain.naming import analyze_file_name, apply_page_verdict, build_naming_report, page_verdict
 
 SEV_LABEL = {"ok": "通过", "warn": "提醒", "issue": "问题"}
 SEV_COLOR = {"ok": "#2e7d32", "warn": "#ef6c00", "issue": "#c62828"}
 
 
+def pdf_page_count(path: str) -> int | None:
+    """读取 PDF 总页数；损坏或非有效 PDF 返回 None（判为问题，不静默放过）。"""
+    try:
+        from pypdf import PdfReader
+
+        return len(PdfReader(path).pages)
+    except Exception:
+        return None
+
+
 class ScanWorker(QThread):
     done = Signal(object)
 
-    def __init__(self, scan_dir: str, roster, allow_alt: bool):
+    def __init__(self, scan_dir: str, roster, allow_alt: bool, expected_pages: int):
         super().__init__()
         self.scan_dir = scan_dir
         self.roster = roster
         self.allow_alt = allow_alt
+        self.expected_pages = expected_pages
 
     def run(self):
         names = sorted(
             f for f in os.listdir(self.scan_dir)
             if os.path.isfile(os.path.join(self.scan_dir, f)) and not f.startswith(".")
         )
-        issues = [analyze_file_name(n, self.allow_alt) for n in names]
+        issues = []
+        for n in names:
+            a = analyze_file_name(n, self.allow_alt)
+            if self.expected_pages > 0 and PDF_EXT_RE.search(n):
+                v = page_verdict(pdf_page_count(os.path.join(self.scan_dir, n)), self.expected_pages)
+                apply_page_verdict(a, v)
+            issues.append(a)
         self.done.emit(build_naming_report(self.scan_dir, issues, self.roster))
 
 
@@ -70,7 +90,7 @@ class NamingPage(FluentPage):
         row.addWidget(self.rename_btn)
         lay.addLayout(row)
 
-        self.hint = note_label("规则：姓名+手机号码+入团志愿书.pdf（半角 +，无空格）")
+        self.hint = note_label(self._hint_text())
         lay.addWidget(self.hint)
 
         self.table = TableWidget()
@@ -79,6 +99,11 @@ class NamingPage(FluentPage):
         self.table.setWordWrap(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.add_table(self.table, 1)
+
+    def _hint_text(self) -> str:
+        n = self.window_ref.settings_page.expected_pages()
+        base = "规则：姓名+手机号码+入团志愿书.pdf（半角 +，无空格）"
+        return base + f"；核对 PDF 总页数 = {n} 页" if n > 0 else base + "；预期页数未设置，不核对总页数（在系统配置填写）"
 
     def _pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")
@@ -94,7 +119,9 @@ class NamingPage(FluentPage):
             InfoBar.warning("路径无效", "请先选择一个存在的文件夹", duration=2500, parent=self)
             return
         self.scan_btn.setEnabled(False)
-        self.worker = ScanWorker(d, self._roster(), False)
+        self.hint.setText(self._hint_text())
+        expected = self.window_ref.settings_page.expected_pages()
+        self.worker = ScanWorker(d, self._roster(), False, expected)
         self.worker.done.connect(self._on_done)
         self.worker.start()
 
