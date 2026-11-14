@@ -15,8 +15,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
 
 
 def assets_dir() -> Path:
@@ -51,6 +51,36 @@ def app_pixmap(size: int = 256) -> QPixmap:
         painter.end()
         return pm
     return QPixmap()
+
+
+def app_tile_pixmap(size: int = 64) -> QPixmap:
+    """只要白底方块本身，裁掉投影和四周留白。
+
+    app_pixmap 是完整图标（带投影与边距），适合当窗口/托盘图标；放进正文当 logo 时
+    那圈留白会让方块缩进去，左缘和同一列的文字对不上（512 的图左边空了 54px）。
+    """
+    pm = app_pixmap(512)
+    if pm.isNull():
+        return pm
+    # 缩到 128 再找不透明区：512 逐像素太慢，回到原尺寸的误差不到 1px
+    probe = pm.toImage().scaled(
+        128, 128, Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation
+    ).convertToFormat(QImage.Format.Format_ARGB32)
+    x0 = y0 = 128
+    x1 = y1 = -1
+    for y in range(128):
+        for x in range(128):
+            if (probe.pixel(x, y) >> 24) >= 240:   # 近不透明 = 白底方块本身
+                x0, y0 = min(x0, x), min(y0, y)
+                x1, y1 = max(x1, x), max(y1, y)
+    if x1 < 0:
+        return pm
+    k = pm.width() / 128
+    crop = QRect(int(x0 * k), int(y0 * k),
+                 int((x1 - x0 + 1) * k), int((y1 - y0 + 1) * k))
+    return pm.copy(crop).scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                                Qt.TransformationMode.SmoothTransformation)
 
 
 def app_icon() -> QIcon:

@@ -185,6 +185,8 @@ class SettingsPage(FluentPage):
         self.home_page = None  # 由 MainWindow 注入，头图设置后即时生效
         self.window_ref = None  # 由 MainWindow 注入，毛玻璃开关生效用
         self._rule = OrgRule()  # 学校自定义编号规则，_load_config 时从配置恢复
+        # 载入配置期间禁止回写：控件还是半初始化状态，见 _save_config 的说明
+        self._loading = False
 
         lay = self.vBoxLayout
         self.header = PageHeader("系统配置", "账号、名单与编号规则、外观、通知与更新")
@@ -246,6 +248,8 @@ class SettingsPage(FluentPage):
         self.table = TableWidget()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(10)  # 与卡片、窗口圆角同心
+        # 隐藏左侧行号列：表格自带 1、2、3… 的序号，和勾选框并排太挤且没有信息量
+        self.table.verticalHeader().hide()
         self.table.setColumnCount(8)
         self._select_all_header = SelectAllHeader(self.table)
         self.table.setHorizontalHeader(self._select_all_header)
@@ -312,6 +316,7 @@ class SettingsPage(FluentPage):
         row(ros_card, self.roster_row)
 
         self.roster_table = TableWidget()
+        self.roster_table.verticalHeader().hide()
         self.roster_table.setColumnCount(3)
         self.roster_table.setBorderRadius(10)  # 与卡片、窗口圆角同心
         self.roster_table.setHorizontalHeaderLabels(["名单", "人数", "名单文件"])
@@ -337,6 +342,7 @@ class SettingsPage(FluentPage):
                                                    self.sec_del_btn))
         row(ros_card, self.sec_row)
         self.sec_table = TableWidget()
+        self.sec_table.verticalHeader().hide()
         self.sec_table.setColumnCount(3)
         self.sec_table.setBorderRadius(10)  # 与卡片、窗口圆角同心
         self.sec_table.setHorizontalHeaderLabels(["支部", "团支书", "手机号码"])
@@ -449,7 +455,11 @@ class SettingsPage(FluentPage):
         self._scan_timer.setInterval(800)
         self._scan_timer.timeout.connect(self._scan_workspace)
 
-        self._load_config()
+        self._loading = True
+        try:
+            self._load_config()
+        finally:
+            self._loading = False
         self._refresh_table()
 
         # 刷新登录状态：每 15 分钟轮询一次到期账号，各账号 4 小时内不重复刷新
@@ -581,6 +591,13 @@ class SettingsPage(FluentPage):
             return 0
 
     def _save_config(self):
+        # 载入过程中不许回写。_load_config 里 setCurrentIndex 会触发
+        # currentIndexChanged → _on_notify_mode_changed → 这里，而那一刻账号已经
+        # 载入、名单（第 508 行）和工作区（第 537 行）还没载入，回写就会把磁盘上的
+        # rosters / workspaceDir 抹成空值——每次启动丢一次名单和工作区就是这么来的。
+        if self._loading:
+            return
+
         def _write(cfg: dict):
             cfg.update({
                 "activeUser": self.active_user,
@@ -1604,7 +1621,7 @@ class SettingsPage(FluentPage):
         material = ("none", "acrylic", "mica")[index]
         store.update(lambda cfg: cfg.__setitem__("translucentMaterial", material))
         if self.window_ref is not None:
-            self.window_ref.set_material(material)
+            self.window_ref.apply_material(material)
 
     # ---------- 团支书名单 ----------
 

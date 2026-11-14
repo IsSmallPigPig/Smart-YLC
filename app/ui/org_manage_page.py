@@ -45,7 +45,7 @@ from app.domain.org_manage import (
     build_branches,
     filter_members,
 )
-from app.domain.account_health import excluded_note, split_accounts
+from app.domain.account_health import excluded_summary, split_accounts
 from app.services import login_gate, store
 from app.services.api import SiteClient
 from app.ui.anim import animate_expand, fade_in, value_animation
@@ -53,7 +53,8 @@ from app.ui.charts import BarRowWidget
 from app.ui import palette as P
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.export_flow import start_export
-from app.ui.page import (CardRow, FluentPage, PageHeader, chevron_icon, note_label,
+from app.ui.page import (BatchedBuild, CardRow, FluentPage, PageHeader, chevron_icon,
+                         note_label,
                          set_tip,
                          section_title, theme_font)
 
@@ -239,11 +240,17 @@ class OrgManagePage(FluentPage):
         super().__init__("page-org-manage", parent)
         self.window_ref = window
         self.worker = None
+        self._progress = None       # 同步期间的右下角浮动进度
+        self._progress_done = 0
+        self._progress_total = 0
+        self._stopped = False
         self._workers: list = []
         self._branches: list[BranchNode] = []
         self._stats_cache: dict = {}
         self._stats = {"local": 0, "system": 0, "both": 0}
         self._detail_code = ""
+        # 支部卡片分批建：60 个支部一次性建要 190ms，切页会明显卡一下
+        self._feed_builder = BatchedBuild(self, batch=6)
         self._search = ""  # 由主窗口标题栏的搜索框注入
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -340,6 +347,13 @@ class OrgManagePage(FluentPage):
         self.title_lbl.setVisible(not detail)
         self.crumb_bar.setVisible(detail)
 
+    def _set_toolbar(self, detail: bool):
+        """详情里已有大标题和三列统计，工具条不再重复一遍人数。"""
+        self.stat_label.setVisible(not detail)
+        self.sys_only.setVisible(not detail)
+        self.export_btn.setVisible(not detail)
+        self.sync_btn.setVisible(not detail)
+
     def _set_crumb(self, branch_label: str):
         """重建面包屑为「组织管理 › 支部名」。
 
@@ -352,13 +366,10 @@ class OrgManagePage(FluentPage):
         self.crumb_bar.blockSignals(False)
 
     def _on_crumb(self, route_key: str):
-        if route_key == "home":
+        detail = route_key != "home"
+        if not detail:
             self.back_to_feed()
-        # 详情里已有大标题和三列统计，工具条不再重复一遍人数
-        self.stat_label.setVisible(not detail)
-        self.sys_only.setVisible(not detail)
-        self.export_btn.setVisible(not detail)
-        self.sync_btn.setVisible(not detail)
+        self._set_toolbar(detail)
 
     def _stat_text(self, shown_count: int) -> str:
         return (f"本地 {self._stats['local']} 人，系统 {self._stats['system']} 人，"
@@ -470,6 +481,7 @@ class OrgManagePage(FluentPage):
                 item.widget().deleteLater()
 
     def _rebuild(self):
+        self._feed_builder.cancel()
         self._clear(self.feed_lay)
         shown = filter_members(self._branches, self._search,
                                not self.sys_only.isChecked())
@@ -478,8 +490,6 @@ class OrgManagePage(FluentPage):
         if not shown:
             self.feed_lay.addWidget(self._empty_state("没有匹配的支部"))
             return
-        for b in shown:
-            self.feed_lay.addWidget(self._feed_card(b))
         if self._detail_code:
             b = next((n for n in self._branches if n.code == self._detail_code), None)
             if b is not None:
@@ -489,6 +499,8 @@ class OrgManagePage(FluentPage):
                 self._set_nav(False)
                 self.feed_box.setVisible(True)
                 self.detail_box.setVisible(False)
+        # 卡片分批建：首批同步（首帧就有内容），其余按帧补齐
+        self._feed_builder.start(shown, lambda b: self.feed_lay.addWidget(self._feed_card(b)))
 
     @staticmethod
     def _empty_state(text: str) -> QWidget:
@@ -570,6 +582,7 @@ class OrgManagePage(FluentPage):
         self._detail_code = code
         self._build_detail(b, animate=animate)
         self._set_nav(True)
+        self._set_toolbar(True)
         if animate:
             self.feed_box.setVisible(False)
             self.detail_box.setVisible(True)
@@ -715,6 +728,7 @@ class OrgManagePage(FluentPage):
             return
         self._detail_code = ""
         self._set_nav(False)
+        self._set_toolbar(False)
         self.stat_label.setText(self._stat_text(
             sum(len(b.members) for b in filter_members(
                 self._branches, self._search, not self.sys_only.isChecked()))))
@@ -765,14 +779,17 @@ class OrgManagePage(FluentPage):
 
         state = {"open": False}
 
-        def _toggle(d=detail, t=toggle):
-            if d is None:
+        def _toggle(*_args, **_kwargs):
+            # QAbstractButton.clicked 会带一个 checked 布尔参数，行点击若走同一
+            # 槽函数就会把 False 当成详情面板喂进 animate_expand，炸
+            # 'bool' has no graphicsEffect。面板和箭头直接取闭包变量，多余实参一律丢弃。
+            if detail is None:
                 return
             # 状态机驱动而不是读 isVisible：动画进行中再点一次时，
             # 可见性还没变，按可见性判断会连续两次都走同一个方向造成错位
             state["open"] = not state["open"]
-            t.setIcon(chevron_icon(state["open"]))
-            animate_expand(d, state["open"], duration=190)
+            toggle.setIcon(chevron_icon(state["open"]))
+            animate_expand(detail, state["open"], duration=190)
 
         if toggle is not None:
             toggle.clicked.connect(_toggle)
@@ -806,20 +823,46 @@ class OrgManagePage(FluentPage):
         usable, excluded = split_accounts(self.window_ref.settings_page.accounts)
         accounts = usable
         if not accounts:
-            hint = f"其余账号均被标记为异常（{excluded_note(excluded)}）" if excluded else "先在系统配置添加团支部账号"
+            hint = f"{len(excluded)} 个账号均被标记为异常" if excluded else "先在系统配置添加团支部账号"
             InfoBar.warning("没有可同步的账号", hint, duration=6000, parent=self)
             return
         if excluded:
             InfoBar.warning("跳过异常账号",
-                f"{excluded_note(excluded)} 不参与同步；测活恢复正常后自动纳入",
+                f"{excluded_summary(excluded)}，本轮不参与同步；测活恢复正常后自动纳入",
                 duration=6000, parent=self)
         self.sync_btn.setEnabled(False)
         self.worker = MemberSyncWorker(accounts)
         self.worker.account_done.connect(self._on_sync_one)
         self.worker.all_done.connect(self._on_sync_done)
+        self._show_progress(len(accounts))
         self.worker.start()
 
+    def _show_progress(self, count: int):
+        """右下角浮动进度：同步期间不挡页面，逐账号回填。"""
+        from app.ui.widgets import ProgressToast
+
+        self._progress_done = 0
+        self._progress_total = count
+        self._progress = ProgressToast("正在同步系统数据", self.window(),
+                                       on_close=self._request_stop)
+        self._progress.set_progress(0, count)
+        self._progress.show()
+
+    def _request_stop(self):
+        self._stopped = True
+        if self.worker is not None:
+            self.worker.stop()
+
+    def _close_progress(self, finished: bool = True):
+        toast, self._progress = self._progress, None
+        if toast is None:
+            return
+        toast.finish() if finished else toast.close()
+
     def _on_sync_one(self, user, branch, count, status, message):
+        self._progress_done += 1
+        if self._progress is not None:
+            self._progress.set_progress(self._progress_done, self._progress_total)
         if status in login_gate.SKIP_KINDS:
             InfoBar.info(f"账号 {user} 跳过刷新", message, duration=4000, parent=self)
         elif status != "ok":
@@ -829,6 +872,8 @@ class OrgManagePage(FluentPage):
 
     def _on_sync_done(self):
         self.sync_btn.setEnabled(True)
+        self._close_progress(finished=not self._stopped)
+        self._stopped = False
         mark_synced()
         self.refresh()
         InfoBar.success("同步完成", "系统成员缓存已更新，组织树已刷新", duration=3000, parent=self)

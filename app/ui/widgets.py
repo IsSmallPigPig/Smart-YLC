@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QRadialGradient
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
@@ -328,3 +328,124 @@ class StatTile(CardWidget):
     def mouseReleaseEvent(self, e):
         super().mouseReleaseEvent(e)
         self.clicked.emit()
+
+
+class ProgressToast(QWidget):
+    """右下角浮动进度条：跑批量任务时贴在窗口右下角，不挡页面也不锁交互。
+
+    形态参考 Ghost Downloader 的下载提示：一行「标题 + 进度百分比 + 关闭」，
+    底部一条细进度线。任务结束调用 finish()：补满 100% 后短暂停留再自行关闭。
+    """
+
+    closed = Signal()
+
+    MARGIN = 16
+
+    def __init__(self, title: str, parent=None, on_close=None):
+        super().__init__(parent)
+        self._title = title
+        self._done = 0
+        self._total = 0
+        self._on_close = on_close
+        self.setFixedSize(320, 52)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 8, 8, 8)
+        lay.setSpacing(8)
+        self._label = BodyLabel(title, self)
+        lay.addWidget(self._label, 1)
+        from qfluentwidgets import TransparentToolButton
+
+        self._close_btn = TransparentToolButton(FluentIcon.CLOSE, self)
+        self._close_btn.setFixedSize(24, 24)
+        self._close_btn.clicked.connect(self._request_close)
+        lay.addWidget(self._close_btn, 0)
+
+        self._close_timer = QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.timeout.connect(self.close)
+
+        qconfig.themeChanged.connect(lambda *_: self.update())
+        if parent is not None:
+            parent.installEventFilter(self)
+        self._reposition()
+
+    # ---------- 进度 ----------
+
+    def set_progress(self, done: int, total: int):
+        self._done, self._total = done, max(0, total)
+        pct = int(min(done, self._total) / self._total * 100) if self._total else 0
+        self._label.setText(f"{self._title} {done}/{self._total}（{pct}%）" if self._total
+                            else self._title)
+        self.update()
+
+    def finish(self, hold_ms: int = 800):
+        """补满并停留一小会儿再关，让「已完成」有个被看见的瞬间。"""
+        if self._total:
+            self._label.setText(f"{self._title}（100%）")
+        self._done = self._total
+        self.update()
+        self._close_timer.start(hold_ms)
+
+    # ---------- 位置与外观 ----------
+
+    def eventFilter(self, obj, e):
+        from PySide6.QtCore import QEvent
+
+        if obj is self.parentWidget() and e.type() == QEvent.Type.Resize:
+            self._reposition()
+        return super().eventFilter(obj, e)
+
+    def _reposition(self):
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        self.move(parent.width() - self.width() - self.MARGIN,
+                  parent.height() - self.height() - self.MARGIN)
+        self.raise_()
+
+    def show(self):
+        super().show()
+        self._reposition()
+        self.raise_()
+
+    def _request_close(self):
+        self._close_timer.stop()
+        if self._on_close is not None:
+            self._on_close()
+        self.close()
+
+    def closeEvent(self, e):
+        parent = self.parentWidget()
+        if parent is not None:
+            parent.removeEventFilter(self)
+        self.closed.emit()
+        super().closeEvent(e)
+
+    def paintEvent(self, e):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = self.rect().adjusted(0, 0, -1, -1)
+        dark = isDarkTheme()
+
+        # 卡片：深色用略亮于页面底的灰，浅色用近白；都给一圈极淡描边界定边界
+        bg = QColor(45, 45, 48) if dark else QColor(252, 252, 253)
+        border = QColor(255, 255, 255, 18) if dark else QColor(0, 0, 0, 16)
+        painter.setPen(border)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(r, 8, 8)
+
+        # 底部进度线：4px 高的轨道贴在卡片下沿，圆角只在外侧两角露出
+        track_h = 4
+        track = r.adjusted(1, r.height() - track_h, -1, -1)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 22) if dark else QColor(0, 0, 0, 12))
+        painter.drawRoundedRect(track, 2, 2)
+        if self._total:
+            ratio = min(1.0, self._done / self._total)
+            if ratio > 0:
+                fill = QRectF(track)
+                fill.setWidth(max(4.0, track.width() * ratio))
+                painter.setBrush(QColor(P.BRAND))
+                painter.drawRoundedRect(fill, 2, 2)

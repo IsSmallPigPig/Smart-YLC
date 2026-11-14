@@ -25,6 +25,28 @@ def note_label(text: str) -> CaptionLabel:
     return lbl
 
 
+def chevron_left_icon(size: int = 16, enabled: bool = True) -> QIcon:
+    """细左 chevron「<」：只有尖角，不带中间那根横线。
+
+    fluent 只给了两种左侧箭头——实心三角 CARE_LEFT_SOLID 和带杆的 LEFT_ARROW，
+    都不合适；把向右手 chevron 旋转 180° 就是「<」。
+    enabled=False 时返回 40% 透明的版本：qfluentwidgets 的按钮不会自动套用
+    QIcon.Disabled，不自己调透明度的话置灰状态看不出来。
+    主题切换后要重新调用（颜色在生成位图时就定死了）。
+    """
+    img = FIF.CHEVRON_RIGHT.icon().pixmap(size, size).toImage()
+    normal = QPixmap.fromImage(img.transformed(QTransform().rotate(180)))
+    if enabled:
+        return QIcon(normal)
+    faded = QPixmap(normal.size())
+    faded.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(faded)
+    painter.setOpacity(0.4)
+    painter.drawPixmap(0, 0, normal)
+    painter.end()
+    return QIcon(faded)
+
+
 def chevron_icon(expanded: bool) -> QIcon:
     """折叠箭头：统一用 fluent 的细 chevron，展开时朝上。
 
@@ -367,6 +389,57 @@ def fit_table_columns(table: QTableView, stretch_last: bool = False,
         header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.Stretch)
     elif cols:
         header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.Interactive)
+
+
+class BatchedBuild:
+    """把一批控件分批建出来，避免一次性构建几十个卡片把界面卡住。
+
+    200 份档案时同步建 40 个支部卡片实测 580ms，用户在重建期间完全点不动；
+    这里第一批同步建好（首帧就有内容、测试里的小批量也照旧同步完成），
+    其余按事件循环的一帧建 `batch` 个，期间界面照常响应点击与滚动。
+
+    每次 start() 递增 token，旧批次自动作废：连续搜索时不会出现两批卡片
+    交叉插进同一个布局。
+    """
+
+    def __init__(self, owner: QWidget, batch: int = 4):
+        self._owner = owner
+        self._batch = max(1, batch)
+        self._token = 0
+        self._items: list = []
+        self._step = None
+        self._next = 0
+        self._timer = QTimer(owner)
+        self._timer.setInterval(0)
+        self._timer.timeout.connect(self._pump)
+
+    def start(self, items, step) -> None:
+        """items 逐个交给 step(item)；step 负责建控件并加进布局。"""
+        self._token += 1
+        self._timer.stop()
+        self._items = list(items)
+        self._step = step
+        self._next = 0
+        self._pump()
+
+    def cancel(self) -> None:
+        self._token += 1
+        self._timer.stop()
+        self._items = []
+        self._step = None
+
+    def _pump(self) -> None:
+        step = self._step
+        if step is None:
+            return
+        end = min(self._next + self._batch, len(self._items))
+        while self._next < end:
+            step(self._items[self._next])
+            self._next += 1
+        if self._next < len(self._items):
+            self._timer.start()
+        else:
+            self._timer.stop()
 
 
 class CallbackWorker(QThread):

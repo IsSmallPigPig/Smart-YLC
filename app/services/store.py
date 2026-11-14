@@ -8,6 +8,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 from typing import Callable
 
 from app.constants import CONFIG_FILE
@@ -19,6 +20,22 @@ _LOCK = threading.Lock()  # 配置文件唯一的写入口：load→mutate→sav
 
 def _backup_path() -> str:
     return str(CONFIG_FILE) + ".bak"
+
+
+def _replace_atomic(src: str, dst: str, attempts: int = 5) -> None:
+    """os.replace 的 Windows 友好版。
+
+    覆盖一个正被别的进程读的文件时，POSIX 直接换掉，Windows 会报
+    PermissionError（杀毒、搜索索引、同时开着的托盘进程都在读它）。
+    短暂重试几次就过去了，超过次数照旧抛出，不吞错误。"""
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.04 * (i + 1))
 
 
 def load() -> dict:
@@ -64,8 +81,8 @@ def save(cfg: dict) -> None:
         # 备份与主文件都是完整 JSON、各自原子落地，且各有独立 inode：
         # 硬链接会和主文件共享 inode，外部进程就地截断主文件时备份会一起坏掉。
         # 备份先落地，主文件一旦可见就已经有可读的恢复副本（首次写入也算）。
-        os.replace(tmp_b, backup)
-        os.replace(tmp, CONFIG_FILE)
+        _replace_atomic(tmp_b, backup)
+        _replace_atomic(tmp, CONFIG_FILE)
     except BaseException:
         for p in (tmp, tmp_b):
             if os.path.exists(p):

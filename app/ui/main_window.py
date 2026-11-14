@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
 from qfluentwidgets import FluentIcon as FIF
@@ -19,7 +19,7 @@ from qfluentwidgets import (
 )
 
 from app import __version__ as VERSION
-from app.domain.account_health import excluded_note, split_accounts
+from app.domain.account_health import excluded_summary, split_accounts
 from app.services import store
 from app.ui.browser_page import BrowserWindow
 from app.ui.home_page import HomePage, page_bg_color
@@ -117,6 +117,8 @@ class MainWindow(MSFluentWindow):
         self.addSubInterface(
             self.settings_page, FIF.SETTING, "系统配置", position=NavigationItemPosition.BOTTOM
         )
+        # 底部那组导航与窗口底边的距离在 _sync_nav_bottom 里对齐到侧边栏左右留白，
+        # 那里能读到布局后的真实几何（构造期导航项的 x 还都是 0）。
         # 内置切页动画会把整页从下方 76px 滑上来（PopUpAniStackedWidget 的默认
         # deltaY），刚进入页面时内容整体往上跳；关掉它，过渡交给下面的淡入。
         self.stackedWidget.setAnimationEnabled(False)
@@ -204,14 +206,14 @@ class MainWindow(MSFluentWindow):
         accounts = usable
         if not accounts:
             if not silent:
-                hint = (f"其余账号均被标记为异常（{excluded_note(excluded)}），"
+                hint = (f"{len(excluded)} 个账号均被标记为异常，"
                         "请先处理（测活或打开网页端重新登录）") if excluded \
                     else "先在系统配置添加团支部账号"
                 InfoBar.warning("没有可用账号", hint, duration=6000, parent=self)
             return False
         if excluded and not silent:
             InfoBar.warning("跳过异常账号",
-                f"{excluded_note(excluded)} 不参与本轮刷新；测活恢复正常后自动纳入",
+                f"{excluded_summary(excluded)}，本轮不参与刷新；测活恢复正常后自动纳入",
                 duration=6000, parent=self)
         if self._refreshing:
             if not silent:
@@ -351,11 +353,19 @@ class MainWindow(MSFluentWindow):
 
         # 返回键放在固定宽度的槽位里：没有返回历史时只隐藏按钮、槽位仍在，
         # 标题文字的左边缘因此不会随页面跳转左右跳。
+        # 槽位不要设 WA_TransparentForMouseEvents：那个属性会让 Qt 的命中测试
+        # 跳过整个子树，按钮就点不到了（事件落到标题栏上，表现为点了没反应）。
         self.back_slot = QWidget(self.titleBar)
         self.back_slot.setFixedSize(30, 30)
-        # 空槽位本身不接收鼠标事件，否则会挡住下面的拖拽
-        self.back_slot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.back_btn = TransparentToolButton(FIF.CARE_LEFT_SOLID, self.back_slot)
+        # 细 chevron「<」：只有尖角、没有中间那根横线（CARE_LEFT_SOLID 是实心三角、
+        # LEFT_ARROW 带杆，都不对）。图标是位图旋转来的，颜色在生成时定死，
+        # 主题切换后要重新生成一次。
+        from app.ui.page import chevron_left_icon
+        from qfluentwidgets import qconfig
+
+        self.back_btn = TransparentToolButton(chevron_left_icon(), self.back_slot)
+        qconfig.themeChanged.connect(
+            lambda *_: self.back_btn.setIcon(chevron_left_icon(enabled=self.back_btn.isEnabled())))
         set_tip(self.back_btn, "返回上一页")
         self.back_btn.setFixedSize(30, 30)
         self.back_btn.move(0, 0)
@@ -363,26 +373,36 @@ class MainWindow(MSFluentWindow):
         # 标题栏放应用图标：带白底板的小方块，深浅主题下都有清晰边界
         from PySide6.QtWidgets import QLabel
 
-        from app.ui.brand import app_pixmap
+        from app.ui.brand import app_tile_pixmap
 
         self.logo = QLabel(self.titleBar)
-        self.logo.setPixmap(app_pixmap(20))
-        self.logo.setFixedSize(20, 20)
+        # 裁掉位图留白：方块左缘才能正好压在侧边栏右缘（完整图标自带 20px 的 2px 空边）
+        self.logo.setPixmap(app_tile_pixmap(16))
+        self.logo.setFixedSize(16, 16)
         self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         set_tip(self.logo, "智慧团委 Smart-YLC")
 
-        # 顺序：返回键槽位 → 应用图标 → 标题文字。
-        # 三者紧凑排在标题栏最左，间距一致，标题文字的左边缘因此固定。
+        # 撑开返回键与 logo 之间的距离，让 logo 左缘正好落在侧边栏右缘。
+        # 宽度由 _sync_logo_gap 按导航栏实际几何算出，侧边栏宽度变化时跟着走。
+        self._logo_gap = QWidget(self.titleBar)
+        self._logo_gap.setFixedWidth(0)
+        self._logo_gap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        # 顺序：返回键槽位 → 侧边栏占位 → 应用图标 → 标题文字。
+        # 标题文字的左边缘因此固定，且与内容区左缘对齐。
         while tb.count() and tb.itemAt(0).spacerItem():
             tb.takeAt(0)
         tb.insertWidget(0, self.back_slot, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        tb.insertWidget(tb.indexOf(self.titleBar.titleLabel), self.logo, 0,
+        at = tb.indexOf(self.titleBar.titleLabel)
+        tb.insertWidget(at, self._logo_gap, 0)
+        tb.insertWidget(at + 1, self.logo, 0,
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         # 图标紧贴标题文字（仅留 4px 呼吸位），两者垂直居中、左缘对齐
         tb.insertSpacing(tb.indexOf(self.titleBar.titleLabel), 4)
         # 标题文字按同一基线居中，否则图标与文字看着不在一行
         self.titleBar.titleLabel.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._sync_logo_gap()
 
         self.back_btn.clicked.connect(self._on_back_clicked)
         QTimer.singleShot(0, self._place_back_button)
@@ -410,6 +430,8 @@ class MainWindow(MSFluentWindow):
         qrouter.pop()
 
     def _sync_back_state(self, *_):
+        from app.ui.page import chevron_left_icon
+
         on_org = (self.stackedWidget.currentWidget() is self.org_manage_page
                   and self.org_manage_page.isVisible())
         detail = on_org and self.org_manage_page.in_detail()
@@ -417,6 +439,8 @@ class MainWindow(MSFluentWindow):
         # 返回键一直留在标题栏上：没有可返回的历史时置灰，而不是整块消失，
         # 槽位宽度也不变，标题文字的左边缘因此始终固定。
         self.back_btn.setEnabled(usable)
+        # 图标是位图，手动换透明度版本（按钮不会自动套 QIcon.Disabled）
+        self.back_btn.setIcon(chevron_left_icon(enabled=usable))
 
     # ---------- 标题栏搜索 ----------
 
@@ -478,6 +502,7 @@ class MainWindow(MSFluentWindow):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._place_search()
+        self._sync_logo_gap()
         splash = getattr(self, "splash", None)
         if splash is not None and not self._splash_done:
             splash.setGeometry(self.rect())
@@ -495,11 +520,42 @@ class MainWindow(MSFluentWindow):
         # 整组左边缘固定在 10px，不随返回历史出现与否移动。
         tb.insertSpacing(0, 10)
         tb.insertWidget(1, self.back_slot, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        # 返回箭头与图标之间只留 4px：logo 更靠左，又不和 30px 返回键粘在一起
+        # 返回箭头与 logo 之间只留 4px，两者之间的大段距离由 _logo_gap 撑到侧边栏右缘
         tb.insertSpacing(2, 4)
         self.titleBar.titleLabel.setText(self.windowTitle())
         self.titleBar.titleLabel.adjustSize()
+        self._sync_logo_gap()
         self._place_search()
+
+    def _sync_logo_gap(self):
+        """logo 左缘对准侧边栏右缘：占位宽度 = 侧边栏右缘 -（左内边距 + 返回键 + 间距）。"""
+        gap = getattr(self, "_logo_gap", None)
+        if gap is None:
+            return
+        nav = self.navigationInterface
+        # 侧边栏是 NavigationBar，和 titleBar 之间没有父子关系，直接
+        # mapTo(titleBar) 会报 "parent must be in parent hierarchy"；
+        # 两边都映射到窗口这个共同祖先再相减。
+        edge = (nav.mapTo(self, QPoint(nav.width(), 0)).x()
+                - self.titleBar.mapTo(self, QPoint(0, 0)).x())
+        gap.setFixedWidth(max(0, edge - (10 + self.back_slot.width() + 4)))
+        self._sync_nav_bottom()
+
+    def _sync_nav_bottom(self):
+        """底部导航距窗口底边 = 导航项在侧边栏内的左右留白（项宽 64 / 栏宽 72 → 4px）。
+
+        四边等距，选中高亮才不会看着往下沉；NavigationBar 默认留 5px，
+        这里按实测几何改写，布局尚未生效时（x 为 0）跳过。
+        """
+        nav = self.navigationInterface
+        lay = nav.layout()
+        item = nav.widget("page-settings")
+        if lay is None or item is None or item.x() <= 0:
+            return
+        side = item.x()
+        m = lay.contentsMargins()
+        if m.bottom() != side:
+            lay.setContentsMargins(m.left(), m.top(), m.right(), side)
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -537,6 +593,18 @@ class MainWindow(MSFluentWindow):
                 self.setCustomBackgroundColor(QColor(249, 249, 251, 200), QColor(0, 0, 0, 0))
         else:
             self.setCustomBackgroundColor(QColor(240, 244, 249), QColor(32, 32, 32))
+
+    def apply_material(self, material: str):
+        """切换毛玻璃材质：主窗口和已打开的支部浏览器窗口一起换。
+
+        材质是全局偏好，只改主窗口会让开着的浏览器窗口继续挂在旧材质上，
+        看起来就是"设置改了但那个窗口没反应"。浏览器窗口是独立窗口，
+        有自己的混合层，得单独通知一次。
+        """
+        self.set_material(material)
+        browser = getattr(self, "browser_window", None)
+        if browser is not None:
+            browser.set_material(material)
 
     def set_material(self, material: str):
         """窗口背景透明材质：none 关闭（纯色底），acrylic/mica 为混合层。

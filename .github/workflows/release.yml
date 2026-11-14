@@ -8,15 +8,24 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHON_VERSION: "3.11"
+  APP_NAME: SmartYouth
+  BUNDLE_ID: com.smallylc.smartyouth
+
 jobs:
   build-macos:
     strategy:
+      # 一个架构失败不连坐另一个，Intel 和 arm64 各自出包
+      fail-fast: false
       matrix:
         include:
-          # macos-14 是 Apple Silicon，macos-13 是最后一版 Intel 机器
-          - os: macos-14
+          # macos-15：Apple Silicon（M 系列）
+          # macos-15-intel：x86_64。原来的 macos-13 已于 2025-12-04 退役，
+          # macos-15-intel 是 GitHub 目前唯一还在的 Intel 镜像（可用到 2027-08）
+          - os: macos-15
             arch: arm64
-          - os: macos-13
+          - os: macos-15-intel
             arch: x86_64
     runs-on: ${{ matrix.os }}
     steps:
@@ -24,7 +33,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: 安装依赖
         run: |
@@ -34,20 +43,24 @@ jobs:
 
       - name: 生成应用图标（icns）
         run: |
-          mkdir -p build/SmartYouth.iconset
-          for size in 16 32 128 256 512; do
-            sips -z $size $size app/assets/smart-ylc@512.png \
-              --out build/SmartYouth.iconset/icon_${size}x${size}.png > /dev/null
+          SRC="app/assets/smart-ylc@1024.png"
+          ICONSET="build/SmartYouth.iconset"
+          mkdir -p "$ICONSET"
+          # iconutil 要完整的 10 个条目：1x 与 @2x 各五档。之前只生成 1x 五档再补
+          # 三档 @2x，漏了 16@2x 与 32@2x，Dock 和访达里的小图标会发虚。
+          for spec in "16:16x16" "32:16x16@2x" "32:32x32" "64:32x32@2x" \
+                      "128:128x128" "256:128x128@2x" "256:256x256" \
+                      "512:256x256@2x" "512:512x512" "1024:512x512@2x"; do
+            px="${spec%%:*}"; name="${spec##*:}"
+            sips -z "$px" "$px" "$SRC" --out "$ICONSET/icon_${name}.png" > /dev/null
           done
-          cp app/assets/smart-ylc@1024.png build/SmartYouth.iconset/icon_512x512@2x.png
-          cp build/SmartYouth.iconset/icon_256x256.png build/SmartYouth.iconset/icon_256x256@2x.png
-          cp build/SmartYouth.iconset/icon_128x128.png build/SmartYouth.iconset/icon_128x128@2x.png
-          iconutil -c icns build/SmartYouth.iconset -o build/icon.icns
+          iconutil -c icns "$ICONSET" -o build/icon.icns
 
       - name: PyInstaller 打包（.app）
         run: |
           pyinstaller --noconfirm --clean \
-            --windowed --name SmartYouth \
+            --windowed --name "$APP_NAME" \
+            --osx-bundle-identifier "$BUNDLE_ID" \
             --collect-all qfluentwidgets \
             --icon build/icon.icns \
             --add-data "app/assets:assets" \
@@ -55,24 +68,24 @@ jobs:
 
       - name: 制作 dmg 安装镜像
         run: |
-          hdiutil create -volname "SmartYouth" \
-            -srcfolder "dist/SmartYouth.app" \
-            -ov -format UDZO "dist/SmartYouth-macOS-${{ matrix.arch }}.dmg"
+          hdiutil create -volname "$APP_NAME" \
+            -srcfolder "dist/$APP_NAME.app" \
+            -ov -format UDZO "dist/$APP_NAME-macOS-${{ matrix.arch }}.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SmartYouth-macOS-${{ matrix.arch }}
-          path: dist/SmartYouth-macOS-${{ matrix.arch }}.dmg
+          name: ${{ env.APP_NAME }}-macOS-${{ matrix.arch }}
+          path: dist/${{ env.APP_NAME }}-macOS-${{ matrix.arch }}.dmg
 
   build-windows:
-    # windows-latest 自带 x86_64（Intel/AMD 64 位）工具链，打出的就是 x86 版
+    # windows-latest 自带 x86_64 工具链，打出的就是 64 位 Windows 版
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: 安装依赖
         run: |
@@ -83,19 +96,19 @@ jobs:
       - name: PyInstaller 打包（单文件 exe）
         run: |
           pyinstaller --noconfirm --clean `
-            --onefile --windowed --name SmartYouth `
+            --onefile --windowed --name $env:APP_NAME `
             --collect-all qfluentwidgets `
             --icon app/assets/smart-ylc.ico `
             --add-data "app/assets;assets" `
             main.py
 
       - name: 重命名 exe 标明架构
-        run: Move-Item dist/SmartYouth.exe dist/SmartYouth-Windows-x64.exe
+        run: Move-Item "dist/$env:APP_NAME.exe" "dist/$env:APP_NAME-Windows-x64.exe"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SmartYouth-Windows
-          path: dist/SmartYouth-Windows-x64.exe
+          name: ${{ env.APP_NAME }}-Windows
+          path: dist/${{ env.APP_NAME }}-Windows-x64.exe
 
   release:
     needs: [build-macos, build-windows]
