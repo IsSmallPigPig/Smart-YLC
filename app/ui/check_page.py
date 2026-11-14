@@ -43,16 +43,17 @@ READONLY_FLAGS = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
 
 
 def default_identity_template() -> CheckTemplate:
+    # 判定词对照站点真实枚举：isRealName→通过；电子志愿书→已上传；电子团员证照片→审核通过
     return CheckTemplate("identity", "报到身份", [
-        TemplateField("real_name_status", "实名认证", "已认证", "contains"),
+        TemplateField("real_name_status", "实名认证", "通过", "contains"),
         TemplateField("ebook_status", "电子志愿书", "已上传", "contains"),
-        TemplateField("ecard_photo_status", "团员证照片", "已上传", "contains"),
+        TemplateField("ecard_photo_status", "团员证照片", "审核通过", "contains"),
     ])
 
 
 def default_report_template() -> CheckTemplate:
     return CheckTemplate("report", "报到情况", [
-        TemplateField("report_data_status", "报到资料状态", "已审核", "contains"),
+        TemplateField("report_data_status", "报到资料状态", "审核通过", "contains"),
         TemplateField("report_apply_at", "报到申请时间", "", "notEmpty"),
         TemplateField("report_audit_at", "报到审核时间", "", "notEmpty"),
     ])
