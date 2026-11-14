@@ -24,6 +24,7 @@ class BarRowWidget(QWidget):
         self._label = label
         self._color = QColor(color)
         self._value = 0
+        self._display = 0.0
         self._maximum = 1
         _bind_theme(self)
         self.setFixedHeight(34)
@@ -32,11 +33,27 @@ class BarRowWidget(QWidget):
     def set_value(self, value: int, maximum: int | None = None):
         """maximum 为本次调用的权威分母（不足 value 时抬到 value）；不传则沿用旧分母只增不减。"""
         self._value = value
+        self._display = float(value)
         if maximum is not None:
             self._maximum = max(maximum, value, 1)
         else:
             self._maximum = max(self._maximum, value, 1)
         self.update()
+
+    def set_value_animated(self, value: int, maximum: int | None = None,
+                           duration: int = 520):
+        """详情页打开时条形从零增长，数字同步滚动。"""
+        from app.ui.anim import value_animation
+
+        self._value = value
+        if maximum is not None:
+            self._maximum = max(maximum, value, 1)
+        else:
+            self._maximum = max(self._maximum, value, 1)
+        start = self._display
+        value_animation(self, start, float(value),
+                        lambda v: (setattr(self, "_display", float(v)), self.update()),
+                        duration=duration)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -47,9 +64,9 @@ class BarRowWidget(QWidget):
         track = QColor(255, 255, 255, 28) if dark else QColor(0, 0, 0, 18)
 
         label_w, value_w = 76, 40
-        y = self.height() / 2 - 5
+        h = 8
+        y = (self.height() - h) / 2
         bar_w = self.width() - label_w - value_w - 16
-        h = 10
 
         p.setPen(QPen(fg, 1))
         f = p.font()
@@ -59,16 +76,20 @@ class BarRowWidget(QWidget):
 
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(track)
-        p.drawRoundedRect(int(label_w), int(y), int(bar_w), h, 5, 5)
-        ratio = min(self._value / self._maximum, 1.0)
+        p.drawRoundedRect(int(label_w), int(y), int(bar_w), h, h / 2, h / 2)
+        ratio = min(self._display / self._maximum, 1.0)
         if ratio > 0:
-            p.setBrush(self._color)
+            # 语义色保留色相，压低不透明度，避免四条饱和色铺满抢走数字焦点
+            fill = QColor(self._color)
+            fill.setAlphaF(0.80 if not dark else 0.74)
+            p.setBrush(fill)
             path = QPainterPath()
-            path.addRoundedRect(label_w, y, max(bar_w * ratio, h), h, 5, 5)
+            path.addRoundedRect(label_w, y, max(bar_w * ratio, h), h, h / 2, h / 2)
             p.drawPath(path)
         p.setPen(QPen(dim, 1))
         p.drawText(self.width() - value_w, 0, value_w, self.height(),
-                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, str(self._value))
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                   str(int(round(self._display))))
 
 
 class ProgressDonut(QWidget):

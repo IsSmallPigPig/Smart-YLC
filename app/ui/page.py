@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout,
 
 from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, ScrollArea, StrongBodyLabel, TransparentToolButton, isDarkTheme, qconfig
 
-PAGE_MARGINS = (36, 28, 36, 28)
+PAGE_MARGINS = (32, 24, 32, 24)
 
 
 def note_label(text: str) -> CaptionLabel:
@@ -129,13 +129,13 @@ class CollapsibleCard(CardWidget):
         super().__init__(parent)
         self._expanded = bool(expanded)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 14, 20, 14)
-        outer.setSpacing(12)
+        outer.setContentsMargins(20, 16, 20, 16)
+        outer.setSpacing(10)
         header = QHBoxLayout()
         header.addWidget(section_title(title))
         header.addStretch(1)
         self.toggle_btn = TransparentToolButton()
-        self.toggle_btn.setToolTip("展开 / 收起")
+        self.toggle_btn.setToolTip("展开或收起")
         self.toggle_btn.clicked.connect(self.toggle)
         header.addWidget(self.toggle_btn)
         outer.addLayout(header)
@@ -151,17 +151,35 @@ class CollapsibleCard(CardWidget):
     def toggle(self):
         self.set_expanded(not self._expanded)
 
-    def set_expanded(self, value: bool):
-        self._expanded = bool(value)
-        self._sync()
+    def set_expanded(self, value: bool, animate: bool = True):
+        """点击箭头时展开/收起带高度过渡；首次构造和主题刷新走静态路径。"""
+        value = bool(value)
+        if value == self._expanded:
+            self._sync()
+            return
+        self._expanded = value
+        self._sync_chevron()
+        if animate and self.isVisible():
+            from app.ui.anim import animate_expand
+
+            animate_expand(self.body, value, duration=190)
+        else:
+            self._sync()
 
     def _sync(self, *_):
-        self.body.setVisible(self._expanded)
-        # 分割线颜色按主题取，主题切换时由卡片统一重绘各行（避免每行都挂全局信号）
+        # 动画进行中不要改可见性与最大高度，否则会把补间打断
+        animating = getattr(self.body, "_expand_ani", None) is not None
+        if not animating:
+            self.body.setVisible(self._expanded)
+            self.body.setMaximumHeight(16777215)
+        # 分割线颜色按主题取，主题切换时由卡片统一重绘各行
         for i in range(self.body_lay.count()):
             w = self.body_lay.itemAt(i).widget()
             if w is not None:
                 w.update()
+        self._sync_chevron()
+
+    def _sync_chevron(self, *_):
         icon = FIF.CHEVRON_DOWN_MED.icon()
         if self._expanded:
             # fluent 没有 chevron-up 图标：向下 chevron 旋转 180°
@@ -232,7 +250,7 @@ class FluentPage(ScrollArea):
         self.scrollWidget.setObjectName(f"{object_name}-scroll")
         self.vBoxLayout = QVBoxLayout(self.scrollWidget)
         self.vBoxLayout.setContentsMargins(*PAGE_MARGINS)
-        self.vBoxLayout.setSpacing(12)
+        self.vBoxLayout.setSpacing(14)
         self.vBoxLayout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self.setWidget(self.scrollWidget)

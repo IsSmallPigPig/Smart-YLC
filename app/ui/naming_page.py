@@ -81,7 +81,7 @@ class NamingPage(FluentPage):
         self.dir_btn.clicked.connect(self._pick_dir)
         self.scan_btn = PrimaryPushButton(FIF.SEARCH, "开始检查")
         self.scan_btn.clicked.connect(self._scan)
-        self.rename_btn = PushButton(FIF.SAVE_AS, "一键改为建议名")
+        self.rename_btn = PushButton(FIF.SAVE_AS, "改为建议名")
         self.rename_btn.setEnabled(False)
         self.rename_btn.clicked.connect(self._rename_all)
         row.addWidget(self.dir_edit, 1)
@@ -101,8 +101,9 @@ class NamingPage(FluentPage):
 
     def _hint_text(self) -> str:
         n = self.window_ref.settings_page.expected_pages()
-        base = "规则：姓名+手机号码+入团志愿书.pdf（半角 +，无空格）"
-        return base + f"；核对 PDF 总页数 = {n} 页" if n > 0 else base + "；预期页数未设置，不核对总页数（在系统配置填写）"
+        if n > 0:
+            return f"姓名加手机号加志愿书，核对 {n} 页"
+        return "姓名加手机号加志愿书"
 
     def _pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")

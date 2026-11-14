@@ -16,6 +16,7 @@ from qfluentwidgets import (
     qrouter,
 )
 
+from app import __version__ as VERSION
 from app.domain.account_health import excluded_note, split_accounts
 from app.services import store
 from app.ui.check_page import CheckPage
@@ -27,8 +28,6 @@ from app.ui.org_page import OrgPage
 from app.ui.settings_page import SettingsPage
 from app.ui.messages_page import MessagesPage
 from app.ui.upload_page import UploadPage
-
-VERSION = "0.2.0-qt"
 
 if sys.platform == "darwin":
     # qframelesswindow 的 StandardTitleBar 给标题 QLabel 写死了 'Segoe UI'
@@ -48,12 +47,11 @@ if sys.platform == "darwin":
 
     StandardTitleBar.__init__ = _local_titlebar_font
 
-    # Qt 必须在原生 NSWindow 创建之前知道窗口要透明：qframelesswindow 的
-    # _initFrameless() 里会调 winId() 创建 NSWindow，之后再设
-    # WA_TranslucentBackground 只改 Qt 属性，backing store 仍没有 alpha
-    # （alphaBufferSize=-1）、NSWindow 仍是 opaque，behind-window 混合层
-    # 不会采样窗口背后的桌面内容。运行期再调 setOpaque_(False) 会被
-    # QNSWindow 立刻覆盖回来，只能在这里提前声明。
+    # 让 Qt 内容层带 alpha：_initFrameless() 会调 winId() 创建原生 NSWindow，
+    # 构造之后再设 WA_TranslucentBackground 实测无效（alphaBufferSize 仍是 -1、
+    # NSWindow.isOpaque 仍是 True，QNSView 的不透明底色会盖住混合层）。
+    # 这里只处理 Qt 侧的 backing store；毛玻璃效果层本身全部使用官方默认参数，
+    # 见 app/services/mac_effect.py。
     from qframelesswindow.mac import MacFramelessWindowBase
 
     _orig_init_frameless = MacFramelessWindowBase._initFrameless
@@ -123,7 +121,7 @@ class MainWindow(MSFluentWindow):
         # 窗口 show 之后 contentView 尺寸稳定才挂，实际动作在 showEvent 里。
         cfg = store.load()
         self._material = cfg.get("translucentMaterial") or ("acrylic" if cfg.get("translucent") else "none")
-        self._translucent = self._material != "none"
+        self._translucent = self._material != "none" and sys.platform == "darwin"
         self._apply_window_background()
 
         # 明暗模式切换（手动或跟随系统变化）：重绘窗口底色 + 重建带烘焙颜色的页面
@@ -131,10 +129,9 @@ class MainWindow(MSFluentWindow):
 
         qconfig.themeChanged.connect(lambda *_: self.on_theme_changed())
 
-        # 统一数据刷新：成员缓存 → 站内信 → 组织状况统计，三段都在工作线程串行执行。
-        # 30 秒快刷（后台静默）：成员缓存按 4 小时新鲜度跳过，站内信每轮强制拉取
-        # 检测新消息（有新消息弹系统通知），组织状况从成员缓存离线重算；
-        # 手动入口在「系统配置」（在线重查全部数据）。
+        # 同步系统数据：成员缓存 → 站内信 → 组织状况统计，工作线程串行执行，
+        # 每 30 秒一轮、每轮都取数，只用已保存会话，不登录。刷新登录状态是
+        # 独立操作，由设置页按各账号最后刷新时间做 4 小时节流，不参与这里。
         self._refreshing = False
         self._refresh_silent = True
         self._refresh_worker: "QThread | None" = None
@@ -145,24 +142,29 @@ class MainWindow(MSFluentWindow):
         QTimer.singleShot(15 * 1000, self._maybe_background_sync)
 
     def _maybe_background_sync(self):
-        """30 秒一次的静默快刷；刷新中不重复启动，没有账号就跳过。"""
+        """30 秒同步一次系统数据；上一轮未结束就跳过本轮，没有账号也跳过。"""
         if not self.settings_page.accounts:
             return
         self.refresh_all(silent=True, fast=True)
 
     def refresh_all(self, silent: bool = True, fast: bool = False) -> bool:
-        """刷新所有数据：成员缓存 → 站内信 → 组织状况统计。
+        """同步系统数据：成员缓存、站内信、组织状况统计，每轮都取数。
 
         全程工作线程（网络不进 GUI 线程）；进行中再次调用直接返回 False。
-        fast=False（手动/慢刷）：组织状况在线重查（OrgWorker）。
-        fast=True（30 秒快刷）：站内信绕开新鲜跳过强制拉取，拉到新消息弹系统
-        通知；成员缓存仍按 4 小时新鲜度跳过（不重复请求）；有账号真的同步到
-        新成员时组织状况从缓存离线重算，否则保留现有展示。
-        「系统配置」的按钮走 silent=False（有开始/完成提示），定时快刷走静默。"""
+        fast=False（手动）：组织状况在线重查（OrgWorker），并收回网页会话占用。
+        fast=True（30 秒定时）：只用已保存会话取数，不登录，避免顶掉网页端
+        会话；站内信拉到新消息弹系统通知；有账号同步到新成员时组织状况从
+        缓存离线重算，否则保留现有展示。
+        刷新登录状态不在这里：设置页按每个账号的最后刷新时间独立节流。
+        「系统配置」的按钮走 silent=False（有开始/完成提示），定时同步走静默。"""
         from qfluentwidgets import InfoBar
 
+        from app.services import login_gate
         from app.ui.messages_page import MessageFetchWorker
         from app.ui.org_manage_page import MemberSyncWorker, mark_synced
+
+        if not silent and login_gate.active_browser_sessions():
+            login_gate.clear_browser_sessions()
 
         usable, excluded = split_accounts(self.settings_page.accounts)
         accounts = usable
@@ -170,7 +172,7 @@ class MainWindow(MSFluentWindow):
             if not silent:
                 hint = (f"其余账号均被标记为异常（{excluded_note(excluded)}），"
                         "请先处理（测活或打开网页端重新登录）") if excluded \
-                    else "先在「系统配置」添加团支部账号"
+                    else "先在系统配置添加团支部账号"
                 InfoBar.warning("没有可用账号", hint, duration=6000, parent=self)
             return False
         if excluded and not silent:
@@ -185,7 +187,7 @@ class MainWindow(MSFluentWindow):
         self._refreshing = True
         self._refresh_silent = silent
         if not silent:
-            InfoBar.info("开始刷新", f"成员缓存 → 站内信 → 组织状况，共 {len(accounts)} 个账号", duration=4000, parent=self)
+            InfoBar.info("开始刷新", f"正在刷新 {len(accounts)} 个账号", duration=4000, parent=self)
 
         synced_any: list[str] = []
 
@@ -259,14 +261,26 @@ class MainWindow(MSFluentWindow):
             tb.takeAt(0)
         tb.insertWidget(0, self.back_btn, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-        self.back_btn.clicked.connect(lambda: qrouter.pop())
+        self.back_btn.clicked.connect(self._on_back_clicked)
         QTimer.singleShot(0, self._place_back_button)
 
-        def _enable_back(empty: bool):
-            self.back_btn.setEnabled(not empty)
+        qrouter.emptyChanged.connect(self._sync_back_state)
+        self.stackedWidget.currentChanged.connect(self._sync_back_state)
+        self.org_manage_page.detail_changed.connect(self._sync_back_state)
+        self._sync_back_state()
 
-        qrouter.emptyChanged.connect(_enable_back)
-        _enable_back(not qrouter.history)
+    def _on_back_clicked(self):
+        """详情页优先退回支部列表，其余情况按导航历史返回上一页。"""
+        if (self.stackedWidget.currentWidget() is self.org_manage_page
+                and self.org_manage_page.go_back()):
+            return
+        qrouter.pop()
+
+    def _sync_back_state(self, *_):
+        on_org = (self.stackedWidget.currentWidget() is self.org_manage_page
+                  and self.org_manage_page.isVisible())
+        detail = on_org and self.org_manage_page.in_detail()
+        self.back_btn.setEnabled(bool(qrouter.history) or detail)
 
     def _place_back_button(self):
         tb = self.titleBar.hBoxLayout
@@ -286,28 +300,29 @@ class MainWindow(MSFluentWindow):
     def showEvent(self, e):
         super().showEvent(e)
         if not self._material_applied:
-            self.set_material(self._material)
-            if not self._material_applied:
-                QTimer.singleShot(0, lambda: self.set_material(self._material))
+            # 等窗口布局稳定再挂：showEvent 当帧 window.width() 还是初始几何，
+            # 官方 setAcrylicEffect 用它建 frame 会错位。效果层也要窗口稳定
+            # 几帧后才完成合成，过早截图/关窗会看不到毛玻璃。
+            def _apply(retry: bool = True):
+                self.set_material(self._material)
+                if not self._material_applied and retry:
+                    QTimer.singleShot(200, lambda: _apply(False))
 
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        if sys.platform == "darwin" and self._translucent:
-            from app.services.mac_effect import sync_frame
-
-            sync_frame(self)
+            QTimer.singleShot(150, _apply)
 
     def paintEvent(self, e):
-        # FluentWidget.paintEvent 会画一层 backgroundColor；开启材质时它由
-        # _apply_window_background 设为全透明，混合层才不会被盖住。
         super().paintEvent(e)
         if not self._translucent:
             painter = QPainter(self)
             painter.fillRect(self.rect(), page_bg_color())
 
     def _apply_window_background(self):
+        # 深色保持全透明，保留原来的背景呈现与毛玻璃质感；首页头图渐隐到
+        # 透明后直接融进这层真实底色。浅色要铺一层稳定浅底：Fluent 的
+        # CardWidget 在浅色下只有 67% 白，全透明窗底会让桌面颜色透进卡片，
+        # 深色文字压在深色条纹上就读不清。light/dark 随主题切换自动生效。
         if self._translucent:
-            self.setCustomBackgroundColor(QColor(0, 0, 0, 0), QColor(0, 0, 0, 0))
+            self.setCustomBackgroundColor(QColor(249, 249, 251, 200), QColor(0, 0, 0, 0))
         else:
             self.setCustomBackgroundColor(QColor(240, 244, 249), QColor(32, 32, 32))
 
@@ -328,4 +343,6 @@ class MainWindow(MSFluentWindow):
             else:
                 disable_acrylic(self)
                 self._material_applied = True
+        else:
+            self._material_applied = True
         self.update()

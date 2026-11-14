@@ -26,6 +26,9 @@ def run() -> int:
 
     w = MainWindow()
     w.show()
+    from app.services.update_check import check_on_startup
+
+    check_on_startup(parent=w)
     return app.exec()
 
 

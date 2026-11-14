@@ -7,7 +7,8 @@
 未读消息另加「未读」标签（卡片不加底色）。
 
 消息缓存持久化到配置 messagesCache（只写不删）；拉取走并发线程（≤4），
-失败账号弹 InfoBar 不影响其他账号；缓存为空或超过 4 小时进入页面时自动拉取。
+失败账号弹 InfoBar 不影响其他账号；启动时缓存为空才补拉一次，之后由主窗口
+30 秒定时链同步系统数据。
 """
 
 from __future__ import annotations
@@ -47,17 +48,17 @@ from app.services.api import SiteClient
 from app.ui.page import FluentPage, note_label, section_title, theme_font
 
 FILTER_LABELS = ["全部", *KIND_LABEL.values()]  # 全部 / 报到申请 / 转接申请 / 其他消息
-AUTO_FETCH_INTERVAL = 4 * 3600  # 自动拉取的最小间隔（秒）
 SECTION_PAGE = 60  # 每个分组一次渲染的卡片数，其余走「显示更多」
 
 
 class MessageFetchWorker(QThread):
-    """并发拉取各账号站内信，逐账号落盘 messagesCache。只读查询。
+    """同步系统数据：并发拉取各账号站内信，逐账号落盘 messagesCache。
 
-    force=True（30 秒快刷）：绕开 4 小时新鲜跳过，每轮都拉，用于检测新消息；
-    风控/验证码冷却账号仍被登录闸门拦下，密码已错的账号直接跳过不尝试登录。
-    缓存里已有消息时，本次拉到的新 receive_id 会发出 new_ready 信号（首次
-    拉取的账号不算新消息，避免一上来刷一屏通知）。"""
+    每轮都取数，不做数据新鲜度跳过（那是刷新登录状态的规则）。
+    force=True（30 秒快刷）：只用已保存会话取数，密码已错、需验证码、
+    冷却中或会话失效的账号直接跳过，不登录，避免顶掉网页端会话。
+    缓存里已有消息时，本次拉到的新 receive_id 会发出 new_ready 信号
+    （首次拉取的账号不算新消息）。"""
 
     account_done = Signal(str, int, str, str)  # user, count, status, message
     new_ready = Signal(list)  # 新消息摘要 [{account, title, content, time}]
@@ -84,13 +85,9 @@ class MessageFetchWorker(QThread):
         # 快刷时密码错误/冷却中的账号直接跳过，不发起网络请求
         if self.force and (acc.get("health") or {}).get("status") in self.FAST_SKIP_HEALTH:
             return user, 0, "cooldown", "该账号不可用（密码错误/冷却中），快刷跳过"
-        # 状态正常且 4 小时内拉取过 → 无需刷新（快刷模式除外）；冷却中 → 跳过
-        skip = "" if self.force else login_gate.fresh_skip(acc, "messagesCache")
-        if skip:
-            return user, 0, "fresh", skip
         try:
             client = SiteClient(user, pwd)
-            kind, msg = login_gate.ensure_logged_in(client)
+            kind, msg = login_gate.ensure_logged_in(client, allow_login=not self.force)
             if kind != "ok":
                 return user, 0, kind, msg
             views = fetch_all_messages(client, user)
@@ -208,7 +205,7 @@ class MessagesPage(FluentPage):
         row.addWidget(self.mark_read_btn, 0)
         row.addStretch(1)
         bar_lay.addLayout(row)
-        self.stat_label = note_label("共 — 条 · 未读 —（点击消息卡打开所属支部账号的网页端）")
+        self.stat_label = note_label("")
         bar_lay.addWidget(self.stat_label)
         lay.addWidget(bar)
 
@@ -276,21 +273,9 @@ class MessagesPage(FluentPage):
         return rows
 
     def auto_fetch(self):
-        """缓存为空或距上次拉取 ≥4 小时时自动拉取（不弹成功提示）。"""
-        cfg = store.load()
-        cache = cfg.get("messagesCache", {})
-        if not cache:
+        """启动时只在缓存为空时补拉一次；之后的数据同步交给 30 秒定时链。"""
+        if not store.load().get("messagesCache"):
             self._fetch(silent=True)
-            return
-        times: list[datetime] = []
-        for blob in cache.values():
-            try:
-                times.append(datetime.fromisoformat(blob.get("fetchedAt", "")))
-            except (ValueError, TypeError):
-                continue
-        if times and (datetime.now(timezone.utc) - max(times)).total_seconds() < AUTO_FETCH_INTERVAL:
-            return
-        self._fetch(silent=True)
 
     # ---------- 已读 / 未读 ----------
 
@@ -347,20 +332,18 @@ class MessagesPage(FluentPage):
         unread_total = sum(1 for v in self._views if self._is_unread(v))
         counts = {k: sum(1 for v in base if v.kind == k) for k in KIND_LABEL}
         self.stat_label.setText(
-            f"共 {len(self._views)} 条 · 未读 {unread_total} · "
-            f"报到 {counts['report']} · 转接 {counts['transfer']} · 其他 {counts['other']}")
+            f"共 {len(self._views)} 条，未读 {unread_total}")
         if not base:
             hint = ("没有未读消息。" if read_idx == 0 else
                     "已读里还没有消息。" if read_idx == 1 else
                     "没有消息。")
-            self.list_lay.addWidget(note_label(
-                hint + " 配置账号后会自动拉取站内信，也可以点「拉取站内信」立即获取；拉取结果保留在本地。"))
+            self.list_lay.addWidget(note_label(hint))
             return
         kinds = list(KIND_LABEL) if idx == 0 else [list(KIND_LABEL)[idx - 1]]
         for k in kinds:
             group = [v for v in base if v.kind == k]
             if not group and idx != 0:
-                self.list_lay.addWidget(note_label("这一类暂时没有消息。"))
+                self.list_lay.addWidget(note_label("没有消息"))
                 continue
             self.list_lay.addWidget(self._section_header(k, len(group)))
             shown = self._shown.setdefault(k, SECTION_PAGE)
@@ -378,7 +361,7 @@ class MessagesPage(FluentPage):
     # ---------- UI ----------
 
     def _section_header(self, kind: str, count: int) -> QWidget:
-        return section_title(f"{KIND_LABEL[kind]}　{count} 条")
+        return section_title(f"{KIND_LABEL[kind]} {count} 条")
 
     def _message_card(self, v: MessageView, unread: bool) -> QWidget:
         card = CardWidget()
@@ -423,7 +406,7 @@ class MessagesPage(FluentPage):
         head.addWidget(CaptionLabel(v.account))
         v_out.addLayout(head)
 
-        body = note_label(v.content or "—")
+        body = note_label(v.content or "")
         body.setWordWrap(True)
         v_out.addWidget(body)
         card.clicked.connect(lambda *_: self._open_message(v))
@@ -435,7 +418,7 @@ class MessagesPage(FluentPage):
         usable, excluded = split_accounts(self.window_ref.settings_page.accounts)
         accounts = usable
         if not accounts:
-            hint = f"其余账号均被标记为异常（{excluded_note(excluded)}）" if excluded else "请先到「系统配置」添加团支部账号"
+            hint = f"其余账号均被标记为异常（{excluded_note(excluded)}）" if excluded else "先在系统配置添加团支部账号"
             InfoBar.warning("没有可拉取的账号", hint, duration=6000, parent=self)
             return
         if excluded and not silent:
@@ -475,7 +458,7 @@ class MessagesPage(FluentPage):
         accounts = self.window_ref.settings_page.accounts
         acc = next((a for a in accounts if a.get("userName") == user), None)
         if not acc or not acc.get("password"):
-            InfoBar.warning("账号不可用", f"该消息所属支部账号 {user or '（空）'} 不在系统配置或缺少密码",
+            InfoBar.warning("账号不可用", f"账号 {user or '未标注'} 不在系统配置或缺少密码",
                             duration=4000, parent=self)
             return
         self.open_worker = MessageOpenWorker(user, acc["password"], self)

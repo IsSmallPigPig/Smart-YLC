@@ -118,9 +118,9 @@ class TrayDaemon(QObject):
         if ok:
             store.update(lambda cfg: cfg.__setitem__(
                 "lastDailyOkDate", datetime.now().strftime("%Y-%m-%d")))
-            send(f"智慧团建 · 团员情况", message, self.tray)
+            send("团员情况", message, self.tray)
         else:
-            send("智慧团建 · 每日检查失败", message, self.tray)
+            send("每日检查失败", message, self.tray)
         self._schedule_next()
 
     def open_window(self):
@@ -147,6 +147,9 @@ def run_tray() -> int:
 
     setup_app()
     daemon = TrayDaemon(app)
+    from app.services.update_check import check_on_startup
+
+    check_on_startup()  # 后台模式只发系统通知，没有窗口可挂信息条
     # 抑制未使用告警
     _ = daemon
     return app.exec()

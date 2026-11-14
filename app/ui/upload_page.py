@@ -136,7 +136,7 @@ class UploadWorker(QThread):
                     for j in acc_jobs:
                         self.row_ready.emit(j["row"], account, os.path.basename(j["path"]), "失败", f"登录失败：{err}")
                     continue
-                self.stage.emit(f"核对 {account} 团员状况…")
+                self.stage.emit(f"核对 {account} 团员状况")
                 member_map = self._member_map(client, account)
 
                 for j in acc_jobs:
@@ -204,7 +204,7 @@ class UploadPage(FluentPage):
 
         row = QHBoxLayout()
         self.dir_edit = LineEdit()
-        self.dir_edit.setPlaceholderText("选择待上传 PDF 所在文件夹（单批 ≤50 份、单文件 ≤10MB）")
+        self.dir_edit.setPlaceholderText("选择待上传 PDF 所在文件夹")
         self.dir_btn = ToolButton(FIF.FOLDER)
         self.dir_btn.clicked.connect(self._pick_dir)
         row.addWidget(self.dir_edit, 1)
@@ -225,7 +225,7 @@ class UploadPage(FluentPage):
         row2.addStretch(1)
         lay.addLayout(row2)
 
-        self.stat = BodyLabel("点「开始上传」即一键执行：命名检查 → 按班级分流 → 压缩 → 预检报到 → 上传 → 自动审核")
+        self.stat = BodyLabel("")
         lay.addWidget(self.stat)
         self.ws_note = note_label("")
         lay.addWidget(self.ws_note)
@@ -246,10 +246,9 @@ class UploadPage(FluentPage):
     def _refresh_ws_note(self):
         pending = load_pending()
         if pending:
-            names = "、".join(e["name"] for e in pending[:3])
-            self.ws_note.setText(f"工作区待上传 {len(pending)} 个：{names}{'…' if len(pending) > 3 else ''}")
+            self.ws_note.setText(f"工作区待上传 {len(pending)} 个")
         else:
-            self.ws_note.setText("工作区暂无待上传文件（在「系统配置」设置工作区目录后，新 PDF 自动加入）")
+            self.ws_note.setText("工作区暂无待上传文件")
 
     def _pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")
