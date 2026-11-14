@@ -5,6 +5,8 @@
 import io
 import json
 import os
+import ssl
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -15,6 +17,14 @@ import pytest
 
 from app import __version__
 from app.services import updater, update_check, store
+
+_REAL_SSL_CONTEXT = updater._ssl_context
+
+
+@pytest.fixture(autouse=True)
+def _no_keychain_lookup(monkeypatch):
+    """网络请求测试不真的调用 macOS security 命令。证书专项用例直接调原函数。"""
+    monkeypatch.setattr(updater, "_ssl_context", lambda: None)
 
 
 class FakeResponse:
@@ -78,6 +88,72 @@ def branch_payload(version: str) -> bytes:
 
 def info(version="9.9.9", url="https://github.com/IsSmallPigPig/Smart-Youth/archive/refs/heads/main.zip"):
     return updater.UpdateInfo(version, "notes", url, f"Smart-Youth-{version}.zip", "branch")
+
+
+# ---------------------------------------------------------------- macOS 根证书
+
+def test_ssl_context_off_macos_uses_urllib_defaults(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "linux")
+    assert _REAL_SSL_CONTEXT() is None
+
+
+def test_ssl_context_loads_system_keychain_roots(monkeypatch):
+    """Python 不读 macOS 钥匙串，必须把系统信任根证书补进 SSLContext。"""
+    monkeypatch.setattr(updater.sys, "platform", "darwin")
+    calls = []
+
+    class FakeCtx:
+        verify_mode = ssl.CERT_REQUIRED
+
+        def load_verify_locations(self, cadata=None):
+            self.cadata = cadata
+
+    ctx = FakeCtx()
+    monkeypatch.setattr(updater.ssl, "create_default_context", lambda: ctx)
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"X" * 1500, stderr=b"")
+
+    monkeypatch.setattr(updater.subprocess, "run", _run)
+    assert _REAL_SSL_CONTEXT() is ctx
+    assert ctx.cadata == "X" * 1500
+    assert all(k in calls[0] for k in updater.MACOS_KEYCHAINS)
+    assert calls[0][0] == "/usr/bin/security"
+
+
+def test_ssl_context_reports_keychain_failure(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "darwin")
+
+    def _boom(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, "security")
+
+    monkeypatch.setattr(updater.subprocess, "run", _boom)
+    with pytest.raises(updater.UpdateError, match="根证书"):
+        _REAL_SSL_CONTEXT()
+
+
+def test_ssl_context_rejects_empty_bundle(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        updater.subprocess, "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b""))
+    with pytest.raises(updater.UpdateError, match="为空"):
+        _REAL_SSL_CONTEXT()
+
+
+def test_urlopen_passes_ssl_context(monkeypatch):
+    ctx = object()
+    monkeypatch.setattr(updater, "_ssl_context", lambda: ctx)
+    seen = {}
+
+    def _open(req, timeout=None, **kwargs):
+        seen.update(kwargs)
+        return FakeResponse(b"ok")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _open)
+    assert updater._read("https://example.com/x") == b"ok"
+    assert seen["context"] is ctx
 
 
 # ---------------------------------------------------------------- 版本与代理
@@ -168,9 +244,10 @@ def test_release_with_only_non_installable_assets_uses_zipball(monkeypatch):
     assert result.filename == "Smart-Youth-v9.9.9.zip"
 
 
-def test_tag_v1_matches_local_1_0_0_without_self_update():
-    """发布 v1.0.0 后，本地同一版本不能一直提示发现新版本。"""
-    assert __version__ == "1.0.0"
+def test_release_tag_matches_local_version_without_self_update():
+    """发布的 tag 与本地版本一致时，不能一直提示发现新版本。"""
+    assert __version__ == "1.0.1"
+    assert not updater.is_newer("v1.0.1")
     assert not updater.is_newer("v1.0.0")
 
 
