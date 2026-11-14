@@ -17,6 +17,22 @@ KIND_COLOR = {"report": "#1565c0", "transfer": "#2e7d32", "other": "#6b7280"}
 _REPORT_WORDS = ("报到", "报道")
 _MOBILE_RE = re.compile(r"1\d{10}")
 _TAG_RE = re.compile(r"<[^>]+>")
+# 站点标题形如「[系统通知][报道认证审核提醒]」：第一层是系统通知前缀，第二层才是标题
+_PREFIX_WORDS = {"系统通知"}
+_LEAD_PREFIX_RE = re.compile(r"^\s*[【\[]([^】\]]*)[】\]]\s*")
+_WRAP_RE = re.compile(r"^\s*[【\[]([^】\]]*)[】\]]\s*$")
+
+
+def clean_title(title: str) -> str:
+    """剥掉「[系统通知]」类前缀；若剩余部分整体包在一层中括号里则解开。"""
+    t = (title or "").strip()
+    m = _LEAD_PREFIX_RE.match(t)
+    if m and m.group(1).strip() in _PREFIX_WORDS:
+        t = t[m.end():]
+    m2 = _WRAP_RE.match(t)
+    if m2:
+        t = m2.group(1)
+    return t.strip()
 
 
 @dataclass
@@ -79,14 +95,24 @@ def build_message_views(rows: list[dict], account: str) -> list[MessageView]:
 
 
 def fetch_all_messages(client, account: str, page_size: int = 100, max_pages: int = 10) -> list[MessageView]:
-    """拉取一个账号的全部站内信（返回空页即停）。"""
+    """拉取一个账号的全部站内信。
+
+    翻页终止条件：空页、不足一页，或「整页都是已见过的 receiveId」——
+    服务端偶发无视 page 参数重复返回同一页，按 receive_id 去重防止死循环刷出
+    上千条重复数据把界面卡死。"""
     views: list[MessageView] = []
+    seen: set[str] = set()
     for page in range(1, max_pages + 1):
         data = client.get_messages_page(page, page_size)
         rows = data.get("listData") or []
         if not rows:
             break
-        views.extend(build_message_views(rows, account))
+        fresh = [r for r in rows if str(r.get("receiveId")) not in seen]
+        if not fresh:
+            break
+        for r in fresh:
+            seen.add(str(r.get("receiveId")))
+        views.extend(build_message_views(fresh, account))
         if len(rows) < page_size:
             break
     return views
@@ -122,4 +148,20 @@ def build_member_index(accounts: list[dict], member_cache: dict, local_rows: lis
         mob = getattr(r, "mobile", "")
         if mob and mob not in index:
             index[mob] = ("", getattr(r, "extra", {}).get("class", ""))
+    return index
+
+
+def build_member_name_index(member_cache: dict, local_rows: list) -> dict[str, str]:
+    """手机号 → 团员姓名（系统缓存优先，本地名单兜底）。用于消息卡片主标题。"""
+    index: dict[str, str] = {}
+    for user, blob in (member_cache or {}).items():
+        for m in blob.get("members", []):
+            mob = str(m.get("mobile") or "")
+            name = str(m.get("name") or "")
+            if mob and name:
+                index.setdefault(mob, name)
+    for r in local_rows:
+        mob = getattr(r, "mobile", "")
+        if mob and mob not in index:
+            index[mob] = getattr(r, "name", "")
     return index

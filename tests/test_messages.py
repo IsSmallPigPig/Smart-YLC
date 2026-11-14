@@ -3,11 +3,26 @@
 from app.domain.messages import (
     MessageView,
     build_member_index,
+    build_member_name_index,
     classify_message,
+    clean_title,
     extract_mobile,
     locate_account,
     strip_html,
 )
+
+
+def test_clean_title():
+    # 站点标题第一层是系统通知前缀，第二层才是标题
+    assert clean_title("[系统通知][报道认证审核提醒]") == "报道认证审核提醒"
+    assert clean_title("[系统通知][组织关系转接审核提醒]") == "组织关系转接审核提醒"
+    assert clean_title("[系统通知]换届提醒") == "换届提醒"
+    assert clean_title("换届提醒") == "换届提醒"
+
+
+def test_member_name_index():
+    cache = {"ssfz12407": {"members": [{"mobile": "19925691060", "name": "谢欣雨"}]}}
+    assert build_member_name_index(cache, [])["19925691060"] == "谢欣雨"
 
 
 def test_classify_report():
