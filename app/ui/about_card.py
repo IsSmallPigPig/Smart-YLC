@@ -67,6 +67,12 @@ class AboutCard(CollapsibleCard):
             "了解作者", desc=self.CREDIT, icon=FIF.PEOPLE,
             control=_fill(author_btn)))
 
+        license_btn = _button(FIF.CERTIFICATE, "GPL-3.0")
+        license_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(updater.REPO_PAGE + "/blob/main/LICENSE")))
+        self.body_lay.addWidget(SettingRow(
+            "开源许可", icon=FIF.CERTIFICATE, control=_fill(license_btn)))
+
         feedback_btn = _button(FIF.FEEDBACK, "提交反馈")
         feedback_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl(updater.ISSUES_URL)))

@@ -8,6 +8,7 @@
 [![Downloads][downloads-shield]][release-url]
 [![Python][python-shield]][python-url]
 [![Qt][qt-shield]][qt-url]
+[![License][license-shield]][license-url]
 
 ##### [下载安装][release-url] · [提交问题][issues-url] · [查看源码][repo-url] · [作者主页][author-url]
 
@@ -205,6 +206,10 @@ python3 -m pytest tests/ -q
 
 欢迎提 issue 或 PR：复现步骤、截图、日志里的错误原文都很有用。改动涉及网络协议时，请一并补上对应的纯函数测试。
 
+## 许可证
+
+本项目以 [GNU General Public License v3.0](LICENSE) 发布：可以自由使用、修改与再分发，衍生的程序也必须同样以 GPLv3 开源并附上源码。
+
 <div align="center">
 
 本项目由广州天省实验学校 12407 欧阳文俊 @IsSmallPigPig 开发。
@@ -221,4 +226,6 @@ python3 -m pytest tests/ -q
 [qt-url]: https://doc.qt.io/qtforpython/
 [issues-url]: https://github.com/IsSmallPigPig/Smart-YLC/issues
 [repo-url]: https://github.com/IsSmallPigPig/Smart-YLC
+[license-shield]: https://img.shields.io/badge/License-GPL--3.0-blue?style=for-the-badge
+[license-url]: https://github.com/IsSmallPigPig/Smart-YLC/blob/main/LICENSE
 [author-url]: https://github.com/IsSmallPigPig
