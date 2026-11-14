@@ -16,10 +16,10 @@ PAGE_MARGINS = (36, 28, 36, 28)
 
 
 def note_label(text: str) -> CaptionLabel:
-    """参考设计：说明文字用 12px 灰色小字，标题与备注分层。"""
+    """说明文字：12px 灰色小字，浅色主题用 gray-600 保证对比度，标题与备注分层。"""
     lbl = CaptionLabel(text)
     lbl.setWordWrap(True)
-    lbl.setTextColor(QColor("#6b7280"), QColor("#9ca3af"))
+    lbl.setTextColor(QColor("#4b5563"), QColor("#9ca3af"))
     return lbl
 
 

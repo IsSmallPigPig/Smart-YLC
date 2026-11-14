@@ -340,7 +340,7 @@ class OrgPage(FluentPage):
                 head.addWidget(chip)
         head.addSpacing(12)
         branch_lbl = CaptionLabel(branch or "—")
-        branch_lbl.setTextColor(QColor("#6b7280"), QColor("#9ca3af"))
+        branch_lbl.setTextColor(QColor("#4b5563"), QColor("#9ca3af"))
         head.addWidget(branch_lbl)
         v.addLayout(head)
 
