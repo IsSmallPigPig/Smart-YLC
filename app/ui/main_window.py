@@ -302,6 +302,15 @@ class MainWindow(MSFluentWindow):
         """打开账号网页窗口：独立窗口，不在侧边栏占一页。"""
         self._ensure_browser_window().open_account(user)
 
+    def sync_browser_accounts(self):
+        """账号信息改动后注入已打开的标签：改名跟着改，密码/验证码变过就重登。
+
+        没有浏览器窗口就什么都不做——下次打开读的就是最新配置。
+        """
+        browser = getattr(self, "browser_window", None)
+        if browser is not None:
+            browser.refresh_accounts()
+
     def on_theme_changed(self):
         """明暗模式已经落地：窗口底色重绘，消息卡片的标签各自按新主题重画。
 

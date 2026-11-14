@@ -55,6 +55,8 @@ from app.ui.page import note_label, theme_font, set_tip
 
 PROFILE_ROOT = os.path.join(os.path.dirname(CONFIG_FILE), "webprofiles")
 MAX_TABS = 6
+"""登录等待页最多盖这么久。超时就把网页露出来，别让人对着转圈干等。"""
+LOGIN_TIMEOUT_MS = 25_000
 SITE_HOME = f"{SITE_BASE_URL}/bg/index_main.html"
 TITLE_BAR_HEIGHT = 48
 """macOS 的系统按钮画在标题栏最右侧（宽 75），标题栏内容要提前让开。"""
@@ -118,6 +120,13 @@ class WebTab(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         set_tip(self, f"{self._title}（{user}）")
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+
+    def set_title(self, title: str):
+        """备注改了就把标签名换掉：标签里只放班名，提示里保留学段与账号。"""
+        self._title = title or self.user
+        self._short = split_branch_label(self._title)[1] or self._title
+        set_tip(self, f"{self._title}（{self.user}）")
+        self.update()
 
     def set_slot_width(self, width: int):
         width = max(self.MIN_WIDTH, min(self.MAX_WIDTH, int(width)))
@@ -297,6 +306,10 @@ class BrowserWindow(FluentWindowBase):
         self._labels: dict[str, str] = {}
         self._state: dict[str, str] = {}  # login | home | checking | ready
         self._loadings: dict[str, LoginView] = {}
+        # 每个标签登记一份「密码 + 登录验证码」，配置里这两项一变就重登
+        self._creds: dict[str, tuple[str, str]] = {}
+        # 登录看门狗的分代号：重登一次就 +1，旧定时器到点自动作废
+        self._login_token: dict[str, int] = {}
         self._current = ""
 
         # FluentWindowBase 自带一个没进布局的 stackedWidget，它就停在窗口左上角
@@ -645,13 +658,57 @@ class BrowserWindow(FluentWindowBase):
             self._activate(user)
             return
         if self.tab_count() >= MAX_TABS:
+            self._set_welcome_hint(f"最多同时打开 {MAX_TABS} 个标签，先关掉一个再来")
+            self._raise_page("")
             return
         acc = self._account(user)
-        if not acc or not acc.get("password"):
+        # 下面两种都是「点了没反应」的来源，必须说清为什么没开
+        if not acc:
+            self._set_welcome_hint("这个账号已经不在系统配置里，先刷新账号列表")
+            self._raise_page("")
             return
+        if not acc.get("password"):
+            self._set_welcome_hint("这个账号还没有密码，先到系统配置补上")
+            self._raise_page("")
+            return
+        self._set_welcome_hint("")
+        self._creds[user] = self._cred_sig(acc)
         self._ensure_view(user)
         self._activate(user)
         self._login(user)
+
+    def refresh_accounts(self):
+        """把系统里最新的账号信息注入已打开的标签。
+
+        备注改了标签名跟着改；密码或登录验证码变过就用新凭据重登一次，否则页面里
+        还是旧会话；账号被删掉就关掉它的标签。没开过标签的账号不用管——下次打开
+        本来就读最新配置。"""
+        accounts = {str(a.get("userName") or ""): a for a in self._accounts()}
+        accounts.pop("", None)
+        for user in list(self._views):
+            acc = accounts.get(user)
+            if acc is None:
+                self._close(user)
+                profile = self._profiles.pop(user, None)
+                if profile is not None:      # 账号没了，存储分区也不会再用
+                    profile.deleteLater()
+                continue
+            label = str(acc.get("remark") or user)
+            if label != self._labels.get(user):
+                self._labels[user] = label
+                tab = self._tabs.get(user)
+                if tab is not None:
+                    tab.set_title(label)
+            sig = self._cred_sig(acc)
+            if sig == self._creds.get(user):
+                continue
+            self._creds[user] = sig
+            self._auto_logins[user] = 0
+            self._login(user)
+        self._sync_nav()
+
+    def _cred_sig(self, acc: dict) -> tuple[str, str]:
+        return (str(acc.get("password") or ""), str(acc.get("loginValidCode") or ""))
 
     def _activate(self, user: str):
         view = self._views.get(user)
@@ -666,9 +723,10 @@ class BrowserWindow(FluentWindowBase):
     def _close(self, user: str):
         view = self._views.pop(user, None)
         tab = self._tabs.pop(user, None)
-        profile = self._profiles.pop(user, None)
         self._labels.pop(user, None)
         self._state.pop(user, None)
+        self._creds.pop(user, None)
+        self._login_token.pop(user, None)
         if tab is not None:
             self.tab_lay.removeWidget(tab)
             tab.setParent(None)
@@ -680,8 +738,6 @@ class BrowserWindow(FluentWindowBase):
         if view is not None:
             view.setParent(None)
             view.deleteLater()
-        if profile is not None:
-            profile.deleteLater()
         if self._views:
             self._activate(next(reversed(self._views)))
         else:
@@ -736,10 +792,18 @@ class BrowserWindow(FluentWindowBase):
 
     # ---------- 网页视图 ----------
 
-    def _ensure_view(self, user: str):
-        from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
-        from PySide6.QtWebEngineWidgets import QWebEngineView
+    def _profile(self, user: str):
+        """按账号复用一个 profile：同一个账号反复开关标签都不重建。
 
+        每个 profile 是 Chromium 的一份独立存储分区，建的时候要打开并初始化
+        `webprofiles/<账号>` 目录。关掉标签立刻重开时，旧 profile 的页面还在异步
+        销毁，新 profile 又要抢同一个目录——这一步卡住就是整个窗口没反应。
+        存储分区本来就与页面生命周期无关，留着复用即可。"""
+        from PySide6.QtWebEngineCore import QWebEngineProfile
+
+        profile = self._profiles.get(user)
+        if profile is not None:
+            return profile
         storage = os.path.join(PROFILE_ROOT, user)
         os.makedirs(storage, exist_ok=True)
         profile = QWebEngineProfile(f"gd-{user}", self)
@@ -747,7 +811,14 @@ class BrowserWindow(FluentWindowBase):
         profile.setCachePath(os.path.join(storage, "cache"))
         profile.setPersistentCookiesPolicy(
             QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+        self._profiles[user] = profile
+        return profile
 
+    def _ensure_view(self, user: str):
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+
+        profile = self._profile(user)
         view = QWebEngineView(self.area)
         view.setPage(QWebEnginePage(profile, view))
         view.loadProgress.connect(self._on_progress)
@@ -756,7 +827,6 @@ class BrowserWindow(FluentWindowBase):
         view.installEventFilter(self)
         view.setGeometry(self.area.rect())
         self._views[user] = view
-        self._profiles[user] = profile
 
         label = self._label_of(user)
         self._labels[user] = label
@@ -811,6 +881,7 @@ class BrowserWindow(FluentWindowBase):
         if view is None:
             return
         self._state[user] = "login"
+        self._creds[user] = self._cred_sig(acc)
         self._set_status(f"{self._labels.get(user, user)}：正在登录…")
         self.progress.setValue(0)
         self.progress.show()
@@ -830,6 +901,22 @@ class BrowserWindow(FluentWindowBase):
         url = build_login_url(user, str(acc.get("password") or ""),
                              str(acc.get("loginValidCode") or ""))
         QTimer.singleShot(300, lambda: self._load_login(user, url))
+        token = self._login_token.get(user, 0) + 1
+        self._login_token[user] = token
+        QTimer.singleShot(LOGIN_TIMEOUT_MS,
+                          lambda: self._login_watchdog(user, token))
+
+    def _login_watchdog(self, user: str, token: int):
+        """登录迟迟没有结果时把等待页收掉，露出网页让人工接手。
+
+        站点接口、Cookie 清理、页面渲染任一步卡住，`loadFinished` 就不会回来，
+        进度环会一直盖在网页上——看着就是整个窗口卡死。这里只收等待页，不关
+        标签：页面本身可能已经在加载，露出来就能用。"""
+        if self._login_token.get(user) != token:
+            return  # 期间重登过，这次定时器作废
+        if user not in self._views or self._state.get(user) not in ("login", "home", "checking"):
+            return
+        self._fail(user, "登录没有回应，可在页面里手动登录")
 
     def _load_login(self, user: str, url: str):
         """等 Cookie 清完再导航；期间标签可能被关掉，所以要重新取一次 view。"""
