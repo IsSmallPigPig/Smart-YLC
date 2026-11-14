@@ -30,10 +30,12 @@ class BarRowWidget(QWidget):
         self.setMinimumWidth(360)
 
     def set_value(self, value: int, maximum: int | None = None):
-        if maximum is not None and maximum > self._maximum:
-            self._maximum = maximum
+        """maximum 为本次调用的权威分母（不足 value 时抬到 value）；不传则沿用旧分母只增不减。"""
         self._value = value
-        self._maximum = max(self._maximum, value, 1)
+        if maximum is not None:
+            self._maximum = max(maximum, value, 1)
+        else:
+            self._maximum = max(self._maximum, value, 1)
         self.update()
 
     def paintEvent(self, event):
