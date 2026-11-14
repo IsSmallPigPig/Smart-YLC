@@ -24,6 +24,7 @@ from app.ui.naming_page import NamingPage
 from app.ui.org_manage_page import OrgManagePage
 from app.ui.org_page import OrgPage
 from app.ui.settings_page import SettingsPage
+from app.ui.messages_page import MessagesPage
 from app.ui.upload_page import UploadPage
 
 VERSION = "0.2.0-qt"
@@ -45,23 +46,6 @@ if sys.platform == "darwin":
             )
 
     StandardTitleBar.__init__ = _local_titlebar_font
-
-    # qfluentwidgets 遮罩弹窗（MessageBox 等）关闭时挂 QGraphicsOpacityEffect
-    # 播放渐隐动画：macOS 上该特效对复杂 QFrame 的 raster 渲染会冻结整个窗口
-    # （表现为弹窗出现后按钮点不动、页面卡死）。跳过动画直接结束。
-    from PySide6.QtWidgets import QDialog
-    from qfluentwidgets.components.dialog_box.mask_dialog_base import MaskDialogBase
-
-    def _instant_done(self, code):
-        self.setGraphicsEffect(None)
-        QDialog.done(self, code)
-
-    MaskDialogBase.done = _instant_done
-
-    def _plain_show(self, e):
-        QDialog.showEvent(self, e)
-
-    MaskDialogBase.showEvent = _plain_show
 
 
 class MainWindow(MSFluentWindow):
@@ -91,6 +75,7 @@ class MainWindow(MSFluentWindow):
         self.check_page = CheckPage(self)
         self.org_page = OrgPage(self)
         self.org_manage_page = OrgManagePage(self)
+        self.messages_page = MessagesPage(self)
         self.settings_page.window_ref = self  # 毛玻璃开关与团支书导入后的页面刷新
         self.settings_page.home_page = self.home_page  # 系统配置里设置头图后即时刷新首页
 
@@ -99,6 +84,7 @@ class MainWindow(MSFluentWindow):
         self.addSubInterface(self.check_page, FIF.CERTIFICATE, "批量检查")
         self.addSubInterface(self.org_page, FIF.PIE_SINGLE, "组织状况")
         self.addSubInterface(self.org_manage_page, FIF.PEOPLE, "组织管理")
+        self.addSubInterface(self.messages_page, FIF.MESSAGE, "系统消息")
         # 文档类工具与系统配置放在一起，置于侧边栏底部
         self.addSubInterface(self.naming_page, FIF.EDIT, "文档检查", position=NavigationItemPosition.BOTTOM)
         self.addSubInterface(self.compress_page, FIF.ZOOM, "批量压缩", position=NavigationItemPosition.BOTTOM)
