@@ -49,16 +49,21 @@ def _rec_from_dict(d: dict) -> MemberRecord:
 
 
 class MemberSyncWorker(QThread):
-    """并发登录各支部账号拉取成员，逐账号写入配置 memberCache。只读查询。"""
+    """登录各支部账号拉取成员，逐账号写入配置 memberCache。只读查询。
+
+    concurrent=True（手动同步）时并发 ≤4 拉取；sequential=True（后台静默刷新）
+    时逐账号串行、账号间留间隔，降低触发风控的概率。"""
 
     account_done = Signal(str, str, int, str, str)  # user, branch, count, status, message
     all_done = Signal()
 
     MAX_WORKERS = 4
+    BG_GAP_SECONDS = 6  # 后台串行刷新的账号间隔
 
-    def __init__(self, accounts: list[dict]):
+    def __init__(self, accounts: list[dict], sequential: bool = False):
         super().__init__()
         self.accounts = accounts
+        self.sequential = sequential
         self._stop = False
 
     def stop(self):
@@ -95,16 +100,29 @@ class MemberSyncWorker(QThread):
             return user, branch, 0, "network", str(e)
 
     def run(self):
-        workers = min(self.MAX_WORKERS, max(1, len(self.accounts)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(self._fetch_one, dict(a)) for a in self.accounts]
-            for fut in as_completed(futures):
+        import time
+
+        if self.sequential:
+            for i, acc in enumerate(self.accounts):
                 if self._stop:
                     break
+                if i:
+                    time.sleep(self.BG_GAP_SECONDS)
                 try:
-                    self.account_done.emit(*fut.result())
+                    self.account_done.emit(*self._fetch_one(dict(acc)))
                 except Exception as e:
                     self.account_done.emit("", "", 0, "network", f"同步线程异常：{e}")
+        else:
+            workers = min(self.MAX_WORKERS, max(1, len(self.accounts)))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(self._fetch_one, dict(a)) for a in self.accounts]
+                for fut in as_completed(futures):
+                    if self._stop:
+                        break
+                    try:
+                        self.account_done.emit(*fut.result())
+                    except Exception as e:
+                        self.account_done.emit("", "", 0, "network", f"同步线程异常：{e}")
         self.all_done.emit()
 
 
@@ -319,7 +337,7 @@ class OrgManagePage(FluentPage):
             InfoBar.warning("未配置账号", "请先到「系统配置」添加团支部账号", duration=3000, parent=self)
             return
         self.sync_btn.setEnabled(False)
-        self.worker = _SyncWorker(accounts)
+        self.worker = MemberSyncWorker(accounts)
         self.worker.account_done.connect(self._on_sync_one)
         self.worker.all_done.connect(self._on_sync_done)
         self.worker.start()
@@ -332,5 +350,15 @@ class OrgManagePage(FluentPage):
 
     def _on_sync_done(self):
         self.sync_btn.setEnabled(True)
+        mark_synced()
         self.refresh()
         InfoBar.success("同步完成", "系统成员缓存已更新，组织树已刷新", duration=3000, parent=self)
+
+
+def mark_synced():
+    """记录最后一次刷新时间（手动/后台都算），后台定时刷新据此判断是否到期。"""
+    from datetime import datetime, timezone
+
+    cfg = store.load()
+    cfg["lastSyncAt"] = datetime.now(timezone.utc).isoformat()
+    store.save(cfg)

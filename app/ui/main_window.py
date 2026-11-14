@@ -97,6 +97,41 @@ class MainWindow(MSFluentWindow):
         if store.load().get("translucent"):
             self.set_translucent(True)
 
+        # 后台静默刷新：智慧团建数据每 4 小时一轮，无用户主动刷新时才跑；
+        # 逐账号串行 + 间隔，避免触发风控。启动 1 分钟后先检查一次。
+        self._bg_sync_worker: "MemberSyncWorker | None" = None
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setInterval(4 * 3600 * 1000)
+        self._sync_timer.timeout.connect(self._maybe_background_sync)
+        self._sync_timer.start()
+        QTimer.singleShot(60 * 1000, self._maybe_background_sync)
+
+    def _maybe_background_sync(self):
+        """距上次刷新 ≥4 小时（或从没刷过）才静默刷新；刷新中不重复启动。"""
+        from datetime import datetime, timezone
+
+        if self._bg_sync_worker is not None and self._bg_sync_worker.isRunning():
+            return
+        accounts = self.settings_page.accounts
+        if not accounts:
+            return
+        last = store.load().get("lastSyncAt", "")
+        if last:
+            try:
+                elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds()
+            except ValueError:
+                elapsed = None
+            if elapsed is not None and elapsed < 4 * 3600:
+                return
+        from app.ui.org_manage_page import MemberSyncWorker, mark_synced
+
+        self._bg_sync_worker = MemberSyncWorker(accounts, sequential=True)
+        self._bg_sync_worker.all_done.connect(lambda: mark_synced())
+        self._bg_sync_worker.all_done.connect(
+            lambda: self.org_manage_page.refresh()
+            if self.stackedWidget.currentWidget() is self.org_manage_page else None)
+        self._bg_sync_worker.start()
+
     def _setup_back_button(self):
         self.back_btn = TransparentToolButton(FIF.RETURN, self.titleBar)
         self.back_btn.setToolTip("返回上一页")

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 
@@ -93,15 +93,24 @@ class ProgressDonut(QWidget):
             p.setPen(pen)
             p.drawArc(rect, 90 * 16, -int(360 * 16 * self._ratio))
 
+        # 两行文字作为一个整体在圆环内水平垂直居中
         f = p.font()
         f.setPixelSize(20)
         f.setBold(True)
         p.setFont(f)
+        fm_num = p.fontMetrics()
+        sub_font = p.font()
+        sub_font.setPixelSize(11)
+        sub_font.setBold(False)
+        fm_sub = QFontMetrics(sub_font)
+        gap = 4
+        total_h = fm_num.height() + gap + fm_sub.height()
+        top = (self.height() - total_h) // 2
         p.setPen(QPen(fg, 1))
-        p.drawText(rect.adjusted(0, 8, 0, 8), Qt.AlignmentFlag.AlignCenter, self._text)
-        f.setPixelSize(11)
-        f.setBold(False)
-        p.setFont(f)
+        p.drawText(QRect(0, top, self.width(), fm_num.height()),
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, self._text)
+        p.setFont(sub_font)
         dim = QColor("#9ca3af") if dark else QColor("#6b7280")
         p.setPen(QPen(dim, 1))
-        p.drawText(rect.adjusted(0, 30, 0, 30), Qt.AlignmentFlag.AlignCenter, self._sub)
+        p.drawText(QRect(0, top + fm_num.height() + gap, self.width(), fm_sub.height()),
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, self._sub)
