@@ -1168,6 +1168,7 @@ class SettingsPage(FluentPage):
         self._worker = HealthWorker([dict(a) for a in self.accounts])
         self._worker.account_checked.connect(self._on_account_checked)
         self._worker.finished.connect(lambda: self.health_btn.setEnabled(True))
+        self._worker.finished.connect(self._flush_health_results)  # 兜底：突发结束后必有一次落盘
         self._worker.start()
 
     # ---------- 浏览器打开（携带登录态） ----------
@@ -1222,16 +1223,19 @@ class SettingsPage(FluentPage):
                 "status": status, "message": message,
                 "checkedAt": datetime.now().isoformat(timespec="seconds"),
             }
-        self._save_config()
-        # 测活结果逐条回 GUI；50ms 防抖合并为一次表格刷新，不在 queued
-        # 信号栈内直接重建（全表重建会触发 delegate override，6.12 下崩溃）
+        # 结果逐条回 GUI；50ms 防抖合并为一次「写盘 + 表格刷新」——
+        # 逐条 _save_config 是全量 JSON 读写（~15ms × 账号数），52 账号会卡主线程 ~1s
         if getattr(self, "_health_refresh_timer", None) is None:
             t = QTimer(self)
             t.setSingleShot(True)
             t.setInterval(50)
-            t.timeout.connect(self._refresh_table)
+            t.timeout.connect(self._flush_health_results)
             self._health_refresh_timer = t
         self._health_refresh_timer.start()
+
+    def _flush_health_results(self):
+        self._save_config()
+        self._refresh_table()
 
     # ---------- 名单（分学期 + 模板） ----------
 

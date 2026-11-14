@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -225,9 +227,21 @@ class MessagesPage(FluentPage):
 
     # ---------- 数据 ----------
 
+    def _cache_digest(self) -> str:
+        """消息列表依赖的配置指纹：消息缓存 + 成员缓存（姓名索引）+ 已读标记。
+        三者都没变时 _load_cache 直接跳过，30 秒快刷不再全量重建卡片。"""
+        cfg = store.load()
+        raw = json.dumps([cfg.get("messagesCache", {}), cfg.get("messagesRead", {}),
+                          cfg.get("memberCache", {})], sort_keys=True, ensure_ascii=False)
+        return hashlib.md5(raw.encode()).hexdigest()
+
     def _load_cache(self):
         """从缓存组装视图（拉取后也会刷新）；按 (账号, receive_id) 去重，
         兼容旧缓存里已被重复写入的同一条消息。"""
+        digest = self._cache_digest()
+        if digest == getattr(self, "_last_digest", None) and self._views:
+            return
+        self._last_digest = digest
         cfg = store.load()
         cache = cfg.get("messagesCache", {})
         views: list[MessageView] = []
@@ -285,7 +299,10 @@ class MessagesPage(FluentPage):
         return f"{v.account}:{v.receive_id}"
 
     def _read_marks(self) -> dict:
-        return store.load().get("messagesRead") or {}
+        """已读标记表。重建开始时整份载入缓存，避免逐条消息重复解析配置。"""
+        if getattr(self, "_read_marks_cache", None) is None:
+            self._read_marks_cache = store.load().get("messagesRead") or {}
+        return self._read_marks_cache
 
     def _is_unread(self, v: MessageView) -> bool:
         """站点状态未读，且没有被本地标记为已读。"""
@@ -294,6 +311,8 @@ class MessagesPage(FluentPage):
     def _set_read(self, v: MessageView):
         store.update(lambda cfg: (cfg.setdefault("messagesRead", {})
                                   ).__setitem__(self._read_key(v), 1))
+        if getattr(self, "_read_marks_cache", None) is not None:
+            self._read_marks_cache[self._read_key(v)] = 1
 
     def _mark_all_read(self):
         unread = [v for v in self._views if self._is_unread(v)]
@@ -307,10 +326,12 @@ class MessagesPage(FluentPage):
                 marks[self._read_key(v)] = 1
 
         store.update(_write)
+        self._read_marks_cache = None
         self._rebuild()
         InfoBar.success("已全部标为已读", f"共 {len(unread)} 条", duration=3000, parent=self)
 
     def _rebuild(self):
+        self._read_marks_cache = None  # 本轮已读表重新载入
         while self.list_lay.count():
             item = self.list_lay.takeAt(0)
             if item.widget():
