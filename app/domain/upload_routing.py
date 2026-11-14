@@ -2,6 +2,8 @@
 
 约定：名单「班级」列填团支部编号（如 12407），对应账号 ssfz12407
 （匹配规则：账号 = 前缀 + 编号，或账号以编号结尾）。
+名单只需姓名和班级两列（手机号可选）：先按 (姓名, 手机号) 精确匹配，
+查不到时按姓名兜底，同名多班则拦截。
 """
 
 from __future__ import annotations
@@ -30,16 +32,24 @@ def account_for_class(cls: str, account_names: list[str]) -> str | None:
     return None
 
 
-def roster_class_lookup(roster: Roster | None) -> dict[tuple[str, str], str]:
-    """(姓名, 手机号) → 班级。多学期名单合并后查。"""
-    out: dict[tuple[str, str], str] = {}
-    if not roster:
-        return out
-    for row in roster.rows:
-        cls = str((row.extra or {}).get("class") or "").strip()
-        if cls:
-            out[(row.name, row.mobile)] = cls
-    return out
+def roster_class_lookup(roster: Roster | None) -> "ClassIndex":
+    """名单 → 班级索引。手机号非必选：先按 (姓名, 手机号) 精确匹配，再按姓名兜底。"""
+    pair: dict[tuple[str, str], str] = {}
+    by_name: dict[str, set[str]] = {}
+    if roster:
+        for row in roster.rows:
+            cls = str((row.extra or {}).get("class") or "").strip()
+            if not cls:
+                continue
+            pair[(row.name, row.mobile)] = cls
+            by_name.setdefault(row.name, set()).add(cls)
+    return ClassIndex(pair, {k: sorted(v) for k, v in by_name.items()})
+
+
+@dataclass
+class ClassIndex:
+    pair: dict[tuple[str, str], str]
+    by_name: dict[str, list[str]]  # 姓名 → 去重后的班级列表
 
 
 @dataclass
@@ -56,9 +66,14 @@ def resolve_file_targets(
     filenames: list[str],
     parsed: dict[str, tuple[str, str]],
     account_names: list[str],
-    class_lookup: dict[tuple[str, str], str],
+    index: ClassIndex,
 ) -> list[FileTarget]:
-    """parsed: 文件名 → (姓名, 手机号)（命名检查已通过的文件才有）。"""
+    """parsed: 文件名 → (姓名, 手机号)（命名检查已通过的文件才有）。
+
+    班级匹配：先查 (姓名, 手机号)；名单没有手机号时按姓名兜底，
+    同名分布在多个班级则拦截请人工确认。"""
+    empty = ClassIndex({}, {})
+    index = index or empty
     targets: list[FileTarget] = []
     for fn in filenames:
         pm = parsed.get(fn)
@@ -66,7 +81,16 @@ def resolve_file_targets(
             targets.append(FileTarget(fn, problem="文件名无法解析出姓名与手机号，先修正命名"))
             continue
         name, mobile = pm
-        cls = class_lookup.get((name, mobile), "")
+        cls = index.pair.get((name, mobile), "")
+        if not cls and index.by_name:
+            classes = index.by_name.get(name, [])
+            if len(classes) == 1:
+                cls = classes[0]
+            elif len(classes) > 1:
+                targets.append(FileTarget(
+                    fn, name, mobile,
+                    problem=f"名单中「{name}」出现在多个班级（{'、'.join(classes)}），无法确定支部；请修正名单后再试"))
+                continue
         if not cls:
             targets.append(FileTarget(fn, name, mobile, problem=f"名单中找不到 {name}（{mobile}）的班级信息"))
             continue

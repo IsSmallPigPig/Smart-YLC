@@ -30,28 +30,67 @@ def test_account_for_class():
 def test_roster_class_lookup():
     r = Roster("r", [
         RosterRow("张三", "13800000000", {"class": "12407"}),
-        RosterRow("李四", "13900000000", None),
+        RosterRow("李四", "", {"class": "12408"}),
     ])
-    lookup = roster_class_lookup(r)
-    assert lookup[("张三", "13800000000")] == "12407"
-    assert ("李四", "13900000000") not in lookup
-    assert roster_class_lookup(None) == {}
+    idx = roster_class_lookup(r)
+    assert idx.pair[("张三", "13800000000")] == "12407"
+    assert idx.by_name["李四"] == ["12408"]
+    assert roster_class_lookup(None).pair == {}
 
 
-def test_resolve_targets():
-    lookup = roster_class_lookup(Roster("r", [RosterRow("张三", "13800000000", {"class": "12407"})]))
+def test_resolve_targets_with_mobile():
+    idx = roster_class_lookup(Roster("r", [RosterRow("张三", "13800000000", {"class": "12407"})]))
     accounts = ["ssfz12407"]
     parsed = {"张三+13800000000+入团志愿书.pdf": ("张三", "13800000000")}
 
-    targets = resolve_file_targets(list(parsed), parsed, accounts, lookup)
+    targets = resolve_file_targets(list(parsed), parsed, accounts, idx)
     assert targets[0].account == "ssfz12407" and targets[0].cls == "12407"
     assert targets[0].problem == ""
 
     # 名单里没有此人 → 提示缺班级
     parsed2 = {"王五+13700000000+入团志愿书.pdf": ("王五", "13700000000")}
-    t2 = resolve_file_targets(list(parsed2), parsed2, accounts, lookup)
+    t2 = resolve_file_targets(list(parsed2), parsed2, accounts, idx)
     assert "班级" in t2[0].problem
 
     # 命名解析失败 → 提示先修正命名
-    t3 = resolve_file_targets(["bad.pdf"], {}, accounts, lookup)
+    t3 = resolve_file_targets(["bad.pdf"], {}, accounts, idx)
     assert "命名" in t3[0].problem
+
+
+def test_resolve_targets_name_only_roster():
+    """名单只有姓名+班级（新模板）也能路由：黄粤祺案例。"""
+    idx = roster_class_lookup(Roster("r", [
+        RosterRow("李亭菲", "", {"class": "12404"}),
+        RosterRow("黄粤祺", "", {"class": "12407"}),
+    ]))
+    accounts = ["ssfz12407", "ssfz12404"]
+    parsed = {
+        "黄粤祺+18476245881+入团志愿书.pdf": ("黄粤祺", "18476245881"),
+        "李亭菲+18664897657+入团志愿书.pdf": ("李亭菲", "18664897657"),
+    }
+    targets = resolve_file_targets(list(parsed), parsed, accounts, idx)
+    assert [t.account for t in targets] == ["ssfz12407", "ssfz12404"]
+    assert all(not t.problem for t in targets)
+
+
+def test_resolve_targets_ambiguous_name_blocked():
+    """同名分布在多个班级且没有手机号可区分 → 拦截并说明。"""
+    idx = roster_class_lookup(Roster("r", [
+        RosterRow("张三", "", {"class": "12407"}),
+        RosterRow("张三", "", {"class": "12408"}),
+    ]))
+    accounts = ["ssfz12407", "ssfz12408"]
+    parsed = {"张三+13800000000+入团志愿书.pdf": ("张三", "13800000000")}
+    t = resolve_file_targets(list(parsed), parsed, accounts, idx)
+    assert not t[0].account and "多个班级" in t[0].problem
+
+
+def test_resolve_targets_same_name_same_class_ok():
+    idx = roster_class_lookup(Roster("r", [
+        RosterRow("张三", "", {"class": "12407"}),
+        RosterRow("张三", "13800000000", {"class": "12407"}),
+    ]))
+    accounts = ["ssfz12407"]
+    parsed = {"张三+13800000000+入团志愿书.pdf": ("张三", "13800000000")}
+    t = resolve_file_targets(list(parsed), parsed, accounts, idx)
+    assert t[0].account == "ssfz12407"
