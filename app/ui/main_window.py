@@ -97,8 +97,11 @@ class MainWindow(MSFluentWindow):
         self._setup_back_button()
 
         QTimer.singleShot(0, lambda: self.switchTo(self.home_page))
-        if store.load().get("translucent"):
-            self.set_translucent(True)
+        # 启动恢复窗口背景透明材质（兼容旧 translucent 布尔配置）
+        cfg = store.load()
+        material = cfg.get("translucentMaterial") or ("acrylic" if cfg.get("translucent") else "none")
+        if material != "none":
+            self.set_material(material)
 
         # 明暗模式切换（手动或跟随系统变化）：重绘窗口底色 + 重建带烘焙颜色的页面
         from qfluentwidgets import qconfig
@@ -255,15 +258,18 @@ class MainWindow(MSFluentWindow):
             painter.fillRect(self.rect(), page_bg_color())
         super().paintEvent(e)
 
-    def set_translucent(self, on: bool):
-        """毛玻璃混合背景开关（macOS）；配置持久化，系统配置里可切。"""
-        self._translucent = bool(on)
+    def set_material(self, material: str):
+        """窗口背景透明材质：none 关闭（纯色底），acrylic/sidebar/hud 为混合层。
+
+        配置持久化 translucentMaterial，系统配置里可切；兼容旧 translucent 布尔。"""
+        material = material if material in ("none", "acrylic", "sidebar", "hud") else "none"
+        self._translucent = material != "none"
         if sys.platform != "darwin":
             return
         from app.services.mac_effect import disable_acrylic, enable_acrylic
 
-        if on:
-            enable_acrylic(self)
+        if self._translucent:
+            enable_acrylic(self, material)
         else:
             disable_acrylic(self)
         self.update()
