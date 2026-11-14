@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from qfluentwidgets import (
-    BodyLabel,
     ComboBox,
     EditableComboBox,
     FluentIcon as FIF,
@@ -36,14 +35,14 @@ from qfluentwidgets import (
     LineEdit,
     PrimaryPushButton,
     PushButton,
-    StrongBodyLabel,
+    SearchLineEdit,
     SubtitleLabel,
     TableWidget,
     TreeWidget,
 )
 
 from app.ui import dialogs
-from app.ui.page import CallbackWorker, CollapsibleCard, FluentPage, SettingRow, fit_table_columns, note_label, sub_title
+from app.ui.page import CallbackWorker, CollapsibleCard, FluentPage, FullRow, SettingRow, fit_table_columns, note_label
 from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, describe_code, parse_class_code
 from app.domain.transfer import is_graduated
@@ -183,49 +182,74 @@ class SettingsPage(FluentPage):
 
         lay = self.vBoxLayout
 
-        # ── 卡片一：团支部账号（当前账号 / 测活 / 账号表 / 添加导入） ──
-        acc_card = CollapsibleCard("团支部账号", expanded=True)
-        a = acc_card.body_lay
-        a.addWidget(note_label("测活复用上次登录的会话探测，有效不登录；触发验证码/风控的账号 1 小时内不再尝试登录"))
-        row0 = QHBoxLayout()
-        row0.addWidget(BodyLabel("当前账号"))
+        # 搜索只按设置项名称过滤；命中的分组自动展开，不用提示文字占位
+        self.search_edit = SearchLineEdit()
+        self.search_edit.setPlaceholderText("搜索设置")
+        self.search_edit.setFixedWidth(240)
+        self.search_edit.textChanged.connect(self._filter_settings)
+        search_bar = QHBoxLayout()
+        search_bar.addStretch(1)
+        search_bar.addWidget(self.search_edit)
+        search_bar.addStretch(1)
+        lay.addLayout(search_bar)
+        lay.addSpacing(6)
+
+        self._cards: list[CollapsibleCard] = []
+        self._rows: list[tuple[CollapsibleCard, QWidget, str]] = []
+        self._search_state: list[bool] | None = None
+
+        def group(title: str, expanded: bool) -> CollapsibleCard:
+            card = CollapsibleCard(title, expanded=expanded)
+            self._cards.append(card)
+            lay.addWidget(card)
+            return card
+
+        def row(card: CollapsibleCard, widget, *keywords, last: bool = False):
+            widget.set_separator(not last)
+            self._rows.append((card, widget, " ".join(keywords).lower()))
+            card.body_lay.addWidget(widget)
+
+        def controls(*widgets, spacing: int = 8) -> QWidget:
+            box = QWidget()
+            h = QHBoxLayout(box)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(spacing)
+            for widget in widgets:
+                h.addWidget(widget)
+            return box
+
+        # ── 团支部账号 ──
+        acc_card = group("团支部账号", True)
         self.active_combo = ComboBox()
+        self.active_combo.setFixedWidth(190)
         self.active_combo.currentTextChanged.connect(self._on_active_changed)
         self.web_btn = PushButton(FIF.GLOBE, "打开网页端")
         self.web_btn.setToolTip("打开勾选账号的网页端（未勾选时打开当前账号）；\n账号按 Arc / Safari 分配，两浏览器各保持一个账号登录")
         self.web_btn.clicked.connect(self._open_web)
+        row(acc_card, SettingRow("当前账号", icon=FIF.PEOPLE,
+                                 control=controls(self.active_combo, self.web_btn), control_width=340),
+            "当前账号 网页端 切换 使用 activeUser")
+
         self.health_btn = PushButton(FIF.SYNC, "全部测活")
         self.health_btn.clicked.connect(self.start_health_check)
         self.refresh_all_btn = PrimaryPushButton(FIF.SYNC, "刷新所有数据")
         self.refresh_all_btn.setToolTip("成员缓存 → 站内信 → 组织状况，全部在工作线程串行刷新")
         self.refresh_all_btn.clicked.connect(self._refresh_all_clicked)
-        row0.addWidget(self.active_combo, 1)
-        row0.addWidget(self.web_btn)
-        row0.addWidget(self.health_btn)
-        row0.addWidget(self.refresh_all_btn)
-        a.addLayout(row0)
+        row(acc_card, SettingRow("测活与刷新", icon=FIF.SYNC,
+                                 control=controls(self.health_btn, self.refresh_all_btn), control_width=340),
+            "测活 刷新 数据同步 成员缓存 站内信 组织状况 健康")
 
-        row_t = QHBoxLayout()
         self.sel_all_btn = PushButton("全选")
-        self.sel_all_btn.setToolTip("全选 / 取消全选（仅可见行）")
         self.sel_all_btn.clicked.connect(self._toggle_select_all)
         self.del_checked_btn = PushButton(FIF.DELETE, "删除勾选")
-        self.del_checked_btn.setToolTip("删除勾选账号")
         self.del_checked_btn.clicked.connect(self._delete_checked)
         self.filter_btn = PushButton(FIF.FILTER, "筛选")
         self.filter_btn.setToolTip("按团支部筛选（树状：学部 → 年级 → 班级）")
         self.filter_btn.clicked.connect(self._show_filter_menu)
         self.filter_note = note_label("")
-        row_t.addWidget(self.sel_all_btn)
-        row_t.addWidget(self.del_checked_btn)
-        row_t.addWidget(self.filter_btn)
-        row_t.addSpacing(8)
-        row_t.addWidget(self.filter_note)
-        row_t.addStretch(1)
-        a.addLayout(row_t)
+        self.filter_note.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         # 账号表：勾选框 + 账号 + 密码 + 备注 + 届别 + 状态 + 健康状态 + 最近检查
-        # 账号/密码/备注/届别可编辑，状态按届别自动算（毕业应转出），其余只读
         self.table = TableWidget()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(8)
@@ -233,35 +257,43 @@ class SettingsPage(FluentPage):
         self.table.setHorizontalHeaderLabels(["", "账号", "密码", "备注", "届别", "状态", "健康状态", "最近检查"])
         self.table.setColumnWidth(0, 46)
         self.table.setMinimumHeight(180)
-        a.addWidget(self.table)
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, header.ResizeMode.Fixed)  # 勾选框列固定宽
-        header.setSectionResizeMode(7, header.ResizeMode.Stretch)  # 其余列由 fit_table_columns 手动计算
+        header.setSectionResizeMode(0, header.ResizeMode.Fixed)
+        header.setSectionResizeMode(7, header.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._on_item_changed)
-        # 编辑器关闭时补刷被推迟的表格刷新（编辑期间测活结果回来不能立刻重建）
         self.table.itemDelegate().closeEditor.connect(self._on_editor_closed)
+        table_block = FullRow()
+        tools = QHBoxLayout()
+        tools.addWidget(self.sel_all_btn)
+        tools.addWidget(self.del_checked_btn)
+        tools.addWidget(self.filter_btn)
+        tools.addStretch(1)
+        tools.addWidget(self.filter_note)
+        table_block.lay.addLayout(tools)
+        table_block.lay.addWidget(self.table)
+        row(acc_card, table_block, "账号列表 表格 全选 删除 筛选 密码 备注 届别 健康状态")
 
-        a.addWidget(sub_title("添加 / 导入账号"))
-        a.addWidget(note_label("同账号同密码自动去重；同名账号密码不同时会询问如何处理"))
-        row1 = QHBoxLayout()
         self.new_user = LineEdit()
         self.new_user.setPlaceholderText("账号")
+        self.new_user.setFixedWidth(108)
         self.new_pwd = LineEdit()
         self.new_pwd.setPlaceholderText("密码")
+        self.new_pwd.setFixedWidth(108)
         self.new_remark = LineEdit()
-        self.new_remark.setPlaceholderText("备注（如 高一3班团支部）")
+        self.new_remark.setPlaceholderText("备注")
+        self.new_remark.setFixedWidth(108)
         self.new_year = LineEdit()
-        self.new_year.setPlaceholderText("届别（毕业年份，可选）")
+        self.new_year.setPlaceholderText("届别")
+        self.new_year.setFixedWidth(88)
         self.add_btn = PrimaryPushButton(FIF.ADD, "添加")
         self.add_btn.clicked.connect(self._add_manual)
-        row1.addWidget(self.new_user, 1)
-        row1.addWidget(self.new_pwd, 1)
-        row1.addWidget(self.new_remark, 1)
-        row1.addWidget(self.new_year, 1)
-        row1.addWidget(self.add_btn)
-        a.addLayout(row1)
-        row2 = QHBoxLayout()
+        row(acc_card, SettingRow("添加账号", icon=FIF.ADD,
+                                 control=controls(self.new_user, self.new_pwd, self.new_remark,
+                                                  self.new_year, self.add_btn, spacing=6),
+                                 control_width=540),
+            "添加账号 密码 备注 届别 去重")
+
         self.import_btn = PushButton(FIF.DOCUMENT, "批量导入")
         self.import_btn.clicked.connect(self._import_accounts)
         self.tpl_btn = PushButton(FIF.DOWNLOAD, "下载账号模板")
@@ -270,121 +302,102 @@ class SettingsPage(FluentPage):
         self.export_cfg_btn = PushButton(FIF.SHARE, "导出配置 JSON")
         self.export_cfg_btn.setToolTip("导出系统配置为 JSON 文件（完整备份，含账号密码）")
         self.export_cfg_btn.clicked.connect(self._export_config_json)
-        row2.addWidget(self.import_btn)
-        row2.addWidget(self.tpl_btn)
-        row2.addWidget(self.export_cfg_btn)
-        row2.addStretch(1)
-        a.addLayout(row2)
-        lay.addWidget(acc_card)
+        row(acc_card, SettingRow("账号文件", icon=FIF.DOCUMENT,
+                                 control=controls(self.import_btn, self.tpl_btn, self.export_cfg_btn),
+                                 control_width=420),
+            "批量导入 模板 导出 配置 JSON 备份", last=True)
 
-        # ── 卡片二：名单导入（预设团员名单 + 团支书名单） ──
-        ros_card = CollapsibleCard("名单导入", expanded=True)
-        r = ros_card.body_lay
-        r.addWidget(sub_title("预设团员名单"))
-        r.addWidget(note_label("xlsx 列：姓名 / 手机号码 / 班级（团支部编号，如 12407）；学期可下拉选择、输入新名新建或直接导入，导入后按班级自动分流"))
-        row3 = QHBoxLayout()
-        row3.addWidget(BodyLabel("学期"))
+        # ── 名单导入 ──
+        ros_card = group("名单导入", True)
         self.semester_combo = EditableComboBox()
         self.semester_combo.addItems([guess_semester()])
         self.semester_combo.setCurrentText(guess_semester())
-        self.semester_combo.setPlaceholderText("选择或输入学期（如 2027春）")
+        self.semester_combo.setPlaceholderText("选择或输入学期")
+        self.semester_combo.setFixedWidth(150)
         self.semester_combo.currentTextChanged.connect(self._on_semester_changed)
         self.new_sem_btn = PushButton(FIF.ADD, "新建学期")
         self.new_sem_btn.setToolTip("按学期框里的名字新建一个空学期，之后再导入名单")
         self.new_sem_btn.clicked.connect(self._create_semester)
         self.roster_btn = PrimaryPushButton("导入到该学期")
         self.roster_btn.clicked.connect(self._import_roster)
-        row3.addWidget(self.semester_combo)
-        row3.addWidget(self.new_sem_btn)
-        row3.addWidget(self.roster_btn)
-        r.addLayout(row3)
-        row_tpl = QHBoxLayout()
+        row(ros_card, SettingRow("团员名单", icon=FIF.DOCUMENT,
+                                 control=controls(self.semester_combo, self.new_sem_btn, self.roster_btn),
+                                 control_width=430),
+            "团员名单 学期 导入 分流 班级 xlsx")
+
         self.template_btn = PushButton(FIF.DOWNLOAD, "下载名单模板")
         self.template_btn.clicked.connect(self._download_template)
-        row_tpl.addWidget(self.template_btn)
-        row_tpl.addStretch(1)
-        r.addLayout(row_tpl)
-        # 已导入名单列表：一行一个学期，便于管理多个表格；横向铺满卡片
+        self.roster_del_btn = PushButton(FIF.DELETE, "删除所选学期名单")
+        self.roster_del_btn.setToolTip("从配置中移除该学期名单（不删除磁盘上的 xlsx 文件）")
+        self.roster_del_btn.clicked.connect(self._delete_selected_roster)
         self.roster_table = TableWidget()
         self.roster_table.setColumnCount(3)
         self.roster_table.setHorizontalHeaderLabels(["学期", "人数", "名单文件"])
         self.roster_table.setEditTriggers(self.roster_table.EditTrigger.NoEditTriggers)
         header = self.roster_table.horizontalHeader()
-        header.setSectionResizeMode(2, header.ResizeMode.Stretch)  # 文件列吃满剩余宽度
-        self.roster_table.setColumnWidth(2, 320)  # stretch 前给个合理初始宽
-        r.addWidget(self.roster_table)
-        row_rdel = QHBoxLayout()
-        self.roster_del_btn = PushButton(FIF.DELETE, "删除所选学期名单")
-        self.roster_del_btn.setToolTip("从配置中移除该学期名单（不删除磁盘上的 xlsx 文件）")
-        self.roster_del_btn.clicked.connect(self._delete_selected_roster)
-        row_rdel.addWidget(self.roster_del_btn)
-        row_rdel.addStretch(1)
-        r.addLayout(row_rdel)
-        r.addWidget(sub_title("团支书名单"))
-        r.addWidget(note_label("xlsx 列：支部（编号或名称） / 团支书（姓名） / 手机号码（可选）；展示在「组织管理」的支部信息里；重新导入会整体替换"))
-        row_sec = QHBoxLayout()
+        header.setSectionResizeMode(2, header.ResizeMode.Stretch)
+        self.roster_table.setColumnWidth(2, 320)
+        roster_block = FullRow()
+        roster_block.lay.addWidget(self.roster_table)
+        roster_tools = QHBoxLayout()
+        roster_tools.addWidget(self.template_btn)
+        roster_tools.addWidget(self.roster_del_btn)
+        roster_tools.addStretch(1)
+        roster_block.lay.addLayout(roster_tools)
+        row(ros_card, roster_block, "名单列表 学期 人数 文件 模板 删除")
+
         self.sec_btn = PushButton(FIF.DOCUMENT, "导入团支书名单")
         self.sec_btn.clicked.connect(self._import_secretaries)
         self.sec_del_btn = PushButton(FIF.DELETE, "删除所选团支书")
-        self.sec_del_btn.setToolTip("从配置中移除所选支部的团支书记录")
         self.sec_del_btn.clicked.connect(self._delete_selected_secretaries)
-        row_sec.addWidget(self.sec_btn)
-        row_sec.addSpacing(8)
-        row_sec.addWidget(self.sec_del_btn)
-        row_sec.addSpacing(8)
         self.sec_status = note_label("未导入")
-        row_sec.addWidget(self.sec_status)
-        row_sec.addStretch(1)
-        r.addLayout(row_sec)
-        # 团支书名单表：一行一个支部，与成员名单列表同款
+        self.sec_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row(ros_card, SettingRow("团支书名单", icon=FIF.PEOPLE,
+                                 control=controls(self.sec_btn, self.sec_del_btn, self.sec_status),
+                                 control_width=430),
+            "团支书 支部 名单 导入 替换")
         self.sec_table = TableWidget()
         self.sec_table.setColumnCount(3)
         self.sec_table.setHorizontalHeaderLabels(["支部", "团支书", "手机号码"])
         self.sec_table.setEditTriggers(self.sec_table.EditTrigger.NoEditTriggers)
-        r.addWidget(self.sec_table)
-        lay.addWidget(ros_card)
+        sec_block = FullRow()
+        sec_block.lay.addWidget(self.sec_table)
+        row(ros_card, sec_block, "团支书列表 表格 支部 姓名 手机号码", last=True)
 
-        # ── 卡片三：检查与编号规则（默认收起） ──
-        rule_card = CollapsibleCard("检查与编号规则", expanded=False)
-        r2 = rule_card.body_lay
-        r2.addWidget(sub_title("团支部编号规则"))
+        # ── 检查与编号规则 ──
+        rule_card = group("检查与编号规则", False)
         self.rule_prefix_edit = LineEdit()
         self.rule_prefix_edit.setPlaceholderText("如 1 或 2")
         self.rule_prefix_edit.setFixedWidth(160)
-        r2.addWidget(SettingRow(
-            "学部前缀", icon=FIF.EDUCATION,
-            desc="编号 = 学部前缀（1 位）+ 入学年份后两位（2 位）+ 班号（2 位）；年级按当前学年自动推算"
-                 "（如 24 级今年是高三/初三）。用于导入账号时预填备注和账号筛选",
-            control=self.rule_prefix_edit))
+        self.rule_prefix_edit.editingFinished.connect(self._on_rule_changed)
+        row(rule_card, SettingRow("学部前缀", icon=FIF.EDUCATION, control=self.rule_prefix_edit),
+            "学部前缀 编号规则 年级 班级")
         self.rule_noprefix_edit = LineEdit()
         self.rule_noprefix_edit.setPlaceholderText("初中部")
         self.rule_noprefix_edit.setFixedWidth(160)
-        r2.addWidget(SettingRow(
-            "无前缀学部", "无前缀的 4 位编号归「无前缀学部」", self.rule_noprefix_edit, icon=FIF.TAG))
-        self.rule_preview = note_label("")
-        r2.addWidget(self.rule_preview)
-        self.rule_prefix_edit.editingFinished.connect(self._on_rule_changed)
         self.rule_noprefix_edit.editingFinished.connect(self._on_rule_changed)
-        r2.addWidget(sub_title("文档检查（入团志愿书 PDF）"))
+        row(rule_card, SettingRow("无前缀学部", icon=FIF.TAG, control=self.rule_noprefix_edit),
+            "无前缀学部 四位编号 初中部")
         self.expected_pages_edit = LineEdit()
         self.expected_pages_edit.setPlaceholderText("如 4")
         self.expected_pages_edit.setFixedWidth(160)
         self.expected_pages_edit.editingFinished.connect(self._save_config)
-        r2.addWidget(SettingRow(
-            "预期页数", icon=FIF.DOCUMENT,
-            desc="「文档检查」页除命名外，还核对 PDF 总页数是否等于预期页数；留空则不核对页数",
-            control=self.expected_pages_edit))
-        lay.addWidget(rule_card)
+        row(rule_card, SettingRow("预期页数", icon=FIF.DOCUMENT, control=self.expected_pages_edit),
+            "预期页数 文档检查 PDF 页数核对")
+        self.rule_preview = note_label("")
+        preview = FullRow()
+        preview.lay.addWidget(self.rule_preview)
+        row(rule_card, preview, "编号预览 解析 示例", last=True)
 
-        # ── 卡片四：外观（明暗模式 / 毛玻璃 / 首页头图，默认收起） ──
-        look_card = CollapsibleCard("外观", expanded=False)
-        r3 = look_card.body_lay
+        # ── 外观 ──
+        look_card = group("外观", False)
         self.theme_combo = ComboBox()
         for label in ("跟随系统", "浅色模式", "暗色模式"):
             self.theme_combo.addItem(label)
         self.theme_combo.setCurrentIndex(THEME_INDEX.get(store.load().get("themeMode", "auto"), 0))
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        r3.addWidget(SettingRow("明暗模式", "更改应用的外观，选完即时生效", self.theme_combo, icon=FIF.BRIGHTNESS))
+        row(look_card, SettingRow("明暗模式", icon=FIF.BRIGHTNESS, control=self.theme_combo),
+            "明暗模式 主题 浅色 暗色 跟随系统 外观")
         self.material_combo = ComboBox()
         for label in ("关闭", "Acrylic 毛玻璃", "Sidebar 浅毛玻璃", "HudWindow 深色毛玻璃"):
             self.material_combo.addItem(label)
@@ -392,57 +405,44 @@ class SettingsPage(FluentPage):
         _material = _cfg.get("translucentMaterial") or ("acrylic" if _cfg.get("translucent") else "none")
         self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "sidebar": 2, "hud": 3}.get(_material, 0))
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
-        r3.addWidget(SettingRow(
-            "窗口背景透明材质", "为窗口背景加系统混合层毛玻璃效果；选「关闭」恢复纯色底", self.material_combo, icon=FIF.TILES))
-        header_btns = QWidget()
-        hb = QHBoxLayout(header_btns)
-        hb.setContentsMargins(0, 0, 0, 0)
-        hb.setSpacing(8)
+        row(look_card, SettingRow("窗口背景", icon=FIF.TILES, control=self.material_combo),
+            "窗口背景 透明 材质 毛玻璃 acrylic sidebar hud")
         self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
         self.header_pick_btn.clicked.connect(self._pick_header_image)
         self.header_clear_btn = PushButton(FIF.DELETE, "清除头图")
         self.header_clear_btn.clicked.connect(self._clear_header_image)
-        hb.addWidget(self.header_pick_btn)
-        hb.addWidget(self.header_clear_btn)
-        r3.addWidget(SettingRow(
-            "首页头图", icon=FIF.PHOTO,
-            desc="图片会铺满工具首页顶部并自然过渡到背景；清除后显示占位渐变", control=header_btns))
-        lay.addWidget(look_card)
+        row(look_card, SettingRow("首页头图", icon=FIF.PHOTO,
+                                  control=controls(self.header_pick_btn, self.header_clear_btn),
+                                  control_width=300),
+            "首页头图 图片 背景 清除", last=True)
 
-        # ── 卡片五：工作区与通知（默认收起） ──
-        ws_card = CollapsibleCard("工作区与通知", expanded=False)
-        r4 = ws_card.body_lay
-        ws_ctrl = QWidget()
-        wb = QHBoxLayout(ws_ctrl)
-        wb.setContentsMargins(0, 0, 0, 0)
-        wb.setSpacing(8)
+        # ── 工作区与通知 ──
+        ws_card = group("工作区与通知", False)
         self.ws_edit = LineEdit()
         self.ws_edit.setPlaceholderText("选择工作区目录")
         self.ws_edit.setFixedWidth(230)
         self.ws_btn = PushButton(FIF.FOLDER, "选择目录")
         self.ws_btn.clicked.connect(self._pick_workspace)
-        wb.addWidget(self.ws_edit)
-        wb.addWidget(self.ws_btn)
-        r4.addWidget(SettingRow(
-            "工作区", icon=FIF.FOLDER,
-            desc="目录里出现新 PDF 时自动：命名检查并改名 → 超过 9.5MB 自动压缩 → 加入批量上传列表",
-            control=ws_ctrl))
         self.ws_status = note_label("未监听")
-        r4.addWidget(self.ws_status)
-        notify_ctrl = QWidget()
-        nb = QHBoxLayout(notify_ctrl)
-        nb.setContentsMargins(0, 0, 0, 0)
-        nb.setSpacing(8)
+        self.ws_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        ws_ctrl = QWidget()
+        wv = QVBoxLayout(ws_ctrl)
+        wv.setContentsMargins(0, 0, 0, 0)
+        wv.setSpacing(4)
+        wv.addWidget(controls(self.ws_edit, self.ws_btn))
+        wv.addWidget(self.ws_status, 0, Qt.AlignmentFlag.AlignRight)
+        row(ws_card, SettingRow("工作区", icon=FIF.FOLDER, control=ws_ctrl, control_width=340),
+            "工作区 目录 监听 PDF 自动命名 压缩 上传")
         self.notify_time_edit = LineEdit()
         self.notify_time_edit.setFixedWidth(90)
         self.notify_time_edit.setPlaceholderText("08:00")
         self.notify_time_edit.setClearButtonEnabled(False)
-        nb.addWidget(self.notify_time_edit)
-        r4.addWidget(SettingRow("每日通知", "每天这个时间通过系统通知推送团员情况", notify_ctrl, icon=FIF.DATE_TIME))
+        row(ws_card, SettingRow("每日通知", icon=FIF.DATE_TIME, control=self.notify_time_edit),
+            "每日通知 时间 系统通知 推送")
         self.autostart_btn = PushButton()
         self.autostart_btn.clicked.connect(self._toggle_autostart)
-        r4.addWidget(SettingRow("开机自启动", "开启后开机即在后台运行，每天自动检查团员情况", self.autostart_btn, icon=FIF.POWER_BUTTON))
-        lay.addWidget(ws_card)
+        row(ws_card, SettingRow("开机自启动", icon=FIF.POWER_BUTTON, control=self.autostart_btn),
+            "开机自启动 后台 托盘 静默", last=True)
 
         self._watcher = None
         self._scan_timer = QTimer(self)
@@ -460,6 +460,31 @@ class SettingsPage(FluentPage):
         if self.accounts:
             self._timer.start()
             self.start_health_check()
+
+    def _filter_settings(self, text: str):
+        """按设置项名称过滤：命中的分组自动展开，清空后恢复搜索前的折叠状态。"""
+        kw = text.strip().lower()
+        if kw and self._search_state is None:
+            self._search_state = [card._expanded for card in self._cards]
+        visible: dict[int, list] = {}
+        for card, widget, keys in self._rows:
+            hit = not kw or kw in keys
+            widget.setVisible(hit)
+            if hit:
+                visible.setdefault(id(card), []).append(widget)
+        for card in self._cards:
+            rows = visible.get(id(card), [])
+            for i, widget in enumerate(rows):
+                widget.set_separator(i < len(rows) - 1)
+            if kw:
+                card.setVisible(bool(rows))
+                card.set_expanded(bool(rows))
+            else:
+                card.setVisible(True)
+        if not kw and self._search_state is not None:
+            for card, expanded in zip(self._cards, self._search_state):
+                card.set_expanded(expanded)
+            self._search_state = None
 
     # ---------- 配置持久化 ----------
 
@@ -1085,7 +1110,8 @@ class SettingsPage(FluentPage):
             self.table.setItem(i, 7, check_item)
         self.table.blockSignals(False)
         self._apply_row_visibility()  # 应用当前团支部筛选
-        fit_table_columns(self.table, stretch_last=True, skip_cols={0})
+        # 健康状态文案很长，列宽上限压到 180，否则「最近检查」列会被挤成 30px
+        fit_table_columns(self.table, stretch_last=True, skip_cols={0}, max_col_width=180)
         # 当前使用下拉
         self.active_combo.blockSignals(True)
         self.active_combo.clear()
