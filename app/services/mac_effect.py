@@ -1,18 +1,32 @@
 """macOS 窗口毛玻璃（Mica 式混合）：NSVisualEffectView 置于窗口内容之下，
 blending mode = behind-window。开启时窗口背景透明露出混合层，关闭时恢复纯色。
+
+材质对应 Ghost Downloader 等同类应用的「窗口背景透明材质」：
+- acrylic → Popover（Acrylic 式，与 qframelesswindow AcrylicWindow 同款）
+- sidebar → Sidebar（更透，接近侧栏质感）
+- hud     → HudWindow（更暗更沉，暗色模式下更融合）
 """
 
 from __future__ import annotations
 
 import sys
 
-MATERIAL = "NSVisualEffectMaterialPopover"  # 与 qframelesswindow AcrylicWindow 同款
+MATERIALS = {
+    "acrylic": "NSVisualEffectMaterialPopover",
+    "sidebar": "NSVisualEffectMaterialSidebar",
+    "hud": "NSVisualEffectMaterialHudWindow",
+}
 
 
-def enable_acrylic(window) -> None:
-    """在窗口下方插入混合层；已开启时重复调用无副作用。"""
-    if sys.platform != "darwin" or getattr(window, "_acrylic_view", None) is not None:
+def enable_acrylic(window, material: str = "acrylic") -> None:
+    """在窗口下方插入混合层；已开启同材质时无副作用，换材质时重建。"""
+    if sys.platform != "darwin":
         return
+    key = material if material in MATERIALS else "acrylic"
+    if getattr(window, "_acrylic_view", None) is not None:
+        if getattr(window, "_acrylic_material", None) == key:
+            return
+        disable_acrylic(window)
     import Cocoa
     from qframelesswindow.mac.window_effect import QMacCocoaViewContainer
 
@@ -22,7 +36,7 @@ def enable_acrylic(window) -> None:
         Cocoa.NSMakeRect(0, 0, window.width(), window.height()))
     view.setAutoresizingMask_(Cocoa.NSViewWidthSizable | Cocoa.NSViewHeightSizable)
     view.setState_(Cocoa.NSVisualEffectStateActive)
-    view.setMaterial_(Cocoa.NSVisualEffectMaterialPopover)
+    view.setMaterial_(getattr(Cocoa, MATERIALS[key]))
     view.setBlendingMode_(Cocoa.NSVisualEffectBlendingModeBehindWindow)
 
     ns_window = getNSWindow(window.winId())
@@ -32,6 +46,7 @@ def enable_acrylic(window) -> None:
 
     window._acrylic_view = view
     window._acrylic_container = container
+    window._acrylic_material = key
 
 
 def disable_acrylic(window) -> None:
@@ -41,3 +56,4 @@ def disable_acrylic(window) -> None:
     view.removeFromSuperview()
     window._acrylic_view = None
     window._acrylic_container = None
+    window._acrylic_material = None

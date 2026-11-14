@@ -30,7 +30,6 @@ from qfluentwidgets import (
     PushButton,
     StrongBodyLabel,
     SubtitleLabel,
-    SwitchButton,
     TableWidget,
     TreeWidget,
 )
@@ -369,10 +368,18 @@ class SettingsPage(FluentPage):
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         theme_row.addWidget(self.theme_combo)
         r3.addLayout(theme_row)
-        self.translucent_switch = SwitchButton("毛玻璃混合背景")
-        self.translucent_switch.setChecked(bool(store.load().get("translucent")))
-        self.translucent_switch.checkedChanged.connect(self._on_translucent_changed)
-        r3.addWidget(self.translucent_switch)
+        material_row = QHBoxLayout()
+        material_row.addWidget(BodyLabel("窗口背景透明材质"))
+        material_row.addStretch(1)
+        self.material_combo = ComboBox()
+        for label in ("关闭", "Acrylic 毛玻璃", "Sidebar 浅毛玻璃", "HudWindow 深色毛玻璃"):
+            self.material_combo.addItem(label)
+        _cfg = store.load()
+        _material = _cfg.get("translucentMaterial") or ("acrylic" if _cfg.get("translucent") else "none")
+        self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "sidebar": 2, "hud": 3}.get(_material, 0))
+        self.material_combo.currentIndexChanged.connect(self._on_material_changed)
+        material_row.addWidget(self.material_combo)
+        r3.addLayout(material_row)
         r3.addWidget(sub_title("首页头图"))
         r3.addWidget(note_label("图片会铺满工具首页顶部并自然过渡到背景；清除后显示占位渐变"))
         row7 = QHBoxLayout()
@@ -1209,10 +1216,11 @@ class SettingsPage(FluentPage):
         InfoBar.success("明暗模式已切换", ("跟随系统" if index == 0 else "已切换，界面即时生效"),
                         duration=2500, parent=self)
 
-    def _on_translucent_changed(self, checked: bool):
-        store.update(lambda cfg: cfg.__setitem__("translucent", bool(checked)))
+    def _on_material_changed(self, index: int):
+        material = ("none", "acrylic", "sidebar", "hud")[index]
+        store.update(lambda cfg: cfg.__setitem__("translucentMaterial", material))
         if self.window_ref is not None:
-            self.window_ref.set_translucent(checked)
+            self.window_ref.set_material(material)
 
     # ---------- 团支书名单 ----------
 
