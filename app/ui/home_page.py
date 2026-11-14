@@ -14,14 +14,10 @@ from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import (
-    CardWidget,
-    IconWidget,
     PrimaryPushButton,
     PushButton,
-    StrongBodyLabel,
     SubtitleLabel,
     TitleLabel,
-    TransparentToolButton,
     isDarkTheme,
 )
 
@@ -91,6 +87,9 @@ class HomePage(FluentPage):
         # 头图铺满上方页面：页面外边距归零，正文内容用自己的边距
         lay.setContentsMargins(0, 0, 0, 28)
         lay.setSpacing(0)
+        # 首页内容固定刚好一屏：不出现滚动条
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         # 头图横幅（通栏，贴顶，无圆角）
         self.banner = Banner()
@@ -99,16 +98,16 @@ class HomePage(FluentPage):
 
         body = QWidget()
         body_lay = QVBoxLayout(body)
-        body_lay.setContentsMargins(36, 24, 36, 0)
+        body_lay.setContentsMargins(36, 0, 36, 0)
         body_lay.setSpacing(8)
 
-        # 欢迎大字块：紧跟头图下方，占上半区；两行文字紧贴
-        body_lay.addSpacing(16)
+        # 欢迎大字块 + 按钮在头图以下的剩余空间内垂直居中
+        body_lay.addStretch(1)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
         body_lay.addWidget(self.hello_label)
         body_lay.addWidget(self.title_label)
-        body_lay.addStretch(1)
+        body_lay.addSpacing(18)
 
         # 两个入口按钮：居中
         row = QHBoxLayout()
@@ -124,46 +123,15 @@ class HomePage(FluentPage):
         row.addWidget(org_btn)
         row.addStretch(1)
         body_lay.addLayout(row)
-        body_lay.addSpacing(14)
-
-        # 文档类工具卡片：点击进入对应页面（返回按钮可回到首页）
-        tools = QHBoxLayout()
-        tools.setSpacing(12)
-        for icon, title, desc, attr in (
-            (FIF.EDIT, "文档检查", "命名规范与 PDF 页数核对", "naming_page"),
-            (FIF.ZOOM, "批量压缩", "超限 PDF 自动分批压缩", "compress_page"),
-        ):
-            tools.addWidget(self._tool_card(icon, title, desc, attr))
-        body_lay.addLayout(tools)
-        body_lay.addSpacing(10)
+        body_lay.addStretch(1)
 
         body_lay.addWidget(note_label("上传后需在智慧团建网页端点击「审核」完成认证"))
-        lay.addWidget(body)
+        lay.addWidget(body, 1)
 
         self._apply_font()
         self._load_header()
 
     # ---------- 头图持久化（设置入口在「系统配置」） ----------
-
-    def _tool_card(self, icon, title: str, desc: str, page_attr: str) -> CardWidget:
-        card = CardWidget()
-        card.setFixedHeight(68)
-        card.setCursor(Qt.CursorShape.PointingHandCursor)
-        h = QHBoxLayout(card)
-        h.setContentsMargins(18, 12, 12, 12)
-        h.setSpacing(12)
-        icon_lbl = IconWidget(icon, card)
-        h.addWidget(icon_lbl)
-        texts = QVBoxLayout()
-        texts.setSpacing(0)
-        t = StrongBodyLabel(title)
-        t.setStyleSheet("font-size: 15px; font-weight: 600;")
-        texts.addWidget(t)
-        texts.addWidget(note_label(desc))
-        h.addLayout(texts, 1)
-        h.addWidget(TransparentToolButton(FIF.CHEVRON_RIGHT, card))
-        card.clicked.connect(lambda *_: self.window_ref.switchTo(getattr(self.window_ref, page_attr)))
-        return card
 
     def _load_header(self):
         from app.services import store
