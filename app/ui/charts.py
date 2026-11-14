@@ -1,10 +1,19 @@
-"""轻量 QPainter 图表组件（零第三方依赖，深浅色自适应）。"""
+"""轻量 QPainter 图表组件（深浅色自适应）。"""
 
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
+
+from qfluentwidgets import isDarkTheme, qconfig
+
+
+def _bind_theme(widget: QWidget) -> None:
+    """跟随 fluent 明暗主题。不能用 palette().window() 判断——页面滚动容器
+    背景透明时调色板 window 色是透明黑（lightness=0），浅色模式会被误判成
+    暗色而画出白字；主题切换时刷新重绘。"""
+    qconfig.themeChanged.connect(widget.update)
 
 
 class BarRowWidget(QWidget):
@@ -16,6 +25,7 @@ class BarRowWidget(QWidget):
         self._color = QColor(color)
         self._value = 0
         self._maximum = 1
+        _bind_theme(self)
         self.setFixedHeight(34)
         self.setMinimumWidth(360)
 
@@ -29,9 +39,9 @@ class BarRowWidget(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        dark = self.palette().window().color().lightness() < 128
-        fg = QColor("#e5e7eb") if dark else QColor("#1f2937")
-        dim = QColor("#9ca3af") if dark else QColor("#6b7280")
+        dark = isDarkTheme()
+        fg = QColor("#e5e7eb") if dark else QColor("#111827")
+        dim = QColor("#9ca3af") if dark else QColor("#4b5563")
         track = QColor(255, 255, 255, 28) if dark else QColor(0, 0, 0, 18)
 
         label_w, value_w = 76, 40
@@ -67,6 +77,7 @@ class ProgressDonut(QWidget):
         self._ratio = 0.0
         self._text = "—"
         self._sub = ""
+        _bind_theme(self)
         self.setFixedSize(132, 132)
 
     def set_value(self, uploaded: int, total: int):
@@ -78,8 +89,8 @@ class ProgressDonut(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        dark = self.palette().window().color().lightness() < 128
-        fg = QColor("#e5e7eb") if dark else QColor("#1f2937")
+        dark = isDarkTheme()
+        fg = QColor("#e5e7eb") if dark else QColor("#111827")
         track = QColor(255, 255, 255, 30) if dark else QColor(0, 0, 0, 15)
         accent = QColor("#0078d4")
 
@@ -110,7 +121,7 @@ class ProgressDonut(QWidget):
         p.drawText(QRect(0, top, self.width(), fm_num.height()),
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, self._text)
         p.setFont(sub_font)
-        dim = QColor("#9ca3af") if dark else QColor("#6b7280")
+        dim = QColor("#9ca3af") if dark else QColor("#4b5563")
         p.setPen(QPen(dim, 1))
         p.drawText(QRect(0, top + fm_num.height() + gap, self.width(), fm_sub.height()),
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, self._sub)
