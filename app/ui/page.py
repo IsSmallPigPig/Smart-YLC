@@ -7,16 +7,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QTransform
 from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
-from qfluentwidgets import (
-    CaptionLabel,
-    FluentIcon as FIF,
-    ScrollArea,
-    StrongBodyLabel,
-    TransparentToolButton,
-)
+from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, ScrollArea, StrongBodyLabel, TransparentToolButton, qconfig
 
 PAGE_MARGINS = (36, 28, 36, 28)
 
@@ -53,8 +47,8 @@ def sub_title(text: str) -> StrongBodyLabel:
     return theme_font(StrongBodyLabel(text), 13, int(QFont.Weight.DemiBold))
 
 
-class CollapsibleCard(QWidget):
-    """折叠分组：与页面背景融为一体（不画卡片底色），标题行右侧三角箭头切换内容区。
+class CollapsibleCard(CardWidget):
+    """折叠卡片：标题行 + 细线条 chevron 箭头（展开朝上 / 收起朝下，无按钮底色）。
 
     用法：content = CollapsibleCard("标题", expanded=True)；往
     content.body_lay 里加内容即可。"""
@@ -63,31 +57,37 @@ class CollapsibleCard(QWidget):
         super().__init__(parent)
         self._expanded = bool(expanded)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 6, 0, 6)
+        outer.setContentsMargins(20, 14, 20, 14)
         outer.setSpacing(8)
         header = QHBoxLayout()
-        header.addSpacing(12)
         header.addWidget(section_title(title))
         header.addStretch(1)
-        self.toggle_btn = TransparentToolButton(FIF.CARE_DOWN_SOLID)
+        self.toggle_btn = TransparentToolButton()
         self.toggle_btn.setToolTip("展开 / 收起")
         self.toggle_btn.clicked.connect(self.toggle)
         header.addWidget(self.toggle_btn)
         outer.addLayout(header)
         self.body = QWidget(self)
         self.body_lay = QVBoxLayout(self.body)
-        self.body_lay.setContentsMargins(12, 0, 12, 0)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
         self.body_lay.setSpacing(6)
         outer.addWidget(self.body)
         self._sync()
+        # 主题切换时箭头颜色要按新主题重烘焙（旋转图标是像素级副本）
+        qconfig.themeChanged.connect(self._sync)
 
     def toggle(self):
         self._expanded = not self._expanded
         self._sync()
 
-    def _sync(self):
+    def _sync(self, *_):
         self.body.setVisible(self._expanded)
-        self.toggle_btn.setIcon(FIF.CARE_UP_SOLID if self._expanded else FIF.CARE_DOWN_SOLID)
+        icon = FIF.CHEVRON_DOWN_MED.icon()
+        if self._expanded:
+            # fluent 没有 chevron-up 图标：向下 chevron 旋转 180°
+            img = icon.pixmap(16, 16).toImage().transformed(QTransform().rotate(180))
+            icon = QIcon(QPixmap.fromImage(img))
+        self.toggle_btn.setIcon(icon)
 
 
 class FluentPage(ScrollArea):
