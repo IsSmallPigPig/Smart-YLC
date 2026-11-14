@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -69,11 +71,46 @@ def proxy_url(url: str, use_proxy: bool = True) -> str:
     return GH_PROXY + url
 
 
+MACOS_KEYCHAINS = (
+    "/System/Library/Keychains/SystemRootCertificates.keychain",
+    "/Library/Keychains/System.keychain",
+)
+
+
+def _ssl_context():
+    """macOS 上 Python 不读系统钥匙串，本机安装的根证书会缺失。
+
+    实测本机 API 直连报 CERTIFICATE_VERIFY_FAILED（curl 正常，因为它读钥匙串）。
+    这里把系统信任的根证书补进 SSLContext，证书校验保持开启；其它平台沿用
+    urllib 的默认验证。
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        out = subprocess.run(
+            ["/usr/bin/security", "find-certificate", "-a", "-p", *MACOS_KEYCHAINS],
+            capture_output=True, timeout=8, check=True).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        raise UpdateError(f"读取 macOS 系统根证书失败：{e}") from e
+    if len(out) < 1000:
+        raise UpdateError("macOS 系统根证书为空，无法建立安全连接")
+    ctx = ssl.create_default_context()
+    ctx.load_verify_locations(cadata=out.decode("ascii", "ignore"))
+    return ctx
+
+
+def _urlopen(req, timeout):
+    ctx = _ssl_context()
+    if ctx is None:
+        return urllib.request.urlopen(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+
+
 def _read(url: str, timeout: int = TIMEOUT) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
                                                "Accept": "application/vnd.github+json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _urlopen(req, timeout) as resp:
             return resp.read()
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
         reason = getattr(e, "reason", None) or getattr(e, "code", None) or str(e)
@@ -108,7 +145,7 @@ def _release_info() -> UpdateInfo | None:
     """没有发布 Release 时返回 None；其它 HTTP 错误直接抛出，不吞掉。"""
     req = urllib.request.Request(RELEASES_API, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with _urlopen(req, TIMEOUT) as resp:
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -168,7 +205,7 @@ def download(info: UpdateInfo, use_proxy: bool = True, progress=None, cancel=Non
     target = folder / info.filename
     tmp = folder / (info.filename + ".part")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT * 2) as resp, open(tmp, "wb") as f:
+        with _urlopen(req, TIMEOUT * 2) as resp, open(tmp, "wb") as f:
             total = int(resp.headers.get("Content-Length") or 0)
             done = 0
             while True:
