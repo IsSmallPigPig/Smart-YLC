@@ -14,7 +14,7 @@ import sys
 MATERIALS = {
     "acrylic": "NSVisualEffectMaterialPopover",
     "sidebar": "NSVisualEffectMaterialSidebar",
-    "hud": "NSVisualEffectMaterialHudWindow",
+    "hud": "NSVisualEffectMaterialHUDWindow",  # 注意大写：HUD 全大写
 }
 
 
