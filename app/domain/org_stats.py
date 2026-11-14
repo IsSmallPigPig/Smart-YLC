@@ -49,7 +49,7 @@ class OrgStats:
 
 @dataclass
 class ErrorMemberRow:
-    """错误团员名单一行：一个团员一项或多类错误级异常。"""
+    """异常团员名单一行：一个团员一项或多类错误级异常。"""
     name: str
     mobile: str
     kinds: str  # 类别，多个用「、」连接

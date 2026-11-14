@@ -139,13 +139,13 @@ def save_account_template(path: str) -> int:
 
 
 def save_error_rows(path: str, rows) -> int:
-    """导出错误团员名单 xlsx（rows: ErrorMemberRow 可迭代），返回写入行数。"""
+    """导出异常团员名单 xlsx（rows: ErrorMemberRow 可迭代），返回写入行数。"""
     from openpyxl import Workbook
 
     items = list(rows)
     wb = Workbook()
     ws = wb.active
-    ws.title = "错误团员名单"
+    ws.title = "异常团员名单"
     ws.append(ERROR_ROW_HEADERS)
     for r in items:
         ws.append([r.name, r.mobile, r.kinds, r.problems, r.branch])

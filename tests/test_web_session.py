@@ -3,9 +3,9 @@
 import time
 from types import SimpleNamespace
 
-from app.services import login_gate, store, webopen
+from app.domain.login_protocol import build_login_url
+from app.services import login_gate, store
 
-HOME = "https://tuan.12355.net/bg/index_main.html"
 
 
 def _isolated(monkeypatch, tmp_path):
@@ -52,73 +52,9 @@ def test_data_sync_never_logs_in(monkeypatch, tmp_path):
     assert "session" in login_gate.SKIP_KINDS
 
 
-def test_scripts_clear_domain_cookie_and_check_page():
-    url = "https://tuanapi.12355.net/login/adminLogin?userName=u1"
-    arc = webopen._arc_scripts(url)
-    safari = webopen._safari_scripts(url)
-    assert len(arc) == len(safari) == 3
-    for scripts in (arc, safari):
-        prepare, sign_in, verify = scripts
-        assert "SESSION=" in prepare and ".12355.net" in prepare and "max-age=0" in prepare
-        assert "userName=u1" in sign_in and "index_main" in sign_in
-        assert "登录状态已失效" in verify
-    assert "execute window 1's active tab javascript" in arc[0]
-    assert "do JavaScript" in safari[0]
-
-
-def test_clean():
-    assert webopen._clean('"cleared"') == "cleared"
-    assert webopen._clean(f"  {HOME}  ") == HOME
-    assert webopen._clean("") == ""
-
-
-def _mac(monkeypatch):
-    monkeypatch.setattr(webopen, "sys", SimpleNamespace(platform="darwin"))
-
-
-def _stub_scripts(monkeypatch, state):
-    """按三段脚本的内容返回对应的模拟结果。"""
-
-    def fake(script, timeout=20):
-        if "max-age=0" in script:
-            return True, f'"{state["cleared"]}"'
-        if "javascript" in script or "JavaScript" in script:
-            return True, f'"{state["page"]}"'
-        return True, state["url"]
-
-    monkeypatch.setattr(webopen, "_run_applescript", fake)
-
-
-def test_open_logged_in_marks_session_only_on_valid_page(monkeypatch, tmp_path):
-    _isolated(monkeypatch, tmp_path)
-    _mac(monkeypatch)
-    client = SimpleNamespace(user_name="u1", password="p")
-    state = {"cleared": "cleared", "url": HOME, "page": "ok"}
-    _stub_scripts(monkeypatch, state)
-
-    ok, msg = webopen.open_logged_in(client, "Arc")
-    assert ok and "后台自动刷新已让路" in msg
-    assert "u1" in login_gate.active_browser_sessions()
-
-    login_gate.clear_browser_sessions()
-    state["page"] = "expired"
-    ok, msg = webopen.open_logged_in(client, "Arc")
-    assert not ok and "登录状态已失效" in msg
-    assert "u1" not in login_gate.active_browser_sessions()
-
-    state["page"] = "ok"
-    state["cleared"] = "blocked"
-    ok, msg = webopen.open_logged_in(client, "Arc")
-    assert not ok and "域级" in msg
-    assert "u1" not in login_gate.active_browser_sessions()
-
-
-def test_open_logged_in_reports_script_failure(monkeypatch, tmp_path):
-    _isolated(monkeypatch, tmp_path)
-    _mac(monkeypatch)
-    monkeypatch.setattr(webopen, "_run_applescript",
-                        lambda s, timeout=20: (False, "Not allowed to send Apple events"))
-    client = SimpleNamespace(user_name="u1", password="p")
-    ok, msg = webopen.open_logged_in(client, "Arc")
-    assert not ok and "请在系统设置允许控制浏览器" in msg
-    assert store.load().get("browserSessions", {}) == {}
+def test_login_url_is_the_web_login_request():
+    """网页端登录就是这一个 GET：密码只以双重 md5 出现，浏览器打开它即可换会话。"""
+    url = build_login_url("ssfz12407", "abc12345")
+    assert url.startswith("https://tuanapi.12355.net/login/adminLogin?")
+    assert "userName=ssfz12407" in url
+    assert "password=" in url and "abc12345" not in url

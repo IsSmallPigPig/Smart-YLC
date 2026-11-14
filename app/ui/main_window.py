@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 from PySide6.QtCore import Qt, QTimer
@@ -12,6 +13,7 @@ from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import (
     MSFluentWindow,
     NavigationItemPosition,
+    SearchLineEdit,
     TransparentToolButton,
     qrouter,
 )
@@ -19,17 +21,17 @@ from qfluentwidgets import (
 from app import __version__ as VERSION
 from app.domain.account_health import excluded_note, split_accounts
 from app.services import store
-from app.ui.check_page import CheckPage
-from app.ui.compress_page import CompressPage
+from app.ui.browser_page import BrowserWindow
 from app.ui.home_page import HomePage, page_bg_color
-from app.ui.naming_page import NamingPage
 from app.ui.org_manage_page import OrgManagePage
 from app.ui.org_page import OrgPage
 from app.ui.settings_page import SettingsPage
 from app.ui.messages_page import MessagesPage
 from app.ui.upload_page import UploadPage
 
-if sys.platform == "darwin":
+if sys.platform == "darwin" and not os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"):
+    # 离屏平台没有真实 NSWindow，qframelesswindow 的原生调用会段错误；
+    # 界面冒烟测试跑在 offscreen 下，这里跳过全部原生钩子。
     # qframelesswindow 的 StandardTitleBar 给标题 QLabel 写死了 'Segoe UI'
     # （macOS 无此字体，每次启动触发 qt.qpa.fonts 别名填充告警，~135ms 开销）。
     # 在任何窗口构造之前拦截：应用后把字体替换为本机中文渲染字体。
@@ -69,6 +71,9 @@ class MainWindow(MSFluentWindow):
 
     def __init__(self):
         super().__init__()
+        from app.ui.brand import app_icon
+
+        self.setWindowIcon(app_icon())
         self.setWindowTitle("智慧团委")
         self.setMinimumSize(960, 640)
 
@@ -89,28 +94,32 @@ class MainWindow(MSFluentWindow):
 
         self.settings_page = SettingsPage()
         self.home_page = HomePage(self)
-        self.naming_page = NamingPage(self)
-        self.compress_page = CompressPage(self)
         self.upload_page = UploadPage(self)
-        self.check_page = CheckPage(self)
         self.org_page = OrgPage(self)
         self.org_manage_page = OrgManagePage(self)
         self.messages_page = MessagesPage(self)
+        self.browser_window: BrowserWindow | None = None
         self.settings_page.window_ref = self  # 毛玻璃开关与团支书导入后的页面刷新
         self.settings_page.home_page = self.home_page  # 系统配置里设置头图后即时刷新首页
 
         self.addSubInterface(self.home_page, FIF.HOME, "工具首页")
-        self.addSubInterface(self.upload_page, FIF.CLOUD, "批量上传")
-        self.addSubInterface(self.check_page, FIF.CERTIFICATE, "批量检查")
+        self.addSubInterface(self.upload_page, FIF.CLOUD, "上传档案")
         self.addSubInterface(self.org_page, FIF.PIE_SINGLE, "组织状况")
         self.addSubInterface(self.org_manage_page, FIF.PEOPLE, "组织管理")
         self.addSubInterface(self.messages_page, FIF.MESSAGE, "系统消息")
-        # 文档类工具与系统配置放在一起，置于侧边栏底部
-        self.addSubInterface(self.naming_page, FIF.EDIT, "文档检查", position=NavigationItemPosition.BOTTOM)
-        self.addSubInterface(self.compress_page, FIF.ZOOM, "批量压缩", position=NavigationItemPosition.BOTTOM)
+        # 访问支部放在系统配置上方：点开的是内嵌浏览器窗口，不占侧边栏的页面位
+        self.navigationInterface.addItem(
+            "visit-branch", FIF.GLOBE, "访问支部",
+            onClick=self._on_visit_branch,
+            selectable=False,
+            position=NavigationItemPosition.BOTTOM,
+        )
         self.addSubInterface(
             self.settings_page, FIF.SETTING, "系统配置", position=NavigationItemPosition.BOTTOM
         )
+        # 内置切页动画会把整页从下方 76px 滑上来（PopUpAniStackedWidget 的默认
+        # deltaY），刚进入页面时内容整体往上跳；关掉它，过渡交给下面的淡入。
+        self.stackedWidget.setAnimationEnabled(False)
 
         # 标题栏返回按钮：默认无背景，中心位于窗口外框左上角(0,0)与
         # 主页面背景左上角(侧边栏右缘, 标题栏下沿48)连线的中点
@@ -206,6 +215,7 @@ class MainWindow(MSFluentWindow):
 
         def _after_messages():
             self.messages_page._load_cache()
+            self.home_page.refresh_stats()
             if fast:
                 if synced_any:
                     self.org_page.refresh_offline()  # 成员缓存有更新，离线重算组织状况
@@ -221,6 +231,7 @@ class MainWindow(MSFluentWindow):
         def _finish():
             self._refreshing = False
             self._refresh_worker = None
+            self.home_page.refresh_stats()
             if not self._refresh_silent:
                 InfoBar.success("刷新完成", "成员、站内信、组织状况均已更新", duration=4000, parent=self)
 
@@ -241,22 +252,96 @@ class MainWindow(MSFluentWindow):
         body = f"{first.get('account', '')}：{(first.get('content') or '').strip() or first.get('title', '')}"
         send(f"收到 {len(items)} 条新站内信", body[:120])
 
+    def _on_visit_branch(self):
+        """侧边栏「访问支部」：打开浏览器窗口，没有标签时先问要访问哪个支部。"""
+        self._ensure_browser_window().prompt()
+
+    def closeEvent(self, e):
+        """关主窗口时把账号网页窗口一并收掉。
+
+        主窗口关掉后程序还在托盘里跑，浏览器窗口若留着就成了一个没有主的窗口。
+        """
+        window = getattr(self, "browser_window", None)
+        if window is not None:
+            window.shutdown()
+        super().closeEvent(e)
+
+    def _ensure_browser_window(self) -> BrowserWindow:
+        if self.browser_window is None:
+            self.browser_window = BrowserWindow()
+        return self.browser_window
+
+    def open_browser(self, user: str = ""):
+        """打开账号网页窗口：独立窗口，不在侧边栏占一页。"""
+        self._ensure_browser_window().open_account(user)
+
     def on_theme_changed(self):
-        """明暗模式变化：窗口底色重绘；消息卡片右侧小标签的底色是按当前
-        主题烘焙的，需要重建列表。其余页面样式由 fluent 主题联动自动更新。"""
+        """明暗模式已经落地：窗口底色重绘，消息卡片的标签各自按新主题重画。
+
+        整窗重算样式是 Qt 一次性完成的，没法拆到多线程；这里不再重建消息卡片，
+        把原来「切一次主题重建上百个控件」的开销去掉，只更新按主题取色的文字。
+        """
         self.update()
-        if hasattr(self, "messages_page") and self.messages_page._views:
-            self.messages_page._rebuild()
+        page = getattr(self, "messages_page", None)
+        if page is not None:
+            page.apply_theme()
+
+    def apply_theme_async(self, mode: str, done=None):
+        """切换明暗模式：画面淡出 → 换样式 → 淡入。
+
+        setTheme 会让整个窗口重算一遍样式表，这段时间界面必然不响应；
+        把它放进淡出后的透明帧里执行，用户看到的是颜色平滑过渡，而不是画面定格。
+        """
+        if getattr(self, "_theme_busy", False):
+            return
+        from app.setup import apply_theme_mode
+        from app.ui.anim import cross_fade
+
+        page = self.stackedWidget.currentWidget()
+        content = getattr(page, "scrollWidget", None)
+        self._theme_busy = True
+
+        def _apply():
+            try:
+                apply_theme_mode(mode)
+                store.update(lambda cfg: cfg.__setitem__("themeMode", mode))
+                self.on_theme_changed()
+            finally:
+                self._theme_busy = False
+            if done:
+                done()
+
+        if content is None:
+            _apply()
+            return
+        cross_fade(content, _apply)
 
     def _setup_back_button(self):
+        from app.ui.page import set_tip
+
         self.back_btn = TransparentToolButton(FIF.RETURN, self.titleBar)
-        self.back_btn.setToolTip("返回上一页")
+        set_tip(self.back_btn, "返回上一页")
         self.back_btn.setFixedSize(34, 34)
 
         tb = self.titleBar.hBoxLayout
         # 去掉默认的左间距与应用图标占位，让按钮按对角线定位
         tb.removeWidget(self.titleBar.iconLabel)
         self.titleBar.iconLabel.hide()
+        # 标题栏放带背景的应用图标，和窗口图标同一张
+        from PySide6.QtWidgets import QLabel
+
+        from app.ui.brand import app_pixmap
+
+        self.logo = QLabel(self.titleBar)
+        self.logo.setPixmap(app_pixmap(22))
+        self.logo.setFixedSize(22, 22)
+        self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        set_tip(self.logo, "智慧团委 Smart-YLC")
+        tb.insertWidget(tb.indexOf(self.titleBar.titleLabel), self.logo, 0,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # 标题文字按同一基线居中，否则图标与文字看着不在一行
+        self.titleBar.titleLabel.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         while tb.count() and tb.itemAt(0).spacerItem():
             tb.takeAt(0)
         tb.insertWidget(0, self.back_btn, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -264,10 +349,20 @@ class MainWindow(MSFluentWindow):
         self.back_btn.clicked.connect(self._on_back_clicked)
         QTimer.singleShot(0, self._place_back_button)
 
+        # 标题栏居中搜索框：只有组织管理与系统消息用，切页时换提示并显隐
+        self.search_edit = SearchLineEdit(self.titleBar)
+        self.search_edit.setFixedHeight(30)
+        self.search_edit.setVisible(False)
+        self.search_edit.textChanged.connect(self._on_search_changed)
+        self.stackedWidget.currentChanged.connect(self._sync_search)
+        self.stackedWidget.currentChanged.connect(self._animate_page)
+
         qrouter.emptyChanged.connect(self._sync_back_state)
         self.stackedWidget.currentChanged.connect(self._sync_back_state)
         self.org_manage_page.detail_changed.connect(self._sync_back_state)
         self._sync_back_state()
+        self._sync_search()
+        QTimer.singleShot(0, self._place_search)
 
     def _on_back_clicked(self):
         """详情页优先退回支部列表，其余情况按导航历史返回上一页。"""
@@ -281,6 +376,67 @@ class MainWindow(MSFluentWindow):
                   and self.org_manage_page.isVisible())
         detail = on_org and self.org_manage_page.in_detail()
         self.back_btn.setEnabled(bool(qrouter.history) or detail)
+
+    # ---------- 标题栏搜索 ----------
+
+    SEARCH_PAGES = (("org_manage_page", "搜索团员姓名或手机号"),
+                    ("messages_page", "搜索姓名或消息内容"),
+                    ("upload_page", "搜索档案文件名或支部"))
+
+    def _sync_search(self, *_):
+        """搜索框随页面切换：换提示语、清空关键词，不在用的页面把过滤词复位。"""
+        page = self.stackedWidget.currentWidget()
+        for attr, _hint in self.SEARCH_PAGES:
+            target = getattr(self, attr, None)
+            if target is not None and target is not page:
+                target.set_search("")
+        self.search_edit.blockSignals(True)
+        self.search_edit.clear()
+        self.search_edit.blockSignals(False)
+        hint = next((h for attr, h in self.SEARCH_PAGES
+                     if getattr(self, attr, None) is page), None)
+        if hint:
+            self.search_edit.setPlaceholderText(hint)
+            self.search_edit.show()
+        else:
+            self.search_edit.hide()
+        self._place_search()
+
+    def _on_search_changed(self, text: str):
+        page = self.stackedWidget.currentWidget()
+        for attr, _hint in self.SEARCH_PAGES:
+            target = getattr(self, attr, None)
+            if target is page:
+                target.set_search(text)
+                return
+
+    def _animate_page(self, *_):
+        """切页时整页淡入。
+
+        只动透明度：对布局里的控件做位移动画会让内容在进入页面时上下跳，
+        滚动区域还会顺带重算一次位置。
+        """
+        page = self.stackedWidget.currentWidget()
+        if page is None:
+            return
+        from app.ui.anim import fade_in
+
+        fade_in(page, duration=180, dy=0)
+
+    def _place_search(self):
+        bar = self.titleBar
+        if not hasattr(self, "search_edit"):
+            return
+        width = min(340, max(200, bar.width() - 560))
+        self.search_edit.setFixedWidth(width)
+        x = max(96, (bar.width() - width) // 2)
+        y = (bar.height() - self.search_edit.height()) // 2
+        self.search_edit.move(x, y)
+        self.search_edit.raise_()  # 绝对定位的兄弟控件要抬到最上层，否则会被标题挡住
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_search()
 
     def _place_back_button(self):
         tb = self.titleBar.hBoxLayout
@@ -296,6 +452,7 @@ class MainWindow(MSFluentWindow):
         tb.insertWidget(1, self.back_btn, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.titleBar.titleLabel.setText(self.windowTitle())
         self.titleBar.titleLabel.adjustSize()
+        self._place_search()
 
     def showEvent(self, e):
         super().showEvent(e)

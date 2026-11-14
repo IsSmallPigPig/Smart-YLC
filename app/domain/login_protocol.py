@@ -14,7 +14,9 @@ import hashlib
 import re
 import time
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
+API_BASE_URL = "https://tuanapi.12355.net"
 LOGIN_PATH = "/login/adminLogin"
 CAPTCHA_PATH = "/login/loginValidCode"
 CAPTCHA_HEADER = "POWERED-BY-MENGXIANHUI"
@@ -42,6 +44,15 @@ def build_login_query(user_name: str, plain_password: str, login_valid_code: str
         "password": double_md5(plain_password),
         "loginValidCode": login_valid_code,
     }
+
+
+def build_login_url(user_name: str, plain_password: str, login_valid_code: str = "") -> str:
+    """登录 GET 接口的完整 URL（网页端登录就是这个请求）。
+
+    浏览器打开它，服务端 Set-Cookie 建立会话，正文是结果 JSON——网页端也是
+    同一个请求，只是由 AJAX 发起。"""
+    q = build_login_query(user_name, plain_password, login_valid_code)
+    return f"{API_BASE_URL}{LOGIN_PATH}?{urlencode(q)}"
 
 
 def build_captcha_query(now: float | None = None) -> dict:

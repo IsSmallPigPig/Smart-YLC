@@ -24,11 +24,25 @@ jobs:
           pip install pyinstaller
           pip install "PySide6>=6.12" "PySide6-Fluent-Widgets>=1.11" pypdf pillow openpyxl requests pymupdf
 
+      - name: 生成应用图标（icns）
+        run: |
+          mkdir -p build/SmartYouth.iconset
+          for size in 16 32 128 256 512; do
+            sips -z $size $size app/assets/smart-ylc@512.png \
+              --out build/SmartYouth.iconset/icon_${size}x${size}.png > /dev/null
+          done
+          cp app/assets/smart-ylc@1024.png build/SmartYouth.iconset/icon_512x512@2x.png
+          cp build/SmartYouth.iconset/icon_256x256.png build/SmartYouth.iconset/icon_256x256@2x.png
+          cp build/SmartYouth.iconset/icon_128x128.png build/SmartYouth.iconset/icon_128x128@2x.png
+          iconutil -c icns build/SmartYouth.iconset -o build/icon.icns
+
       - name: PyInstaller 打包（.app）
         run: |
           pyinstaller --noconfirm --clean \
             --windowed --name SmartYouth \
             --collect-all qfluentwidgets \
+            --icon build/icon.icns \
+            --add-data "app/assets:assets" \
             main.py
 
       - name: 制作 dmg 安装镜像
@@ -62,6 +76,8 @@ jobs:
           pyinstaller --noconfirm --clean `
             --onefile --windowed --name SmartYouth `
             --collect-all qfluentwidgets `
+            --icon app/assets/smart-ylc.ico `
+            --add-data "app/assets;assets" `
             main.py
 
       - uses: actions/upload-artifact@v4

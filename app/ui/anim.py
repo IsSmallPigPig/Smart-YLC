@@ -65,6 +65,46 @@ def fade_in(widget: QWidget, duration: int = 220, dy: int = 8) -> QAbstractAnima
     return group
 
 
+def fade_out(widget: QWidget, duration: int = 110, on_done=None) -> QAbstractAnimation:
+    """淡出到透明后回调，用于切换主题这类「先让画面安静下来再动刀」的场景。"""
+    old = getattr(widget, "_fade_ani", None)
+    if old is not None:
+        old.stop()
+    eff = _opacity_effect(widget)
+    eff.setOpacity(1.0)
+
+    ani = QPropertyAnimation(eff, b"opacity", widget)
+    ani.setDuration(duration)
+    ani.setStartValue(1.0)
+    ani.setEndValue(0.0)
+    ani.setEasingCurve(QEasingCurve.Type.InCubic)
+
+    def _done():
+        widget._fade_ani = None
+        if on_done:
+            on_done()
+
+    ani.finished.connect(_done)
+    widget._fade_ani = ani
+    ani.start()
+    return ani
+
+
+def cross_fade(widget: QWidget, apply_work, out: int = 110, back: int = 170) -> QAbstractAnimation:
+    """淡出 → 执行 apply_work（换主题等重活）→ 淡入。
+
+    apply_work 在淡出结束后运行，此时画面是透明的，一次性重算样式不会被看见，
+    回来后新配色的内容再淡入，观感上没有「整窗闪一下」的顿感。
+    """
+    def _run():
+        try:
+            apply_work()
+        finally:
+            fade_in(widget, duration=back, dy=0)
+
+    return fade_out(widget, duration=out, on_done=_run)
+
+
 def switch_with_fade(old: QWidget, new: QWidget, duration: int = 240) -> QAbstractAnimation:
     """旧视图淡出后切换可见性，新视图淡入。两者同属一个布局、同一位置。"""
     old_ani = getattr(old, "_switch_ani", None)

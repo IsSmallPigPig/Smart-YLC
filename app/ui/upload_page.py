@@ -1,13 +1,11 @@
-"""批量上传页：一键上传到智慧团建，逐文件反馈上传情况。
+"""上传档案：工作区取件 → 自动检查命名与页数 → 按支部预组织 → 压缩并逐支部提交。
 
-流程（点「开始上传」后自动执行，无需手动检查）：
-  1. 命名检查：解析「姓名+手机号码+入团志愿书.pdf」，不合格的文件标记跳过
-  2. 按名单班级路由：12407 → ssfz12407；解析不到班级/账号的标记失败，不影响其余文件
-  3. 压缩：超过 9.5MB 的自动压到阈值内（压临时副本，不动原文件）
-  4. 逐账号登录（先探测会话，失效才登录）后上传；上传前按团员状况预检
-     （优先复用 4 小时内的成员缓存，不重复请求）：未完成报到、线上已显示
-     审核通过（电子志愿书已上传）的团员直接跳过并说明原因，不浪费一次失败请求
-  5. 结束后反馈：成功 / 跳过 / 失败 各多少，明细见表格
+流程：
+  1. 选择工作目录：目录里的 PDF 与待上传列表合并去重
+  2. 文档检查：命名能解析但格式不标准的直接改成标准名；页数不符、命名解析
+     不出、路由不到支部的标为异常，上传前拦下
+  3. 结果用状态列表呈现，并按团支部收进折叠卡片，未通过的单列一组
+  4. 点「开始上传」：先把超限文件压到目标大小，再逐个支部登录提交、自动审核
 """
 
 from __future__ import annotations
@@ -17,59 +15,76 @@ import shutil
 import tempfile
 
 from PySide6.QtCore import QThread, QTimer, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QTableWidgetItem
+from PySide6.QtWidgets import QFileDialog, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
-    BodyLabel,
+    ComboBox,
+    FluentIcon as FIF,
     InfoBar,
-    LineEdit,
     PrimaryPushButton,
     PushButton,
-    TableWidget,
     ToolButton,
-    FluentIcon as FIF,
 )
 
-from app.ui.page import FluentPage, fit_table_columns, note_label
-from app.domain.account_health import excluded_note, split_accounts
 from app.constants import LIMITS, MB
-from app.domain.chunk_protocol import check_site_limits
+from app.domain.account_health import excluded_note, split_accounts
 from app.domain.naming import analyze_file_name
-from app.domain.org_manage import record_from_dict
-from app.domain.upload_routing import (
-    resolve_file_targets,
-    roster_class_lookup,
-    upload_skip_reason,
+from app.domain.upload_inspect import (group_by_branch, inspect, member_index,
+                                       split_branch_label, summarize)
+from app.domain.upload_routing import upload_skip_reason
+from app.services import store
+from app.services.workspace import load_pending, remove_pending
+from app.ui.page import CollapsibleCard, FluentPage, PageHeader, note_label, set_tip
+from app.ui.widgets import StatusList
+
+TARGETS = (
+    ("压到 9.5MB", LIMITS["PDF_DEFAULT_TARGET_BYTES"]),
+    ("压到 19.5MB", LIMITS["PDF_20MB_PRESET_BYTES"]),
 )
-from app.services import login_gate, store
-from app.services.workspace import load_pending
-
-TARGET = LIMITS["PDF_DEFAULT_TARGET_BYTES"]
 MAX_BATCH = LIMITS["MAX_UPLOAD_PER_BATCH"]
+RESULT_TONE = {"成功": "ok", "跳过": "warn", "失败": "error"}
 
-RESULT_COLOR = {"成功": "#2e7d32", "失败": "#c62828", "跳过": "#ef6c00"}
+
+class InspectWorker(QThread):
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, files, expected_pages: int, accounts: list[dict], roster,
+                 members: dict | None = None):
+        super().__init__()
+        self.files = files
+        self.expected_pages = expected_pages
+        self.accounts = accounts
+        self.roster = roster
+        self.members = members
+
+    def run(self):
+        try:
+            self.done.emit(inspect(self.files, self.expected_pages,
+                                   self.accounts, self.roster,
+                                   members=self.members))
+        except Exception as e:  # 整体失败要显式报出来，不静默留空列表
+            self.failed.emit(str(e))
 
 
 class UploadWorker(QThread):
-    """按账号分组上传；上传前自动压缩超限文件（临时副本，不动原文件），未报到团员跳过。"""
+    """先压缩到目标大小，再按支部分组提交；单文件失败不中断整批。"""
 
-    row_ready = Signal(int, str, str, str, str)  # row, account, name, result(成功/失败/跳过), reason
+    row_ready = Signal(str, str, str, str)  # account, path, result, reason
     stage = Signal(str)
     all_done = Signal(int, int, int, int, int)  # ok, skipped, total, audit_ok, audit_manual
 
-    def __init__(self, creds: dict[str, str], jobs: list[dict]):
+    def __init__(self, creds: dict[str, str], jobs: list[dict], target: int):
         super().__init__()
-        self.creds = creds  # account -> password
-        self.jobs = jobs  # [{row, path, account}]
+        self.creds = creds
+        self.jobs = jobs  # [{path, account}]
+        self.target = target
         self._stop = False
 
     def stop(self):
         self._stop = True
 
     def _login(self, account: str):
-        """登录指定账号：复用已保存会话探测，失效才登录（带验证码/风控冷却）。
-        返回 (client, 错误消息)。"""
         from app.services import login_gate
         from app.services.api import SiteClient
 
@@ -83,113 +98,129 @@ class UploadWorker(QThread):
             return None, "需要验证码（密码失败过多），请先在网页端登录一次"
         return None, msg or "登录失败"
 
-    def _member_map(self, client, account: str) -> dict[tuple[str, str], object]:
-        """该团支部的 (姓名, 手机号) → 团员记录（含报到/志愿书状态与 mid）。
-
-        优先复用「组织状况」维护的成员缓存（4 小时内拉取过就不重复请求，
-        也不动缓存数据）；缓存缺失或过期才在线拉取。"""
+    def _member_map(self, client, account: str) -> dict:
+        """该支部的 (姓名, 手机号) → 团员记录；4 小时内的缓存直接复用。"""
         from datetime import datetime, timezone
 
         blob = (store.load().get("memberCache") or {}).get(account) or {}
         ts = blob.get("fetchedAt", "")
-        fresh = False
         if ts:
             try:
-                age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds() / 3600
-                fresh = 0 <= age_h < login_gate.FRESH_HOURS
-            except ValueError:
-                fresh = False
-        if fresh:
-            try:
-                m = {(d["name"], d["mobile"]): record_from_dict(d)
-                     for d in blob.get("members", [])}
-                if m:
-                    return m
-            except (KeyError, TypeError):
-                pass  # 缓存结构异常 → 回落在线拉取
+                age = (datetime.now(timezone.utc)
+                       - datetime.fromisoformat(ts)).total_seconds() / 3600
+                if 0 <= age < 4:
+                    from app.domain.org_manage import record_from_dict
+
+                    cached = {(d["name"], d["mobile"]): record_from_dict(d)
+                              for d in blob.get("members", [])}
+                    if cached:
+                        return cached
+            except (ValueError, KeyError, TypeError):
+                pass
         try:
             members, _ = client.get_all_members()
         except Exception:
-            return {}  # 拉不到名单就不预检，交给站点返回的错误
+            return {}
         return {(m.name, m.mobile): m for m in members}
 
-    def run(self):
-        ok = skipped = 0
-        audit_ok = audit_manual = 0
-        tmpdir = tempfile.mkdtemp(prefix="gd12355-upload-")
-        try:
-            groups: dict[str, list[dict]] = {}
-            for j in self.jobs:
-                groups.setdefault(j["account"], []).append(j)
+    def _compress(self, job: dict, tmpdir: str) -> str | None:
+        """超过目标大小的压到临时副本；返回上传用路径，失败返回 None。"""
+        path = job["path"]
+        if os.path.getsize(path) <= self.target:
+            return path
+        from app.services.compress import compress_pdf
 
-            for account, acc_jobs in groups.items():
+        tmp = os.path.join(tmpdir, os.path.basename(path))
+        try:
+            result = compress_pdf(path, tmp, self.target)
+        except Exception as e:
+            self.row_ready.emit(job["account"], path, "失败", f"压缩失败：{e}")
+            return None
+        if result.get("over"):
+            self.row_ready.emit(
+                job["account"], path, "失败",
+                f"压到最低参数仍 {result['dst_size'] / MB:.1f}MB，超过站点限制")
+            return None
+        return tmp
+
+    def run(self):
+        ok = skipped = audit_ok = audit_manual = 0
+        tmpdir = tempfile.mkdtemp(prefix="gd-upload-")
+        try:
+            # 一、压缩：先全部处理完，再开始提交
+            prepared = []
+            total = len(self.jobs)
+            for i, job in enumerate(self.jobs):
                 if self._stop:
                     break
-                if len(acc_jobs) > MAX_BATCH:
-                    for j in acc_jobs:
-                        self.row_ready.emit(j["row"], account, os.path.basename(j["path"]),
-                                            "失败", f"该账号单批超过 {MAX_BATCH} 份，请分批")
+                self.stage.emit(f"压缩 {i + 1}/{total}：{os.path.basename(job['path'])}")
+                upload_path = self._compress(job, tmpdir)
+                if upload_path is not None:
+                    prepared.append({"path": job["path"], "account": job["account"],
+                                     "upload_path": upload_path})
+            if self._stop:
+                self.all_done.emit(ok, skipped, total, audit_ok, audit_manual)
+                return
+
+            # 二、按支部提交
+            groups: dict[str, list[dict]] = {}
+            for job in prepared:
+                groups.setdefault(job["account"], []).append(job)
+
+            for index, (account, jobs) in enumerate(groups.items(), 1):
+                if self._stop:
+                    break
+                if len(jobs) > MAX_BATCH:
+                    for job in jobs:
+                        self.row_ready.emit(account, job["path"], "失败",
+                                            f"该支部单批超过 {MAX_BATCH} 份，请分批")
                     continue
-                self.stage.emit(f"登录 {account}…")
+                self.stage.emit(f"提交 {index}/{len(groups)}：{account}")
                 client, err = self._login(account)
                 if client is None:
-                    for j in acc_jobs:
-                        self.row_ready.emit(j["row"], account, os.path.basename(j["path"]), "失败", f"登录失败：{err}")
+                    for job in jobs:
+                        self.row_ready.emit(account, job["path"], "失败", f"登录失败：{err}")
                     continue
-                self.stage.emit(f"核对 {account} 团员状况")
                 member_map = self._member_map(client, account)
 
-                for j in acc_jobs:
+                for job in jobs:
                     if self._stop:
                         break
-                    path, name = j["path"], os.path.basename(j["path"])
-                    # 预检：未完成报到拦截；线上已审核通过（志愿书已上传）跳过重复上传
-                    a = analyze_file_name(name)
-                    member = member_map.get(a.parsed) if a.parsed else None
+                    path = job["path"]
+                    name = os.path.basename(path)
+                    analysis = analyze_file_name(name)
+                    member = member_map.get(analysis.parsed) if analysis.parsed else None
                     if member is not None:
-                        reason = upload_skip_reason(member.report_data_status, member.ebook_status)
+                        reason = upload_skip_reason(member.report_data_status,
+                                                    member.ebook_status)
                         if reason:
-                            self.row_ready.emit(j["row"], account, name, "跳过", reason)
+                            self.row_ready.emit(account, path, "跳过", reason)
                             skipped += 1
                             continue
-                    upload_path = path
-                    # 自动压缩：超过 9.5MB → 压临时副本
-                    if os.path.getsize(path) > TARGET:
-                        self.stage.emit(f"压缩 {name}…")
-                        from app.services.compress import compress_pdf
 
-                        tmp = os.path.join(tmpdir, name)
-                        try:
-                            r = compress_pdf(path, tmp, TARGET)
-                            if r.get("over"):
-                                self.row_ready.emit(j["row"], account, name, "失败",
-                                                    f"压缩到最低参数仍 {r['dst_size'] / MB:.1f}MB，超过站点 10MB 限制")
-                                continue
-                            upload_path = tmp
-                        except Exception as e:
-                            self.row_ready.emit(j["row"], account, name, "失败", f"压缩失败：{e}")
-                            continue
-                    self.stage.emit(f"上传 {name} → {account}…")
-                    result = client.upload_file(upload_path)
+                    self.stage.emit(f"上传 {name} → {account}")
+                    result = client.upload_file(job["upload_path"])
                     if not result.ok:
-                        self.row_ready.emit(j["row"], account, name, "失败", result.message)
+                        self.row_ready.emit(account, path, "失败", result.message)
                         continue
                     ok += 1
-                    # 上传入库成功 → 自动调用网页端同款「审核」接口（status=2 通过）
                     if member is not None and str(member.member_id).isdigit():
-                        self.stage.emit(f"审核 {name}…")
+                        self.stage.emit(f"审核 {name}")
                         audit = client.audit_voluntary_book(member.member_id)
                         if audit.ok:
                             audit_ok += 1
-                            self.row_ready.emit(j["row"], account, name, "成功", "已上传，审核已自动通过")
+                            self.row_ready.emit(account, path, "成功",
+                                                "已上传，审核已自动通过")
                         else:
                             audit_manual += 1
-                            self.row_ready.emit(j["row"], account, name, "成功",
-                                                f"已上传，自动审核失败：{audit.message}（请到网页端手动审核）")
+                            self.row_ready.emit(
+                                account, path, "成功",
+                                f"已上传，自动审核失败：{audit.message}（请到网页端手动审核）")
                     else:
                         audit_manual += 1
-                        self.row_ready.emit(j["row"], account, name, "成功",
-                                            "已上传，未匹配到团员记录，请到网页端手动审核")
+                        self.row_ready.emit(
+                            account, path, "成功",
+                            "已上传，未匹配到团员记录，请到网页端手动审核")
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
         self.all_done.emit(ok, skipped, len(self.jobs), audit_ok, audit_manual)
@@ -197,188 +228,300 @@ class UploadWorker(QThread):
 
 class UploadPage(FluentPage):
     def __init__(self, window, parent=None):
-        super().__init__('page-upload', parent)
+        super().__init__("page-upload", parent)
         self.window_ref = window
         self.worker: UploadWorker | None = None
+        self.inspector: InspectWorker | None = None
+        self.statuses = []
+        self._row_index: dict[str, int] = {}
+
         lay = self.vBoxLayout
 
-        row = QHBoxLayout()
-        self.dir_edit = LineEdit()
-        self.dir_edit.setPlaceholderText("选择待上传 PDF 所在文件夹")
-        self.dir_btn = ToolButton(FIF.FOLDER)
-        self.dir_btn.clicked.connect(self._pick_dir)
-        row.addWidget(self.dir_edit, 1)
-        row.addWidget(self.dir_btn)
-        lay.addLayout(row)
-
-        row2 = QHBoxLayout()
-        self.start_btn = PrimaryPushButton(FIF.CLOUD, "开始上传")
-        self.start_btn.clicked.connect(self._start)
-        self.stop_btn = PushButton(FIF.PAUSE, "停止")
+        # 标题与工具条直接写在背景上；说明小字承担原来两行设置项的职责
+        self.header = PageHeader(
+            "上传档案", "先选择工作目录，里面的 PDF 会自动加入待处理")
+        self.pick_btn = PushButton(FIF.FOLDER, "选择目录")
+        self.pick_btn.clicked.connect(self._pick_dir)
+        self.rescan_btn = ToolButton(FIF.SYNC)
+        self.rescan_btn.setFixedSize(32, 32)
+        set_tip(self.rescan_btn, "重新检查工作目录")
+        self.rescan_btn.clicked.connect(self.refresh)
+        self.target_combo = ComboBox()
+        for label, _ in TARGETS:
+            self.target_combo.addItem(label)
+        self.target_combo.setFixedWidth(126)
+        set_tip(self.target_combo, "上传前把超过站点限制的 PDF 压到这个大小")
+        self.upload_btn = PrimaryPushButton(FIF.CLOUD, "开始上传")
+        self.upload_btn.setEnabled(False)
+        self.upload_btn.clicked.connect(self._start_upload)
+        self.stop_btn = PushButton(FIF.PAUSE, "停止上传")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(lambda: self.worker and self.worker.stop())
-        self.template_btn = PushButton(FIF.DOCUMENT, "下载名单模板")
-        self.template_btn.clicked.connect(self._download_template)
-        row2.addWidget(self.start_btn)
-        row2.addWidget(self.stop_btn)
-        row2.addWidget(self.template_btn)
-        row2.addStretch(1)
-        lay.addLayout(row2)
+        for w in (self.pick_btn, self.rescan_btn, self.target_combo,
+                  self.upload_btn, self.stop_btn):
+            self.header.add_control(w)
+        lay.addWidget(self.header)
 
-        self.stat = BodyLabel("")
-        lay.addWidget(self.stat)
-        self.ws_note = note_label("")
-        lay.addWidget(self.ws_note)
+        self.status_list = StatusList()
+        lay.addWidget(self.status_list)
 
-        self.table = TableWidget()
-        self.table.setBorderVisible(True)
-        self.table.setBorderRadius(8)
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["文件", "目标账号", "结果", "说明"])
-        self.add_table(self.table, 1)
+        self.summary = note_label("")
+        lay.addWidget(self.summary)
 
-    # ---------- 入口 ----------
+        self.branch_box = QWidget()
+        self.branch_lay = QVBoxLayout(self.branch_box)
+        self.branch_lay.setContentsMargins(0, 0, 0, 0)
+        self.branch_lay.setSpacing(10)
+        lay.addWidget(self.branch_box)
+        lay.addStretch(1)
+
+    # ---------- 数据来源 ----------
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._refresh_ws_note()
+        self.refresh()
 
-    def _refresh_ws_note(self):
-        pending = load_pending()
-        if pending:
-            self.ws_note.setText(f"工作区待上传 {len(pending)} 个")
-        else:
-            self.ws_note.setText("工作区暂无待上传文件")
+    def _workspace_dir(self) -> str:
+        path = str(store.load().get("workspaceDir") or "").strip()
+        return path if path and os.path.isdir(path) else ""
 
-    def _pick_dir(self):
-        d = QFileDialog.getExistingDirectory(self, "选择文件夹")
-        if d:
-            self.dir_edit.setText(d)
+    def _expected_pages(self) -> int:
+        return self.window_ref.settings_page.expected_pages()
 
-    def _download_template(self):
-        path, _ = QFileDialog.getSaveFileName(self, "保存名单模板", "团员名单模板.xlsx", "Excel (*.xlsx)")
-        if not path:
-            return
-        from app.services.excel import save_roster_template
+    def _accounts(self) -> list[dict]:
+        return list(self.window_ref.settings_page.accounts)
 
-        save_roster_template(path)
-        InfoBar.success("模板已保存", path, duration=4000, parent=self)
+    def _roster(self):
+        return self.window_ref.settings_page.roster
 
-    # ---------- 上传主流程 ----------
-
-    def _gather_files(self) -> list[str]:
-        """待上传文件 = 所选目录 PDF + 工作区待上传列表（按路径去重）。"""
-        files: list[str] = []
-        d = self.dir_edit.text().strip()
-        if d and os.path.isdir(d):
-            files.extend(
-                os.path.join(d, f) for f in sorted(os.listdir(d))
-                if f.lower().endswith(".pdf") and os.path.isfile(os.path.join(d, f))
-            )
-        for e in load_pending():
-            p = e.get("path", "")
-            if p and os.path.isfile(p) and p not in files:
-                files.append(p)
+    def _gather(self, directory: str) -> list[str]:
+        files = [os.path.join(directory, name) for name in sorted(os.listdir(directory))
+                 if name.lower().endswith(".pdf")
+                 and os.path.isfile(os.path.join(directory, name))]
+        for entry in load_pending():
+            path = entry.get("path", "")
+            if path and os.path.isfile(path) and path not in files:
+                files.append(path)
         return files
 
-    def _set_row(self, i: int, name: str, account: str, result: str, reason: str):
-        self.table.setItem(i, 0, QTableWidgetItem(name))
-        self.table.setItem(i, 1, QTableWidgetItem(account))
-        self.table.setItem(i, 2, QTableWidgetItem(result))
-        self.table.setItem(i, 3, QTableWidgetItem(reason))
-        color = RESULT_COLOR.get(result)
-        if color:
-            self.table.item(i, 2).setForeground(QColor(color))
-        fit_table_columns(self.table)
+    # ---------- 检查 ----------
 
-    def _start(self):
-        files = self._gather_files()
-        if not files:
-            InfoBar.warning("没有 PDF", "所选目录和工作区里都没有 .pdf 文件", duration=2500, parent=self)
+    def _pick_dir(self):
+        directory = QFileDialog.getExistingDirectory(self, "选择工作目录")
+        if not directory:
             return
+        store.update(lambda cfg: cfg.__setitem__("workspaceDir", directory))
+        settings = self.window_ref.settings_page
+        settings.ws_edit.setText(directory)
+        settings._setup_watcher(directory)
+        self.refresh()
 
-        # 1) 命名检查（纯函数，快）
-        parsed: dict[str, tuple[str, str]] = {}
-        for p in files:
-            a = analyze_file_name(os.path.basename(p))
-            if a.parsed:
-                parsed[os.path.basename(p)] = a.parsed
+    def refresh(self):
+        directory = self._workspace_dir()
+        if not directory:
+            self.header.set_desc("先选择工作目录，里面的 PDF 会自动加入待处理")
+            self.statuses = []
+            self.status_list.set_items([], "还没有选择工作目录")
+            self.summary.setText("")
+            self.upload_btn.setEnabled(False)
+            self._rebuild_branches()
+            return
+        files = self._gather(directory)
+        self.header.set_desc(
+            f"正在监听 {os.path.basename(directory) or directory}，{len(files)} 份待处理")
+        if not files:
+            self.statuses = []
+            self.status_list.set_items([], "工作目录里还没有 PDF")
+            self.summary.setText("")
+            self.upload_btn.setEnabled(False)
+            self._rebuild_branches()
+            return
+        self.rescan_btn.setEnabled(False)
+        self.summary.setText(f"正在检查 {len(files)} 份档案…")
+        cached_members = (store.load().get("memberCache") or {})
+        self.inspector = InspectWorker(files, self._expected_pages(),
+                                       self._accounts(), self._roster(),
+                                       member_index(cached_members))
+        self.inspector.done.connect(self._on_inspected)
+        self.inspector.failed.connect(self._on_inspect_failed)
+        self.inspector.start()
 
-        # 2) 按班级分流；解析不到的标记失败行，不弹窗阻断一键上传
-        sp = self.window_ref.settings_page
-        usable, excluded = split_accounts(sp.accounts)
+    def _on_inspected(self, statuses):
+        QTimer.singleShot(0, lambda: self._apply_statuses(list(statuses)))
+
+    def _on_inspect_failed(self, message: str):
+        self.rescan_btn.setEnabled(True)
+        self.summary.setText("")
+        InfoBar.error("档案检查失败", message, duration=8000, parent=self)
+
+    def _apply_statuses(self, statuses):
+        self.rescan_btn.setEnabled(True)
+        self.statuses = statuses
+        self._row_index = {}
+        items = []
+        for index, status in enumerate(statuses):
+            self._row_index[status.path] = index
+            meta = []
+            if status.pages:
+                meta.append(f"{status.pages} 页")
+            if status.branch:
+                meta.append(status.branch)
+            note = status.problem
+            if not note and status.renamed_from:
+                note = f"原名 {status.renamed_from}，已自动改名"
+            if not note:
+                note = status.notice
+            items.append({
+                "title": status.name,
+                "note": note,
+                "tone": status.tone,
+                "status": status.status_text,
+                "meta": meta,
+            })
+        self._items_all = items
+        self._apply_filter()
+        stats = summarize(statuses)
+        parts = [f"正常 {stats['ok']}"]
+        if stats["fixed"]:
+            parts.append(f"已纠正 {stats['fixed']}")
+        if stats["missing"]:
+            parts.append(f"缺团员 {stats['missing']}")
+        parts.append(f"异常 {stats['error']}")
+        self.summary.setText(
+            f"共 {stats['total']} 份：" + "，".join(parts)
+            + f"，分 {stats['branches']} 个支部")
+        self.upload_btn.setEnabled(any(s.usable for s in statuses))
+        self._rebuild_branches()
+        if stats["missing"]:
+            InfoBar.warning(
+                "支部名单缺团员",
+                f"{stats['missing']} 份档案的团员不在对应支部名单里，仍可上传；"
+                "名单请到组织管理核对",
+                duration=9000, parent=self)
+
+    def set_search(self, text: str):
+        """标题栏搜索框：按文件名、支部或问题说明过滤待处理清单。"""
+        text = (text or "").strip()
+        if text == getattr(self, "_search", ""):
+            return
+        self._search = text
+        self._apply_filter()
+
+    def _apply_filter(self):
+        needle = getattr(self, "_search", "").lower()
+        items = getattr(self, "_items_all", [])
+        if needle:
+            items = [it for it in items
+                     if needle in str(it.get("title", "")).lower()
+                     or needle in str(it.get("note", "")).lower()
+                     or any(needle in str(m).lower() for m in it.get("meta") or [])]
+        self.status_list.set_items(items, "没有匹配的档案" if needle else
+                                   "工作目录里还没有 PDF")
+
+    def _rebuild_branches(self):
+        while self.branch_lay.count():
+            item = self.branch_lay.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for branch, statuses in group_by_branch(self.statuses).items():
+            stage, name = split_branch_label(branch)
+            tags = ([(stage, "gray")] if stage else []) + [(f"{len(statuses)} 份", "gray")]
+            todo = sum(1 for s in statuses if not s.usable)
+            if todo:
+                tags.append((f"{todo} 待处理", "orange"))
+            missing = sum(1 for s in statuses if s.usable and s.member == "missing")
+            if missing:
+                tags.append((f"{missing} 缺团员", "orange"))
+            card = CollapsibleCard(name or branch, expanded=False, tags=tags)
+            rows = [{
+                "title": s.name,
+                "note": s.problem or s.notice or "",
+                "tone": s.tone,
+                "status": s.status_text,
+                "meta": [f"{s.pages} 页"] if s.pages else [],
+            } for s in statuses]
+            listing = StatusList()
+            listing.set_items(rows)
+            card.body_lay.addWidget(listing)
+            self.branch_lay.addWidget(card)
+
+    # ---------- 上传 ----------
+
+    def _start_upload(self):
+        usable = [s for s in self.statuses if s.usable]
+        if not usable:
+            InfoBar.warning("没有可上传档案", "先处理状态列表里的异常文件",
+                            duration=4000, parent=self)
+            return
+        accounts, excluded = split_accounts(self._accounts())
         if excluded:
             InfoBar.warning("跳过异常账号",
-                f"{excluded_note(excluded)} 不参与上传；测活恢复正常后自动纳入",
-                duration=6000, parent=self)
-        accounts = usable
-        creds = {a["userName"]: a["password"] for a in accounts if a.get("password")}
-        targets = resolve_file_targets(
-            [os.path.basename(p) for p in files], parsed, list(creds), roster_class_lookup(sp.roster))
-        target_by_name = {t.filename: t for t in targets}
-
-        # 3) 站点硬限（未解析的不检查，直接失败行）
-        checkable = [p for p in files if os.path.basename(p) in parsed]
-        over = check_site_limits([{"name": os.path.basename(p), "size": os.path.getsize(p)} for p in checkable])
-        over_names = {r.split("：")[0] for r in over}
-
-        rows: list[dict] = []
-        for i, p in enumerate(files):
-            name = os.path.basename(p)
-            t = target_by_name.get(name)
-            if t is None or t.problem:
-                rows.append({"row": i, "path": p, "account": "", "name": name,
-                             "reason": t.problem if t else "命名不合规"})
-            elif name in over_names:
-                rows.append({"row": i, "path": p, "account": t.account, "name": name,
-                             "reason": "超过站点 10MB 限制"})
-            else:
-                rows.append({"row": i, "path": p, "account": t.account, "name": name, "reason": ""})
-
-        self.table.setRowCount(len(rows))
-        for i, r in enumerate(rows):
-            if r["reason"]:
-                self._set_row(i, r["name"], r["account"], "失败", r["reason"])
-            else:
-                self._set_row(i, r["name"], r["account"], "…", "-")
-        bad = [r for r in rows if r["reason"]]
-        jobs = [{"row": r["row"], "path": r["path"], "account": r["account"]}
-                for r in rows if not r["reason"]]
-        if bad:
-            self.stat.setText(f"{len(bad)} 个文件被拦下（命名/班级/超限）；可上传 {len(jobs)} 个")
+                            f"{excluded_note(excluded)} 不参与上传；测活恢复正常后自动纳入",
+                            duration=6000, parent=self)
+        creds = {a["userName"]: a.get("password", "")
+                 for a in accounts if a.get("password")}
+        jobs = [{"path": s.path, "account": s.account}
+                for s in usable if s.account in creds]
+        missing = sum(1 for s in usable if s.account not in creds)
+        if missing:
+            InfoBar.warning("部分支部不可用",
+                            f"{missing} 份档案的账号没有密码，本轮跳过",
+                            duration=6000, parent=self)
         if not jobs:
-            InfoBar.warning("没有可上传文件", "全部文件都被命名检查或分流拦截，按表格里的说明修正后重试", duration=4000, parent=self)
+            InfoBar.warning("没有可提交的档案", "所选支部的账号都不可用",
+                            duration=4000, parent=self)
             return
 
-        self.start_btn.setEnabled(False)
+        for status in self.statuses:
+            if status.usable:
+                index = self._row_index.get(status.path)
+                if index is not None:
+                    self.status_list.set_row_state(index, "等待", "muted")
+        self.upload_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.worker = UploadWorker(creds, jobs)
+        self.rescan_btn.setEnabled(False)
+        target = TARGETS[max(0, self.target_combo.currentIndex())][1]
+        self.worker = UploadWorker(creds, jobs, target)
         self.worker.row_ready.connect(self._on_row)
-        self.worker.stage.connect(lambda s: self.stat.setText(s))
+        self.worker.stage.connect(self.summary.setText)
         self.worker.all_done.connect(self._on_done)
         self.worker.start()
 
-    def _on_row(self, i: int, account: str, name: str, result: str, reason: str):
-        QTimer.singleShot(0, lambda: self._apply_row(i, account, name, result, reason))
+    def _on_row(self, account: str, path: str, result: str, reason: str):
+        QTimer.singleShot(0, lambda: self._apply_row(account, path, result, reason))
 
-    def _apply_row(self, i: int, account: str, name: str, result: str, reason: str):
-        self._set_row(i, name, account, result, reason)
-        self.stat.setText(f"已处理 {i + 1}/{self.table.rowCount()}：{name}")
+    def _apply_row(self, account: str, path: str, result: str, reason: str):
+        index = self._row_index.get(path)
+        if index is not None:
+            self.status_list.set_row_state(
+                index, result, RESULT_TONE.get(result, "muted"), reason)
+        if result == "成功":
+            remove_pending(path)
 
-    def _on_done(self, ok: int, skipped: int, total: int, audit_ok: int, audit_manual: int):
-        QTimer.singleShot(0, lambda: self._apply_done(ok, skipped, total, audit_ok, audit_manual))
+    def _on_done(self, ok: int, skipped: int, total: int,
+                 audit_ok: int, audit_manual: int):
+        QTimer.singleShot(0, lambda: self._apply_done(ok, skipped, total,
+                                                      audit_ok, audit_manual))
 
-    def _apply_done(self, ok: int, skipped: int, total: int, audit_ok: int, audit_manual: int):
-        self.start_btn.setEnabled(True)
+    def _apply_done(self, ok: int, skipped: int, total: int,
+                    audit_ok: int, audit_manual: int):
+        """整批结束只发一条消息：成功份数在前，失败与跳过作为限定条件。"""
+        self.upload_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self._refresh_ws_note()
-        failed = total - ok - skipped
-        parts = [f"成功 {ok}"]
-        if audit_ok:
-            parts.append(f"审核自动通过 {audit_ok}")
+        self.rescan_btn.setEnabled(True)
+        message = f"{ok} 份档案已导入"
         if audit_manual:
-            parts.append(f"{audit_manual} 个需网页端手动审核（原因见表格说明）")
-        if skipped:
-            parts.append(f"跳过 {skipped}（未完成报到/线上已审核通过等，原因见表格）")
-        parts.append(f"失败 {failed}")
-        InfoBar.success("上传批次结束", "、".join(parts), duration=8000, parent=self)
+            message += f"，{audit_manual} 份需到网页端手动审核"
+        failed = total - ok - skipped
+        if failed or skipped:
+            extra = []
+            if failed:
+                extra.append(f"{failed} 份失败")
+            if skipped:
+                extra.append(f"{skipped} 份跳过")
+            message += "；" + "，".join(extra) + "，原因见列表"
+            InfoBar.warning("上传结束", message, duration=9000, parent=self)
+        else:
+            InfoBar.success("上传完成", message, duration=5000, parent=self)
+        self.refresh()

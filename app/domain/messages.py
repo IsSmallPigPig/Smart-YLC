@@ -134,3 +134,33 @@ def build_member_name_index(member_cache: dict, local_rows: list) -> dict[str, s
         if mob and mob not in index:
             index[mob] = getattr(r, "name", "")
     return index
+
+
+# 正文两种开头：
+#   「吴承轩向您所在团组织提交了团员报到申请」
+#   「团员李玥潼（中国共产主义青年团…团支部）向您所在团组织提交了…」
+# 第二种带「团员」前缀和括号里的支部全称，只按「XXX向」匹配会漏掉整批转接/资料提醒。
+_LEAD_NOISE_RE = re.compile(r"^(?:亲爱的)?(?:团员|同学)")
+_NAME_HEAD_RE = re.compile(
+    r"^([\u4e00-\u9fff·]{2,5})(?=[（(\s]|向您所在|向|提交|申请|进行)"
+)
+
+
+def extract_lead_name(content: str) -> str:
+    """从正文开头取姓名；取不到返回空串。"""
+    text = (content or "").strip()
+    text = _LEAD_NOISE_RE.sub("", text)
+    match = _NAME_HEAD_RE.match(text)
+    return match.group(1) if match else ""
+
+
+def guess_member_name(mobile: str, content: str, index: dict[str, str]) -> str:
+    """姓名优先取自正文开头，取不到再按消息里的手机号查名单。
+
+    正文里的姓名是发信时写死的，比名单匹配更准（同名同姓、手机号缺失都能覆盖）；
+    手机号索引只作为兜底。
+    """
+    name = extract_lead_name(content)
+    if name:
+        return name
+    return (index or {}).get(mobile or "", "")

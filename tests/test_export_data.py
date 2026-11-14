@@ -1,0 +1,170 @@
+"""导出数据：支部归类、五类明细、两种呈现、单表与 zip 落盘。"""
+
+from __future__ import annotations
+
+import os
+import zipfile
+
+import pytest
+
+from app.domain.check_rules import MemberRecord
+from app.services import export_data
+
+
+def member(mid, name, mobile, **kw):
+    base = dict(member_id=mid, name=name, mobile=mobile,
+                real_name_status="通过", income="职业为学生无收入",
+                report_data_status="审核通过", ebook_status="已上传",
+                unpaid_total=0.0, unpaid_months=0)
+    base.update(kw)
+    return base
+
+
+def cfg():
+    return {
+        "accounts": [
+            {"userName": "ssfz12407", "remark": "普通高中高三七班", "password": "x"},
+            {"userName": "ssfz2407", "remark": "初中部初三七班", "password": "y"},
+        ],
+        "memberCache": {
+            "ssfz12407": {
+                "branch": "普通高中高三七班",
+                "members": [
+                    member("1", "张三", "13800000001", org_name="高三七班"),
+                    member("2", "李四", "13800000002", real_name_status="未通过",
+                           income="", report_data_status="审核未通过",
+                           ebook_status="未上传", unpaid_total=12.0, unpaid_months=2),
+                    member("3", "王五", "13800000003",
+                           report_data_status="电子志愿书待上传", ebook_status="未上传"),
+                ],
+            },
+            "ssfz2407": {
+                "branch": "初中部初三七班",
+                "members": [member("4", "赵六", "13800000004")],
+            },
+        },
+        "orgStatsCache": {
+            "ssfz12407": {
+                "branch": "普通高中高三七班",
+                "total": 3, "uploaded": 1,
+                "by_kind": {"identity": 1, "report": 1, "archive": 1, "fees": 1},
+                "transfer": {"applied": 2, "total": 3, "succeeded": 1,
+                             "pending": 1, "returned": 0, "names": ["张三", "李四"]},
+                "error_rows": [],
+                "updatedAt": "2026-11-14T20:00:00",
+            },
+        },
+    }
+
+
+def test_dataset_groups_by_branch_and_splits_kinds():
+    data = export_data.load_dataset(cfg())
+    assert list(data) == ["普通高中高三七班", "初中部初三七班"]
+    a = data["普通高中高三七班"]
+    assert len(a.rows["members"]) == 3
+    assert [r["姓名"] for r in a.rows["identity"]] == ["李四"]
+    assert [r["姓名"] for r in a.rows["archive"]] == ["王五"]
+    assert [r["姓名"] for r in a.rows["fee"]] == ["李四"]
+    assert a.rows["fee"][0]["欠缴金额"] == 12.0
+    assert a.rows["fee"][0]["欠缴月数"] == 2
+    assert [r["姓名"] for r in a.rows["transfer"]] == ["张三", "李四"]
+    assert data["初中部初三七班"].rows["identity"] == []
+
+
+def test_split_mode_makes_one_sheet_per_content():
+    data = export_data.load_dataset(cfg())["普通高中高三七班"]
+    sheets = export_data.build_sheets(data, ["members", "fee"], "split")
+    assert list(sheets) == ["团员信息", "未缴名单"]
+    assert sheets["团员信息"][0] == export_data.HEADERS["members"]
+
+
+def test_single_mode_merges_everything_with_category_column():
+    data = export_data.load_dataset(cfg())["普通高中高三七班"]
+    sheets = export_data.build_sheets(
+        data, ["members", "fee", "identity"], "single")
+    assert list(sheets) == [export_data.SINGLE_SHEET]
+    headers, rows = sheets[export_data.SINGLE_SHEET]
+    assert headers == export_data.SINGLE_HEADERS
+    assert {r["类别"] for r in rows} == {"所属团员信息表", "未缴费团员名单", "信息错误名单"}
+    assert len(rows) == 3 + 1 + 1
+    fee_row = next(r for r in rows if r["类别"] == "未缴费团员名单")
+    assert "12.0 元" in fee_row["说明"] and "2 个月" in fee_row["说明"]
+
+
+def test_merged_export_writes_one_workbook(tmp_path):
+    target = str(tmp_path / "全部.xlsx")
+    result = export_data.run_export(
+        cfg(), ["members", "identity"], "split", "merged", target)
+    assert result == {"files": 1, "rows": 4 + 1, "branches": 2}
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(target)
+    assert wb.sheetnames == ["团员信息", "错误名单"]
+    ws = wb["错误名单"]
+    assert ws.max_row == 2  # 表头 + 李四
+    assert ws.cell(1, 1).value == "支部"
+    assert ws.cell(2, 1).value == "普通高中高三七班"
+
+
+def test_branch_export_writes_zip_with_one_xlsx_per_branch(tmp_path):
+    target = str(tmp_path / "分班.zip")
+    result = export_data.run_export(
+        cfg(), ["members"], "split", "branch", target)
+    assert result["files"] == 2 and result["branches"] == 2
+    with zipfile.ZipFile(target) as zf:
+        names = sorted(zf.namelist())
+    assert names == ["初中部初三七班.xlsx", "普通高中高三七班.xlsx"]
+
+
+def test_empty_selection_and_missing_cache_raise():
+    with pytest.raises(ValueError):
+        export_data.run_export(cfg(), [], "split", "merged", "/tmp/x.xlsx")
+    with pytest.raises(ValueError):
+        export_data.run_export(
+            {"accounts": [], "memberCache": {}, "orgStatsCache": {}},
+            ["members"], "split", "merged", "/tmp/x.xlsx")
+
+
+def test_stats_error_rows_used_when_member_cache_missing(tmp_path):
+    cfg_ = {
+        "accounts": [{"userName": "ssfz12407", "remark": "高三七班"}],
+        "memberCache": {},
+        "orgStatsCache": {
+            "ssfz12407": {
+                "branch": "高三七班",
+                "error_rows": [
+                    {"name": "李四", "mobile": "13800000002",
+                     "kinds": "信息错误、欠缴团费", "problems": "实名未通过", "branch": "高三七班"},
+                ],
+                "transfer": {"names": ["张三"]},
+            },
+        },
+    }
+    data = export_data.load_dataset(cfg_)["高三七班"]
+    assert [r["姓名"] for r in data.rows["identity"]] == ["李四"]
+    assert [r["姓名"] for r in data.rows["fee"]] == ["李四"]
+    assert [r["姓名"] for r in data.rows["transfer"]] == ["张三"]
+    assert data.rows["members"] == []
+
+
+def test_illegal_branch_name_is_sanitized(tmp_path):
+    cfg_ = {
+        "accounts": [{"userName": "ssfz1", "remark": '高三/七班:一'}],
+        "memberCache": {},
+        "orgStatsCache": {},
+    }
+    target = str(tmp_path / "分班.zip")
+    export_data.run_export(cfg_, ["members"], "split", "branch", target)
+    with zipfile.ZipFile(target) as zf:
+        assert zf.namelist() == ["高三_七班_一.xlsx"]
+
+
+def test_workbook_without_rows_still_has_a_sheet(tmp_path):
+    target = str(tmp_path / "空.xlsx")
+    export_data.save_workbook(target, {})
+    assert os.path.isfile(target)
+
+    from openpyxl import load_workbook
+
+    assert load_workbook(target).sheetnames == ["导出数据"]
