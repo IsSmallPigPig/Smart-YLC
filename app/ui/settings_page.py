@@ -23,6 +23,7 @@ from qfluentwidgets import (
     BodyLabel,
     CardWidget,
     ComboBox,
+    EditableComboBox,
     FluentIcon as FIF,
     InfoBar,
     LineEdit,
@@ -248,12 +249,14 @@ class SettingsPage(FluentPage):
         self.template_btn.clicked.connect(self._download_template)
         title_row.addWidget(self.template_btn)
         ros_lay.addLayout(title_row)
-        ros_lay.addWidget(note_label("xlsx 列：姓名 / 手机号码 / 班级（团支部编号，如 12407）；可分学期导入，批量上传按班级自动分流到对应账号"))
+        ros_lay.addWidget(note_label("xlsx 列：姓名 / 手机号码 / 班级（团支部编号，如 12407）；学期框可下拉选择，也可直接输入新学期名（如 2027春）建立，导入后按班级自动分流"))
         ros_lay.addSpacing(4)
         row3 = QHBoxLayout()
-        self.semester_combo = ComboBox()
+        self.semester_combo = EditableComboBox()
         self.semester_combo.addItems([guess_semester()])
         self.semester_combo.setCurrentText(guess_semester())
+        self.semester_combo.setPlaceholderText("选择或输入学期（如 2027春）")
+        self.semester_combo.currentTextChanged.connect(self._on_semester_changed)
         self.roster_edit = LineEdit()
         self.roster_edit.setPlaceholderText("选择名单文件")
         self.roster_btn = PushButton("导入到该学期")
@@ -350,6 +353,7 @@ class SettingsPage(FluentPage):
         self.semester_combo.addItems(sorted(self.rosters) or [guess_semester()])
         self.semester_combo.setCurrentText(guess_semester())
         self.semester_combo.blockSignals(False)
+        self.roster_edit.setText(self._roster_paths.get(self.semester_combo.currentText().strip(), ""))
         self._refresh_roster()
 
         # 工作区
@@ -677,7 +681,7 @@ class SettingsPage(FluentPage):
             return
         sem = self.semester_combo.currentText().strip()
         if not sem:
-            InfoBar.warning("学期为空", "先在学期框填写如 2026秋", duration=2500, parent=self)
+            InfoBar.warning("学期为空", "在学期框选择已有学期，或直接输入新学期名（如 2027春）", duration=3000, parent=self)
             return
         try:
             self.rosters[sem] = self._parse_roster(path)
@@ -685,10 +689,19 @@ class SettingsPage(FluentPage):
             InfoBar.error("名单导入失败", str(e), duration=5000, parent=self)
             return
         self._roster_paths[sem] = path
+        # 新学期名自动加入下拉列表（建立学期）
+        items = [self.semester_combo.itemText(i) for i in range(self.semester_combo.count())]
+        if sem not in items:
+            self.semester_combo.addItem(sem)
+        self.semester_combo.setCurrentText(sem)
         self.roster_edit.setText(path)
         self._refresh_roster()
         self._save_config()
         InfoBar.success(f"已导入 {sem}", f"{len(self.rosters[sem].rows)} 名团员", duration=3000, parent=self)
+
+    def _on_semester_changed(self, sem: str):
+        """切换学期时回显该学期已导入的名单文件。"""
+        self.roster_edit.setText(self._roster_paths.get(sem.strip(), ""))
 
     def _download_template(self):
         path, _ = QFileDialog.getSaveFileName(
