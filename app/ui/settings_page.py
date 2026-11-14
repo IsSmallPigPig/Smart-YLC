@@ -43,7 +43,7 @@ from qfluentwidgets import (
 )
 
 from app.ui import dialogs
-from app.ui.page import CallbackWorker, CollapsibleCard, FluentPage, SettingRow, note_label, sub_title
+from app.ui.page import CallbackWorker, CollapsibleCard, FluentPage, SettingRow, fit_table_columns, note_label, sub_title
 from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, describe_code, parse_class_code
 from app.domain.transfer import is_graduated
@@ -246,9 +246,7 @@ class SettingsPage(FluentPage):
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, header.ResizeMode.Fixed)  # 勾选框列固定宽
-        for col in (1, 2, 3, 4, 5, 6):  # 内容自适应，保证完整展示
-            header.setSectionResizeMode(col, header.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(7, header.ResizeMode.Stretch)
+        header.setSectionResizeMode(7, header.ResizeMode.Stretch)  # 其余列由 fit_table_columns 手动计算
         self.table.itemChanged.connect(self._on_item_changed)
         # 编辑器关闭时补刷被推迟的表格刷新（编辑期间测活结果回来不能立刻重建）
         self.table.itemDelegate().closeEditor.connect(self._on_editor_closed)
@@ -324,8 +322,6 @@ class SettingsPage(FluentPage):
         self.roster_table.setHorizontalHeaderLabels(["学期", "人数", "名单文件"])
         self.roster_table.setEditTriggers(self.roster_table.EditTrigger.NoEditTriggers)
         header = self.roster_table.horizontalHeader()
-        header.setSectionResizeMode(0, header.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, header.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, header.ResizeMode.Stretch)  # 文件列吃满剩余宽度
         self.roster_table.setColumnWidth(2, 320)  # stretch 前给个合理初始宽
         r.addWidget(self.roster_table)
@@ -696,13 +692,14 @@ class SettingsPage(FluentPage):
                 (1, str(len(self.rosters[sem].rows))),
                 (2, path or "（未导入文件）"),
             ):
-                self.roster_table.setItem(i, col, QTableWidgetItem(text))
-                self.roster_table.item(i, col).setFlags(
-                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                item = QTableWidgetItem(text)
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                self.roster_table.setItem(i, col, item)
         self.roster_table.blockSignals(False)
-        # 高度随行数收缩，不留大片空白
+        # 高度随行数收缩，不留大片空白；列宽手动计算
         self.roster_table.setFixedHeight(
             min(max(len(self.rosters), 1), 8) * 36 + 42)
+        fit_table_columns(self.roster_table, stretch_last=True)
 
     def _delete_selected_roster(self):
         row = self.roster_table.currentRow()
@@ -1059,7 +1056,9 @@ class SettingsPage(FluentPage):
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.accounts))
         for i, acc in enumerate(self.accounts):
-            # 勾选框列
+            # 所有 item 都在独立状态配置完（flags/text/color）再 setItem——
+            # setItem 之后的 setFlags 会触发 dataChanged → 列宽重算 →
+            # delegate Python override，PySide6 6.12 下会 shiboken 崩溃
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
             chk.setCheckState(Qt.CheckState.Unchecked)
@@ -1071,21 +1070,25 @@ class SettingsPage(FluentPage):
             graduated = is_graduated(acc)
             gy = acc.get("graduateYear")
             status_text = f"{gy} 届 · 毕业应转出" if graduated else ("在读" if gy else "—")
-            self.table.setItem(i, 5, QTableWidgetItem(status_text))
-            self.table.item(i, 5).setFlags(self.READONLY_FLAGS)
+            status_item = QTableWidgetItem(status_text)
+            status_item.setFlags(self.READONLY_FLAGS)
             if graduated:
-                self.table.item(i, 5).setForeground(QColor("#ef6c00"))
+                status_item.setForeground(QColor("#ef6c00"))
+            self.table.setItem(i, 5, status_item)
             h = acc.get("health") or {}
             status, msg = h.get("status", "unknown"), h.get("message", "")
             label = HEALTH_LABEL.get(status, status) + (f"：{msg}" if msg and status != "ok" else "")
-            self.table.setItem(i, 6, QTableWidgetItem(label))
-            self.table.item(i, 6).setFlags(self.READONLY_FLAGS)
-            self.table.item(i, 6).setForeground(QColor(HEALTH_COLOR.get(status, "#9e9e9e")))
+            health_item = QTableWidgetItem(label)
+            health_item.setFlags(self.READONLY_FLAGS)
+            health_item.setForeground(QColor(HEALTH_COLOR.get(status, "#9e9e9e")))
+            self.table.setItem(i, 6, health_item)
             checked = h.get("checkedAt", "")
-            self.table.setItem(i, 7, QTableWidgetItem(checked.replace("T", " ")[:19] if checked else "—"))
-            self.table.item(i, 7).setFlags(self.READONLY_FLAGS)
+            check_item = QTableWidgetItem(checked.replace("T", " ")[:19] if checked else "—")
+            check_item.setFlags(self.READONLY_FLAGS)
+            self.table.setItem(i, 7, check_item)
         self.table.blockSignals(False)
         self._apply_row_visibility()  # 应用当前团支部筛选
+        fit_table_columns(self.table, stretch_last=True, skip_cols={0})
         # 当前使用下拉
         self.active_combo.blockSignals(True)
         self.active_combo.clear()
@@ -1213,7 +1216,15 @@ class SettingsPage(FluentPage):
                 "checkedAt": datetime.now().isoformat(timespec="seconds"),
             }
         self._save_config()
-        self._refresh_table()
+        # 测活结果逐条回 GUI；50ms 防抖合并为一次表格刷新，不在 queued
+        # 信号栈内直接重建（全表重建会触发 delegate override，6.12 下崩溃）
+        if getattr(self, "_health_refresh_timer", None) is None:
+            t = QTimer(self)
+            t.setSingleShot(True)
+            t.setInterval(50)
+            t.timeout.connect(self._refresh_table)
+            self._health_refresh_timer = t
+        self._health_refresh_timer.start()
 
     # ---------- 名单（分学期 + 模板） ----------
 
@@ -1223,7 +1234,12 @@ class SettingsPage(FluentPage):
         return import_roster(path)
 
     def _on_rosters_parsed(self, results: list):
-        """启动名单后台解析完成：落盘内存、刷新列表与总表。"""
+        """启动名单后台解析完成：数据落内存后用 0ms 定时器应用——
+        把表格变更移出 queued 信号处理栈（worker 信号直调中重建 items
+        会在 6.12 下触发 delegate override 崩溃）。"""
+        QTimer.singleShot(0, lambda: self._apply_rosters_parsed(results))
+
+    def _apply_rosters_parsed(self, results: list):
         for sem, path, roster, err in results:
             if err:
                 InfoBar.warning(f"{sem} 名单加载失败", err, duration=5000, parent=self)

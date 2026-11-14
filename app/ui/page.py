@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QTransform
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap, QTransform
 from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
 from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, ScrollArea, StrongBodyLabel, TransparentToolButton, qconfig
@@ -117,6 +117,38 @@ class CollapsibleCard(CardWidget):
         self.toggle_btn.setIcon(icon)
 
 
+def fit_table_columns(table: QTableView, stretch_last: bool = False,
+                      skip_cols: set | None = None, max_col_width: int = 420):
+    """按内容手动计算列宽（视觉效果同 ResizeToContents），但只在调用时算一次。
+
+    不用 QHeaderView.ResizeToContents：它会在每次数据变化时逐格调用
+    delegate.sizeHint（Python override）——PySide6 6.12 下在 queued 信号处理
+    栈内 + 后台线程活跃时会触发 shiboken 空指针崩溃
+    （QTableView::sizeHintForColumn → PepException_GetArgs，见 17:18/17:19 两份崩溃报告）。
+    数据填充完成后调用一次即可。"""
+    from PySide6.QtWidgets import QTableWidgetItem
+
+    fm = QFontMetrics(table.font())
+    header = table.horizontalHeader()
+    skip = skip_cols or set()
+    cols = table.columnCount()
+    for col in range(cols):
+        mode = header.sectionResizeMode(col)
+        if mode in (QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch):
+            continue
+        item = table.horizontalHeaderItem(col)
+        w = fm.horizontalAdvance(item.text()) + 28 if item else 70
+        for row in range(table.rowCount()):
+            it = table.item(row, col)
+            if it is not None:
+                w = max(w, fm.horizontalAdvance(it.text()) + 22)
+        table.setColumnWidth(col, max(min(w, max_col_width), 70))
+    if stretch_last and cols:
+        header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.Stretch)
+    elif cols:
+        header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.Interactive)
+
+
 class CallbackWorker(QThread):
     """把一个函数放到后台线程跑，结果经信号回 GUI 线程。
 
@@ -161,12 +193,9 @@ class FluentPage(ScrollArea):
     def add_table(self, table, stretch: int = 0, min_height: int = 180):
         """表格在滚动容器里需要保底高度，窗口缩小时不会被压扁。
 
-        表格列宽按内容自适应：任何文字都完整展示，不因默认宽度截断；
-        内容总宽超出视口时出横向滚动条。普通容器（无表头）只做高度保底。"""
+        列宽不在此设置（不用 ResizeToContents——它会在数据变化时调用
+        delegate.sizeHint Python override，PySide6 6.12 下会崩溃，见
+        fit_table_columns）；各页数据填充后调用 fit_table_columns 手动算宽。"""
         table.setMinimumHeight(min_height)
-        if isinstance(table, QTableView):
-            header = table.horizontalHeader()
-            header.setStretchLastSection(False)
-            header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.vBoxLayout.addWidget(table, stretch)
         return table
