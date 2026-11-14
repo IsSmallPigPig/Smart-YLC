@@ -184,7 +184,8 @@ class HomePage(FluentPage):
 
         body = QWidget()
         body_lay = QVBoxLayout(body)
-        body_lay.setContentsMargins(36, 0, 36, 0)
+        # 图标左边缘对齐到内容区左侧（侧边栏右缘），其余文字与卡片仍缩进 36px
+        body_lay.setContentsMargins(0, 0, 0, 0)
         body_lay.setSpacing(8)
         body_lay.addStretch(2)
         from PySide6.QtWidgets import QLabel
@@ -194,7 +195,7 @@ class HomePage(FluentPage):
         logo = QLabel(body)
         logo.setPixmap(app_pixmap(64))
         logo.setFixedSize(64, 64)
-        body_lay.addWidget(logo)
+        body_lay.addWidget(logo, 0, Qt.AlignmentFlag.AlignLeft)
         body_lay.addSpacing(6)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
@@ -205,8 +206,14 @@ class HomePage(FluentPage):
         greet_lay.setSpacing(0)
         greet_lay.addWidget(self.hello_label)
         greet_lay.addWidget(self.title_label)
-        body_lay.addWidget(greet)
-        body_lay.addSpacing(12)
+
+        # 图标以外的整组内容：保留原来的 36px 左右缩进，垂直间距与原来一致
+        inner = QWidget()
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setContentsMargins(36, 0, 36, 0)
+        inner_lay.setSpacing(8)
+        inner_lay.addWidget(greet)
+        inner_lay.addSpacing(12)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
@@ -234,10 +241,11 @@ class HomePage(FluentPage):
             bars.addWidget(bar)
         chart_lay.addLayout(bars, 1)
         grid.addWidget(chart, 1, 0, 1, len(TILES))
-        body_lay.addLayout(grid)
+        inner_lay.addLayout(grid)
 
         self.summary = note_label("")
-        body_lay.addWidget(self.summary)
+        inner_lay.addWidget(self.summary)
+        body_lay.addWidget(inner)
         body_lay.addStretch(1)
 
         row = QHBoxLayout()
