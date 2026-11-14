@@ -440,7 +440,7 @@ class SettingsPage(FluentPage):
         auto_lay.setSpacing(8)
         auto_lay.addWidget(self.autostart_btn)
         auto_lay.addWidget(self.autostart_on_btn)
-        row(ws_card, SettingRow("开机自启", desc="登录后自动在托盘后台运行",
+        row(ws_card, SettingRow("开机自启",
                                 icon=FIF.POWER_BUTTON,
                                 control=controls(self.autostart_box),
                                 separator=False))
@@ -568,7 +568,7 @@ class SettingsPage(FluentPage):
 
     def _update_rule_preview(self):
         count = len(self.org_rule().effective_patterns())
-        self.rule_row.set_desc(f"从账号里识别学部、年级与班级，当前 {count} 条规则")
+        self.rule_row.set_desc(f"当前 {count} 条规则")
 
     def _open_rule_dialog(self):
         dlg = RuleDialog(self.org_rule(), self.window())
@@ -615,6 +615,11 @@ class SettingsPage(FluentPage):
         # 拿最新配置再改：工作线程刚写入的 memberCache/messagesCache 不会被旧快照覆盖
         store.update(_write)
         self._client = None
+        # 账号改名/改密码/删除后，已经打开的网页标签跟着更新并重登
+        window = getattr(self, "window_ref", None)
+        sync = getattr(window, "sync_browser_accounts", None)
+        if sync is not None:
+            sync()
 
     def _refresh_roster(self):
         """合并各份名单为总表（供检查/上传使用），刷新名单管理列表。"""
@@ -624,9 +629,7 @@ class SettingsPage(FluentPage):
         self.roster = merged if merged.rows else None
         if getattr(self, "roster_row", None) is not None:
             n = len(merged.rows)
-            self.roster_row.set_desc(
-                f"已导入 {n} 名团员，导入姓名与班级供检查与上传匹配" if n
-                else "导入姓名与班级，供检查与上传匹配")
+            self.roster_row.set_desc(f"已导入 {n} 名团员" if n else "")
         self._refresh_roster_table()
         self.roster_changed.emit(self.roster)
 
@@ -933,7 +936,6 @@ class SettingsPage(FluentPage):
         tl = QVBoxLayout(test_box)
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(4)
-        tl.addWidget(note_label("点击下方按钮立即发一条测试通知，确认系统通知通道是否通畅"))
         test_btn = PushButton(FIF.SEND, "发送测试通知")
         test_btn.clicked.connect(lambda: self._test_notify(test_btn))
         tl.addWidget(test_btn)
@@ -1655,8 +1657,7 @@ class SettingsPage(FluentPage):
         self.sec_table.blockSignals(False)
         self.sec_table.setFixedHeight(min(max(len(rows), 1), 8) * 36 + 42)
         fit_table_columns(self.sec_table, stretch_last=True)
-        self.sec_row.set_desc(f"支部与团支书姓名，用于核对与通知；已登记 {len(rows)} 个支部"
-                              if rows else "支部与团支书姓名，用于核对与通知；尚未导入")
+        self.sec_row.set_desc(f"已登记 {len(rows)} 个支部" if rows else "")
 
     def _delete_selected_secretaries(self):
         """删除选中行的团支书记录（与删除所选学期名单同款交互）。"""
