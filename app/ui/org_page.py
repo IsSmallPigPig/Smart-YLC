@@ -45,7 +45,7 @@ STATUS_LABEL = {
     "empty": "未配置",
 }
 
-KIND_COLOR = {"identity": "#ef6c00", "report": "#c62828", "fees": "#8e24aa"}
+KIND_COLOR = {"identity": "#ef6c00", "report": "#c62828", "archive": "#00838f", "fees": "#8e24aa"}
 TRANSFER_COLOR = "#1565c0"
 
 
@@ -120,8 +120,7 @@ class OrgPage(FluentPage):
         self.worker: OrgWorker | None = None
         self._total = 0
         self._uploaded = 0
-        self._by_kind = {"identity": 0, "report": 0, "fees": 0}
-        self._members_max = 10
+        self._by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
         self._error_rows: list = []
         self._transfer_applied = 0
         self._snapshot = None  # 刷新前的展示快照（整轮失败时回滚）
@@ -136,7 +135,8 @@ class OrgPage(FluentPage):
         card_lay.setContentsMargins(20, 16, 20, 16)
         card_lay.addWidget(section_title("组织状况总览"))
         card_lay.addWidget(note_label(
-            "已上传依据「电子志愿书状态」；异常只统计错误级（职业未填等仅警告不计入）；"
+            "已上传依据「电子志愿书状态」；没有档案 = 报到资料状态为「电子志愿书待上传」（人已报到，缺志愿书档案）；"
+            "异常只统计错误级（职业未填等仅警告不计入）；"
             "转接申请 = 已发起组织关系转接的团员 / 在册总数，按人去重"))
         card_lay.addSpacing(4)
 
@@ -147,7 +147,7 @@ class OrgPage(FluentPage):
         bars = QVBoxLayout()
         bars.setSpacing(4)
         self.bars: dict[str, BarRowWidget] = {}
-        for kind in ("identity", "report", "fees"):
+        for kind in ("identity", "report", "archive", "fees"):
             bar = BarRowWidget(KIND_LABEL[kind], KIND_COLOR[kind])
             self.bars[kind] = bar
             bars.addWidget(bar)
@@ -186,9 +186,10 @@ class OrgPage(FluentPage):
         self.donut.set_value(uploaded, total)
 
     def _update_bars(self):
+        # 分母 = 累计获取到的团员总数（与圆环一致）；全部失败时 total=0，set_value 内部抬到 1
         for kind, bar in self.bars.items():
-            bar.set_value(self._by_kind.get(kind, 0), self._members_max)
-        self.transfer_bar.set_value(self._transfer_applied, self._members_max)
+            bar.set_value(self._by_kind.get(kind, 0), self._total)
+        self.transfer_bar.set_value(self._transfer_applied, self._total)
 
     def _start(self):
         accounts = self.window_ref.settings_page.accounts
@@ -199,11 +200,10 @@ class OrgPage(FluentPage):
         # 保留现有展示：归零累加器但不重绘，新账号结果陆续抵达时逐个替换；
         # 整轮一无所获（全失败/全跳过）时回滚快照，组织状况数据不丢
         self._snapshot = (
-            self._total, self._uploaded, dict(self._by_kind), self._members_max,
+            self._total, self._uploaded, dict(self._by_kind),
             self._transfer_applied, self.transfer_note.text(), list(self._error_rows))
         self._total = self._uploaded = 0
-        self._by_kind = {"identity": 0, "report": 0, "fees": 0}
-        self._members_max = 10
+        self._by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
         self._transfer_applied = 0
         self._error_rows = []
         self._first_result = True
@@ -217,7 +217,7 @@ class OrgPage(FluentPage):
         self.start_btn.setEnabled(True)
         if self._ok_accounts == 0:
             # 这一轮没有拿到任何账号数据：恢复刷新前的组织状况
-            (self._total, self._uploaded, byk, self._members_max,
+            (self._total, self._uploaded, byk,
              self._transfer_applied, note, rows) = self._snapshot
             self._by_kind = byk
             self._error_rows = rows
@@ -243,8 +243,7 @@ class OrgPage(FluentPage):
         from app.domain.org_manage import record_from_dict
 
         total = uploaded = 0
-        by_kind = {"identity": 0, "report": 0, "fees": 0}
-        members_max = 10
+        by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
         error_rows: list = []
         id_tpl, rep_tpl = default_identity_template(), default_report_template()
         for user, blob in cache.items():
@@ -258,13 +257,11 @@ class OrgPage(FluentPage):
             s = summarize_members(members, results)
             total += s.total
             uploaded += s.uploaded
-            members_max = max(members_max, s.total)
             for k, v in dict(s.by_kind).items():
                 by_kind[k] = by_kind.get(k, 0) + v
             error_rows.extend(build_error_rows(results, branch))
         self._total, self._uploaded = total, uploaded
         self._by_kind = by_kind
-        self._members_max = members_max
         self._error_rows = error_rows
         self._set_ratio(total, uploaded)
         self._update_bars()
@@ -285,8 +282,6 @@ class OrgPage(FluentPage):
         self._total += total
         self._uploaded += uploaded
         self._set_ratio(self._total, self._uploaded)
-        if total:
-            self._members_max = max(self._members_max, total)
         for k, v in (by_kind or {}).items():
             self._by_kind[k] = self._by_kind.get(k, 0) + v
         if transfer:

@@ -83,3 +83,25 @@ def test_apply_page_verdict_none_keeps_ok():
 
 def analyze_ok() -> NameAnalysis:
     return analyze_file_name("张三+13800000000+入团志愿书.pdf")
+
+
+# ---------- 没有档案（auditStatus 6/7）分类 ----------
+
+def test_error_rows_archive_kind_for_no_file_status():
+    """报到资料状态为「电子志愿书待上传/已报到,电子志愿书未上传」→ 归「没有档案」，不再标「没有报道」。"""
+    from app.domain.org_stats import KIND_LABEL, report_kind
+    m = _member(report_data_status="电子志愿书待上传", ebook_status="未上传")
+    assert report_kind(m) == "archive"
+    m6 = _member(report_data_status="已报到,电子志愿书未上传")
+    assert report_kind(m6) == "archive"
+    results = [CheckResult("report", m, True, [FieldDiff(
+        "reportDataStatus", "报到资料状态", "审核通过", "电子志愿书待上传",
+        "报到资料状态 应为「审核通过」，实际为「电子志愿书待上传」", "error")])]
+    rows = build_error_rows(results, "12407")
+    assert rows[0].kinds == KIND_LABEL["archive"] == "没有档案"
+
+
+def test_error_rows_report_kind_for_truly_unreported():
+    from app.domain.org_stats import report_kind
+    m = _member(report_data_status="报到待审核")
+    assert report_kind(m) == "report"

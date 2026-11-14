@@ -257,14 +257,18 @@ def build_daily_summary(
     cross: RosterCrossCheck,
 ) -> str:
     """每日通知用的摘要（纯函数，可单测）。"""
-    by_kind = {"identity": 0, "report": 0, "fees": 0}
+    from app.domain.org_stats import report_kind
+
+    by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
     for r in results:
-        by_kind[r.kind] = by_kind.get(r.kind, 0) + 1
+        kind = report_kind(r.member) if r.kind == "report" else r.kind
+        by_kind[kind] = by_kind.get(kind, 0) + 1
     unpaid_amount = sum(r.amount for r in results if r.kind == "fees")
     parts = [
         f"在册团员 {len(members)} 人",
         f"报到身份异常 {by_kind['identity']}",
-        f"报到情况异常 {by_kind['report']}",
+        f"没有报道 {by_kind['report']}",
+        f"没有档案 {by_kind['archive']}",
         f"欠缴 {by_kind['fees']} 人（{unpaid_amount:g} 元）" if by_kind["fees"] else "团费无欠缴",
     ]
     if cross.detected:

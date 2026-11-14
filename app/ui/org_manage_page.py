@@ -49,8 +49,8 @@ from app.ui.check_page import default_identity_template, default_report_template
 from app.ui.page import FluentPage, note_label, section_title, theme_font
 
 SOURCE_COLOR = {"local": "#6b7280", "system": "#1565c0", "both": "#2e7d32"}
-KIND_COLOR = {"identity": "#ef6c00", "report": "#c62828", "fees": "#8e24aa"}
-KIND_TEXT = {"identity": "信息错误", "report": "没有报道", "fees": "欠缴团费"}
+KIND_COLOR = {"identity": "#ef6c00", "report": "#c62828", "archive": "#00838f", "fees": "#8e24aa"}
+KIND_TEXT = {"identity": "信息错误", "report": "没有报道", "archive": "没有档案", "fees": "欠缴团费"}
 
 
 def _rec_from_dict(d: dict) -> MemberRecord:
@@ -243,7 +243,7 @@ class OrgManagePage(FluentPage):
 
         异常只计错误级（职业未填等警告不算）；欠缴 = 未交总额>0 或未交月份>0。"""
         recs = [m.system for m in b.members if m.system is not None]
-        by_kind = {"identity": 0, "report": 0, "fees": 0}
+        by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
         unpaid_amount = 0.0
         abnormal_ids: set[str] = set()
         if recs:
@@ -252,13 +252,15 @@ class OrgManagePage(FluentPage):
                 + build_report_results(recs, default_report_template())
                 + build_fee_results(recs)
             )
+            from app.domain.org_stats import report_kind
+
             for r in results:
                 if r.kind == "fees":
                     by_kind["fees"] += 1
                     unpaid_amount += r.amount
                     abnormal_ids.add(r.member.member_id)
                 elif r.is_error:
-                    by_kind[r.kind] += 1
+                    by_kind[report_kind(r.member) if r.kind == "report" else r.kind] += 1
                     abnormal_ids.add(r.member.member_id)
         return {
             "total": len(b.members),
@@ -396,7 +398,7 @@ class OrgManagePage(FluentPage):
         sv.addLayout(nums)
         sv.addSpacing(6)
         max_n = max(st["total"], 1)
-        for kind in ("identity", "report", "fees"):
+        for kind in ("identity", "report", "archive", "fees"):
             bar = BarRowWidget(KIND_TEXT[kind], KIND_COLOR[kind])
             bar.set_value(st["by_kind"][kind], max_n)
             sv.addWidget(bar)

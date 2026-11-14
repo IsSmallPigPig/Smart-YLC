@@ -149,23 +149,33 @@ class WorkspaceWorker(QThread):
 
 
 class WebOpenWorker(QThread):
-    """登录当前账号后携带 cookie 在浏览器打开站点（网络操作放线程，避免卡 UI）。"""
+    """逐账号在指定浏览器打开网页端（网络与 AppleScript 操作放线程，避免卡 UI）。
+
+    targets: [(userName, password, browser), …]；浏览器由调用方按账号分配
+    （Arc / Safari 的 Cookie 互相独立，各保持一个账号登录）。"""
 
     done = Signal(bool, str)  # ok, message
 
-    def __init__(self, user: str, pwd: str, parent=None):
+    def __init__(self, targets: list[tuple[str, str, str]], parent=None):
         super().__init__(parent)
-        self.user, self.pwd = user, pwd
+        self.targets = targets
 
     def run(self):
-        try:
-            from app.services import webopen
+        from app.services import webopen
 
-            client = SiteClient(self.user, self.pwd)
-            ok, msg = webopen.open_logged_in(client)
-            self.done.emit(ok, msg)
-        except Exception as e:
-            self.done.emit(False, f"打开失败：{e}")
+        oks: list[str] = []
+        fails: list[str] = []
+        for user, pwd, browser in self.targets:
+            try:
+                client = SiteClient(user, pwd)
+                ok, msg = webopen.open_logged_in(client, browser)
+            except Exception as e:
+                ok, msg = False, f"打开失败：{e}"
+            (oks if ok else fails).append(f"{user}（{browser}）" if ok else f"{user}：{msg}")
+        if not fails:
+            self.done.emit(True, "；".join(oks))
+        else:
+            self.done.emit(False, ("；".join(oks) + "；" if oks else "") + "失败：" + "；".join(fails))
 
 
 class SettingsPage(FluentPage):
@@ -201,7 +211,7 @@ class SettingsPage(FluentPage):
         self.active_combo = ComboBox()
         self.active_combo.currentTextChanged.connect(self._on_active_changed)
         self.web_btn = PushButton(FIF.GLOBE, "打开网页端")
-        self.web_btn.setToolTip("在浏览器打开当前账号的网页端（携带登录态）")
+        self.web_btn.setToolTip("打开勾选账号的网页端（未勾选时打开当前账号）；\n账号按 Arc / Safari 分配，两浏览器各保持一个账号登录")
         self.web_btn.clicked.connect(self._open_web)
         self.health_btn = PushButton(FIF.SYNC, "全部测活")
         self.health_btn.clicked.connect(self.start_health_check)
@@ -1182,7 +1192,13 @@ class SettingsPage(FluentPage):
     # ---------- 浏览器打开（携带登录态） ----------
 
     def _open_web(self):
-        """优先打开勾选行的第一个账号，否则打开当前使用账号。"""
+        """打开勾选账号的网页端（每个勾选账号一个标签页），未勾选时打开当前使用账号。
+
+        浏览器登录位有限：Arc 与 Safari 的 Cookie 互相独立，各自同时只能保持
+        一个账号登录，多开的账号会顶掉先打开账号的 SESSION（登录失效）。
+        账号按 Arc → Safari 轮流分配；超过浏览器数的账号不打开并明确告知。"""
+        from app.services import webopen
+
         if not self.accounts:
             InfoBar.warning("没有账号", "请先添加团支部账号", duration=2500, parent=self)
             return
@@ -1191,15 +1207,25 @@ class SettingsPage(FluentPage):
         checked = [i for i in range(self.table.rowCount())
                    if not self.table.isRowHidden(i)
                    and self.table.item(i, 0) and self.table.item(i, 0).checkState() == Qt.CheckState.Checked]
-        idx = checked[0] if checked else next(
-            (i for i, a in enumerate(self.accounts) if a["userName"] == self.active_user), 0)
-        if not (0 <= idx < len(self.accounts)):
-            return
-        acc = self.accounts[idx]
+        if checked:
+            targets = [self.accounts[i] for i in checked if 0 <= i < len(self.accounts)]
+        else:
+            idx = next((i for i, a in enumerate(self.accounts) if a["userName"] == self.active_user), 0)
+            targets = [self.accounts[idx]]
+        browsers = webopen.available_browsers()
+        overflow = [a["userName"] for a in targets[len(browsers):]]
+        targets = targets[:len(browsers)]
         self.web_btn.setEnabled(False)
-        self._web_worker = WebOpenWorker(acc["userName"], acc["password"], self)
+        self._web_worker = WebOpenWorker(
+            [(a["userName"], a["password"], browsers[i]) for i, a in enumerate(targets)], self)
         self._web_worker.done.connect(self._on_web_opened)
         self._web_worker.start()
+        if overflow:
+            InfoBar.warning(
+                "部分账号未打开",
+                f"{'、'.join(overflow)} 未打开：本机 {('、'.join(browsers))} 各只能保持一个账号的登录态"
+                f"（共 {len(browsers)} 个），多开会使已打开账号登录失效；请处理完再分批打开",
+                duration=10000, parent=self)
 
     def _on_web_opened(self, ok: bool, msg: str):
         self.web_btn.setEnabled(True)
