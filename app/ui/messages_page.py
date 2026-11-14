@@ -42,7 +42,7 @@ from app.domain.messages import (
     fetch_all_messages,
     guess_member_name,
 )
-from app.domain.account_health import excluded_note, split_accounts
+from app.domain.account_health import excluded_summary, split_accounts
 from app.services import login_gate, store
 from app.services.api import SiteClient
 from app.ui.page import (
@@ -551,12 +551,12 @@ class MessagesPage(FluentPage):
         usable, excluded = split_accounts(self.window_ref.settings_page.accounts)
         accounts = usable
         if not accounts:
-            hint = f"其余账号均被标记为异常（{excluded_note(excluded)}）" if excluded else "先在系统配置添加团支部账号"
+            hint = f"{len(excluded)} 个账号均被标记为异常" if excluded else "先在系统配置添加团支部账号"
             InfoBar.warning("没有可拉取的账号", hint, duration=6000, parent=self)
             return
         if excluded and not silent:
             InfoBar.warning("跳过异常账号",
-                f"{excluded_note(excluded)} 不拉取站内信；测活恢复正常后自动纳入",
+                f"{excluded_summary(excluded)}，本轮不拉取站内信；测活恢复正常后自动纳入",
                 duration=6000, parent=self)
         if self.worker is not None and self.worker.isRunning():
             return

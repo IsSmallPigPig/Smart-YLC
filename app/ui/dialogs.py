@@ -14,7 +14,23 @@ from __future__ import annotations
 from qfluentwidgets import MessageBox, MessageBoxBase
 
 
+def strip_center_border(dialog) -> None:
+    """去掉 qfluentwidgets 给弹窗中心控件写死的 1px 描边。
+
+    深色主题的 QSS 是 `#centerWidget { border: 1px solid rgb(58,58,58) }`，
+    描在 rgb(43,43,43) 的底上；弹窗浮在更暗的背景前时，这一圈就是显眼的白边。
+    弹窗本身已有圆角和底色，这圈描边是多余的。只覆盖 border，底色和圆角仍用原规则。
+    """
+    center = getattr(dialog, "widget", None)
+    if center is not None:
+        center.setStyleSheet("QWidget#centerWidget { border: none; }")
+
+
 class FluentMessageBox(MessageBox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        strip_center_border(self)
+
     def done(self, code: int) -> None:
         """跳过 MaskDialogBase 渐出动画：QGraphicsOpacityEffect finished 在部分
         环境不触发会让弹窗永远关不掉。"""
@@ -25,6 +41,10 @@ class FluentMessageBox(MessageBox):
 
 class FluentPanelDialog(MessageBoxBase):
     """fluent 面板弹层：往 self.viewLayout 里放自定义内容（表格/树等）。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        strip_center_border(self)
 
     def done(self, code: int) -> None:
         from PySide6.QtWidgets import QDialog

@@ -209,11 +209,13 @@ class HomePage(FluentPage):
         inner_lay.setSpacing(8)
         from PySide6.QtWidgets import QLabel
 
-        from app.ui.brand import app_pixmap
+        from app.ui.brand import app_tile_pixmap
 
         logo = QLabel(inner)
-        logo.setPixmap(app_pixmap(80))
-        logo.setFixedSize(80, 80)
+        # 用裁掉留白的底板（64 ≈ 原来 80px 位图里那 63px 可见方块），
+        # 方块左缘才能和下面的欢迎文字落在同一条 36px 缩进线上
+        logo.setPixmap(app_tile_pixmap(64))
+        logo.setFixedSize(64, 64)
         inner_lay.addWidget(logo)
         inner_lay.addSpacing(4)
         inner_lay.addWidget(greet)
@@ -266,7 +268,22 @@ class HomePage(FluentPage):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._align_hero_ink()
         self.refresh_stats()
+
+    def _align_hero_ink(self):
+        """把「团委管理员」的墨迹左缘对齐到「欢迎，」那一行。
+
+        两个标签的控件左缘相同，但 CJK 字形的左侧留白随字号变大（实测 2px vs 7px），
+        大字号那行的墨迹就整体右移。字号要等控件 polish 之后才定型（构造时只拿到
+        一半大），所以放在 showEvent 里按当时的字体度量重算；减 1 是因为度量把抗锯齿
+        边缘也算进去了，直接减会过冲到控件左缘外侧。
+        """
+        gap = (self.title_label.fontMetrics().boundingRect(self.title_label.text()).left()
+               - self.hello_label.fontMetrics().boundingRect(self.hello_label.text()).left())
+        nudge = max(0, gap - 1)
+        if self.title_label.contentsMargins().left() != -nudge:
+            self.title_label.setContentsMargins(-nudge, 0, 0, 0)
 
     def refresh_stats(self, animate: bool = True, show_loading: bool = True):
         """概览统计放到后台线程。

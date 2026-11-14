@@ -74,6 +74,27 @@ def test_settings_page_builds(app, isolated_store):
     assert page.workspace_row.desc_label.text().startswith("先选择工作目录")
 
 
+def test_load_config_keeps_workspace_and_rosters(app, isolated_store):
+    """载入配置不能把还没读进来的项回写成空值。
+
+    _load_config 里的 setCurrentIndex 会触发 currentIndexChanged →
+    _on_notify_mode_changed → _save_config，而那一刻名单和工作区还没载入。
+    没有 _loading 闸门时，每次启动都会把磁盘上的 rosters / workspaceDir 抹掉。"""
+    store = isolated_store
+    store.update(lambda c: (
+        c.__setitem__("workspaceDir", "/tmp/ws"),
+        c.__setitem__("rosters", {"2026秋": "/tmp/r.xlsx"}),
+    ))
+
+    from app.ui.settings_page import SettingsPage
+
+    SettingsPage()
+
+    cfg = store.load()
+    assert cfg["workspaceDir"] == "/tmp/ws"
+    assert cfg["rosters"] == {"2026秋": "/tmp/r.xlsx"}
+
+
 def test_messages_page_builds_and_splits_by_tab(app, isolated_store):
     from app.ui.messages_page import MessagesPage
 

@@ -30,7 +30,7 @@ from app.domain.check_rules import (
     build_report_results,
 )
 from app.domain.org_stats import KIND_LABEL, ErrorMemberRow, build_error_rows, summarize_members
-from app.domain.account_health import excluded_note, split_accounts
+from app.domain.account_health import excluded_summary, split_accounts
 from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services.api import SiteClient
 from app.ui.charts import BarRowWidget, ProgressDonut
@@ -139,6 +139,10 @@ class OrgPage(FluentPage):
         super().__init__("page-org", parent)
         self.window_ref = window
         self.worker: OrgWorker | None = None
+        self._progress = None      # 统计期间的右下角浮动进度
+        self._progress_done = 0
+        self._progress_total = 0
+        self._stopped = False
         self._total = 0
         self._uploaded = 0
         self._by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
@@ -221,12 +225,12 @@ class OrgPage(FluentPage):
         usable, excluded = split_accounts(self.window_ref.settings_page.accounts)
         accounts = usable
         if not accounts:
-            hint = f"其余账号均被标记为异常（{excluded_note(excluded)}）" if excluded else "先在系统配置添加团支部账号"
+            hint = f"{len(excluded)} 个账号均被标记为异常" if excluded else "先在系统配置添加团支部账号"
             InfoBar.warning("没有可统计的账号", hint, duration=6000, parent=self)
             return
         if excluded:
             InfoBar.warning("跳过异常账号",
-                f"{excluded_note(excluded)} 不参与统计；测活恢复正常后自动纳入",
+                f"{excluded_summary(excluded)}，本轮不参与统计；测活恢复正常后自动纳入",
                 duration=6000, parent=self)
         self.start_btn.setEnabled(False)
         # 保留现有展示：归零累加器但不重绘，新账号结果陆续抵达时逐个替换；
@@ -243,10 +247,41 @@ class OrgPage(FluentPage):
         self.worker = OrgWorker(accounts)
         self.worker.account_done.connect(self._on_account)
         self.worker.all_done.connect(self._on_run_done)
+        self._show_progress(len(accounts))
         self.worker.start()
+
+    def _show_progress(self, count: int):
+        """统计期间在窗口右下角挂一条浮动进度：不挡页面，也不锁交互。
+
+        点它的关闭按钮只是让 worker 停下；控件统一在 _on_run_done 里收掉。"""
+        from app.ui.widgets import ProgressToast
+
+        self._progress_done = 0
+        self._progress_total = count
+        self._progress = ProgressToast("正在统计组织状况", self.window(),
+                                       on_close=self._request_stop)
+        self._progress.set_progress(0, count)
+        self._progress.show()
+
+    def _request_stop(self):
+        """点了浮条上的关闭：让 worker 停下，收尾仍走 _on_run_done。"""
+        self._stopped = True
+        if self.worker is not None:
+            self.worker.stop()
+
+    def _close_progress(self, finished: bool = False):
+        toast, self._progress = self._progress, None
+        if toast is None:
+            return
+        if finished:
+            toast.finish()      # 补满 100% 后自行淡出，不在这里销毁
+        else:
+            toast.close()
 
     def _on_run_done(self):
         self.start_btn.setEnabled(True)
+        self._close_progress(finished=not self._stopped)
+        self._stopped = False
         if self._ok_accounts == 0:
             # 这一轮没有拿到任何账号数据：恢复刷新前的组织状况
             (self._total, self._uploaded, byk,
@@ -330,6 +365,9 @@ class OrgPage(FluentPage):
             self.export_btn.setEnabled(True)
 
     def _on_account(self, user, branch, total, uploaded, abnormal, by_kind, status, message, transfer, rows):
+        self._progress_done += 1
+        if self._progress is not None:
+            self._progress.set_progress(self._progress_done, self._progress_total)
         if self._first_result:
             # 新数据开始抵达：旧卡片让位（本轮一无所获时 _on_run_done 会回滚）
             self._first_result = False

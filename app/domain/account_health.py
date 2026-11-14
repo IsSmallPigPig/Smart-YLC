@@ -49,8 +49,10 @@ def split_accounts(accounts: list[dict]) -> tuple[list[dict], list[dict]]:
     return usable, excluded
 
 
-def excluded_note(excluded: list[dict]) -> str:
-    """排除账号的人读说明：「ssfz12601（登录冷却…）、ssfz12602（密码错误）」。"""
-    return "、".join(
-        f"{a.get('userName') or '（空）'}（{HEALTH_LABEL.get(account_status(a), account_status(a) or '未检测')}）"
-        for a in excluded)
+def excluded_summary(excluded: list[dict]) -> str:
+    """通知里的一句话概括，只报数量。
+
+    逐个账号带原因铺进弹窗会撑成一屏字、还看不到重点；账号明细在系统配置的
+    账号状态列里查。
+    """
+    return f"已跳过 {len(excluded)} 个异常账号"

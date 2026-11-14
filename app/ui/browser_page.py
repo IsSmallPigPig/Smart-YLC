@@ -411,6 +411,8 @@ class BrowserWindow(FluentWindowBase):
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(title, 0, Qt.AlignmentFlag.AlignHCenter)
         self.welcome_hint = note_label("让我们拜访一下支部的同志们")
+        # note_label 默认开换行，CaptionLabel 高度只有一行：末尾的字折到第二行会被裁掉
+        self.welcome_hint.setWordWrap(False)
         self.welcome_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(self.welcome_hint, 0, Qt.AlignmentFlag.AlignHCenter)
         self.start_btn = PrimaryPushButton(FIF.GLOBE, "开始访问", box)

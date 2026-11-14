@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.domain.account_health import excluded_note, split_accounts
+from app.domain.account_health import excluded_summary, split_accounts
 
 
 def _acc(user, status=None):
@@ -27,7 +27,8 @@ def test_split_excludes_marked_abnormal_only():
     assert [a["userName"] for a in excluded] == ["a2", "a3", "a6", "a7"]
 
 
-def test_excluded_note_names_reason():
-    note = excluded_note([_acc("a2", "cooldown"), _acc("a3", "failed")])
-    assert "a2（登录冷却" in note and "a3（密码错误）" in note
-    assert excluded_note([]) == ""
+def test_excluded_summary_reports_count_only():
+    """弹窗只报数量，不铺账号明细——逐个带原因会把通知撑成一屏字。"""
+    note = excluded_summary([_acc("a2", "cooldown"), _acc("a3", "failed")])
+    assert note == "已跳过 2 个异常账号"
+    assert excluded_summary([]) == "已跳过 0 个异常账号"

@@ -27,14 +27,15 @@ from qfluentwidgets import (
 )
 
 from app.constants import LIMITS, MB
-from app.domain.account_health import excluded_note, split_accounts
+from app.domain.account_health import excluded_summary, split_accounts
 from app.domain.naming import analyze_file_name
 from app.domain.upload_inspect import (group_by_branch, inspect, member_index,
                                        split_branch_label, summarize)
 from app.domain.upload_routing import upload_skip_reason
 from app.services import store
 from app.services.workspace import load_pending, remove_pending
-from app.ui.page import CollapsibleCard, FluentPage, PageHeader, note_label, set_tip
+from app.ui.page import (BatchedBuild, CollapsibleCard, FluentPage, PageHeader,
+                         note_label, set_tip)
 from app.ui.widgets import StatusList
 
 TARGETS = (
@@ -233,6 +234,8 @@ class UploadPage(FluentPage):
         self.inspector: InspectWorker | None = None
         self.statuses = []
         self._branch_rows: dict[str, tuple[StatusList, int]] = {}
+        # 支部卡片分批建：档案多时一次性建几十个卡片会卡住界面（200 份约 580ms）
+        self._branch_builder = BatchedBuild(self, batch=2)
 
         lay = self.vBoxLayout
 
@@ -409,6 +412,7 @@ class UploadPage(FluentPage):
         }
 
     def _rebuild_branches(self):
+        self._branch_builder.cancel()
         while self.branch_lay.count():
             item = self.branch_lay.takeAt(0)
             widget = item.widget()
@@ -431,22 +435,27 @@ class UploadPage(FluentPage):
                      else getattr(self, "_empty_text", "工作目录里还没有 PDF"))
             self.branch_lay.addWidget(note_label(empty))
             return
-        for branch, bstatuses in groups.items():
-            stage, name = split_branch_label(branch)
-            tags = ([(stage, "gray")] if stage else []) + [(f"{len(bstatuses)} 份", "gray")]
-            todo = sum(1 for s in bstatuses if not s.usable)
-            if todo:
-                tags.append((f"{todo} 待处理", "orange"))
-            missing = sum(1 for s in bstatuses if s.usable and s.member == "missing")
-            if missing:
-                tags.append((f"缺团员 {missing}", "orange"))
-            card = CollapsibleCard(name or branch, expanded=True, tags=tags)
-            listing = StatusList()
-            listing.set_items([self._row_item(s) for s in bstatuses])
-            card.body_lay.addWidget(listing)
-            self.branch_lay.addWidget(card)
-            for row_index, s in enumerate(bstatuses):
-                self._branch_rows[s.path] = (listing, row_index)
+        # 卡片分批建：首批同步（首帧就有内容），其余按帧补齐
+        self._branch_builder.start(groups.items(), self._add_branch_card)
+
+    def _add_branch_card(self, group: tuple[str, list]):
+        """建一个支部折叠卡片；由 BatchedBuild 逐批调用。"""
+        branch, bstatuses = group
+        stage, name = split_branch_label(branch)
+        tags = ([(stage, "gray")] if stage else []) + [(f"{len(bstatuses)} 份", "gray")]
+        todo = sum(1 for s in bstatuses if not s.usable)
+        if todo:
+            tags.append((f"{todo} 待处理", "orange"))
+        missing = sum(1 for s in bstatuses if s.usable and s.member == "missing")
+        if missing:
+            tags.append((f"缺团员 {missing}", "orange"))
+        card = CollapsibleCard(name or branch, expanded=True, tags=tags)
+        listing = StatusList()
+        listing.set_items([self._row_item(s) for s in bstatuses])
+        card.body_lay.addWidget(listing)
+        self.branch_lay.addWidget(card)
+        for row_index, s in enumerate(bstatuses):
+            self._branch_rows[s.path] = (listing, row_index)
 
     # ---------- 上传 ----------
 
@@ -459,7 +468,7 @@ class UploadPage(FluentPage):
         accounts, excluded = split_accounts(self._accounts())
         if excluded:
             InfoBar.warning("跳过异常账号",
-                            f"{excluded_note(excluded)} 不参与上传；测活恢复正常后自动纳入",
+                            f"{excluded_summary(excluded)}，本轮不参与上传；测活恢复正常后自动纳入",
                             duration=6000, parent=self)
         creds = {a["userName"]: a.get("password", "")
                  for a in accounts if a.get("password")}
