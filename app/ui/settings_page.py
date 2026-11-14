@@ -43,7 +43,7 @@ from qfluentwidgets import (
 )
 
 from app.ui import dialogs
-from app.ui.page import CollapsibleCard, FluentPage, note_label, sub_title
+from app.ui.page import CollapsibleCard, FluentPage, SettingRow, note_label, sub_title
 from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, describe_code, parse_class_code
 from app.domain.transfer import is_graduated
@@ -348,53 +348,42 @@ class SettingsPage(FluentPage):
         rule_card = CollapsibleCard("检查与编号规则", expanded=False)
         r2 = rule_card.body_lay
         r2.addWidget(sub_title("团支部编号规则"))
-        r2.addWidget(note_label(
-            "编号 = 学部前缀（1 位）+ 入学年份后两位（2 位）+ 班号（2 位）；无前缀的 4 位编号归「无前缀学部」。"
-            "年级按当前学年自动推算（如 24 级今年是高三/初三）。用于导入账号时预填备注和账号筛选"))
-        row_rule = QHBoxLayout()
-        row_rule.addWidget(BodyLabel("学部前缀"))
         self.rule_prefix_edit = LineEdit()
-        self.rule_prefix_edit.setPlaceholderText("1=普通高中，2=国际高中")
-        row_rule.addWidget(self.rule_prefix_edit, 1)
-        row_rule.addWidget(BodyLabel("无前缀学部"))
+        self.rule_prefix_edit.setPlaceholderText("如 1 或 2")
+        self.rule_prefix_edit.setFixedWidth(160)
+        r2.addWidget(SettingRow(
+            "学部前缀",
+            "编号 = 学部前缀（1 位）+ 入学年份后两位（2 位）+ 班号（2 位）；年级按当前学年自动推算"
+            "（如 24 级今年是高三/初三）。用于导入账号时预填备注和账号筛选",
+            self.rule_prefix_edit))
         self.rule_noprefix_edit = LineEdit()
         self.rule_noprefix_edit.setPlaceholderText("初中部")
-        self.rule_noprefix_edit.setFixedWidth(120)
-        row_rule.addWidget(self.rule_noprefix_edit)
-        r2.addLayout(row_rule)
+        self.rule_noprefix_edit.setFixedWidth(160)
+        r2.addWidget(SettingRow(
+            "无前缀学部", "无前缀的 4 位编号归「无前缀学部」", self.rule_noprefix_edit))
         self.rule_preview = note_label("")
         r2.addWidget(self.rule_preview)
         self.rule_prefix_edit.editingFinished.connect(self._on_rule_changed)
         self.rule_noprefix_edit.editingFinished.connect(self._on_rule_changed)
         r2.addWidget(sub_title("文档检查（入团志愿书 PDF）"))
-        r2.addWidget(note_label("「文档检查」页除命名外，还核对 PDF 总页数是否等于预期页数；留空则不核对页数"))
-        row6 = QHBoxLayout()
-        row6.addWidget(BodyLabel("预期页数"))
         self.expected_pages_edit = LineEdit()
-        self.expected_pages_edit.setPlaceholderText("如 4；留空则不核对页数")
+        self.expected_pages_edit.setPlaceholderText("如 4")
         self.expected_pages_edit.setFixedWidth(160)
         self.expected_pages_edit.editingFinished.connect(self._save_config)
-        row6.addWidget(self.expected_pages_edit)
-        row6.addStretch(1)
-        r2.addLayout(row6)
+        r2.addWidget(SettingRow(
+            "预期页数", "「文档检查」页除命名外，还核对 PDF 总页数是否等于预期页数；留空则不核对页数",
+            self.expected_pages_edit))
         lay.addWidget(rule_card)
 
         # ── 卡片四：外观（明暗模式 / 毛玻璃 / 首页头图，默认收起） ──
         look_card = CollapsibleCard("外观", expanded=False)
         r3 = look_card.body_lay
-        theme_row = QHBoxLayout()
-        theme_row.addWidget(BodyLabel("明暗模式"))
-        theme_row.addStretch(1)
         self.theme_combo = ComboBox()
         for label in ("跟随系统", "浅色模式", "暗色模式"):
             self.theme_combo.addItem(label)
         self.theme_combo.setCurrentIndex(THEME_INDEX.get(store.load().get("themeMode", "auto"), 0))
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        theme_row.addWidget(self.theme_combo)
-        r3.addLayout(theme_row)
-        material_row = QHBoxLayout()
-        material_row.addWidget(BodyLabel("窗口背景透明材质"))
-        material_row.addStretch(1)
+        r3.addWidget(SettingRow("明暗模式", "更改应用的外观，选完即时生效", self.theme_combo))
         self.material_combo = ComboBox()
         for label in ("关闭", "Acrylic 毛玻璃", "Sidebar 浅毛玻璃", "HudWindow 深色毛玻璃"):
             self.material_combo.addItem(label)
@@ -402,50 +391,54 @@ class SettingsPage(FluentPage):
         _material = _cfg.get("translucentMaterial") or ("acrylic" if _cfg.get("translucent") else "none")
         self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "sidebar": 2, "hud": 3}.get(_material, 0))
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
-        material_row.addWidget(self.material_combo)
-        r3.addLayout(material_row)
-        r3.addWidget(sub_title("首页头图"))
-        r3.addWidget(note_label("图片会铺满工具首页顶部并自然过渡到背景；清除后显示占位渐变"))
-        row7 = QHBoxLayout()
+        r3.addWidget(SettingRow(
+            "窗口背景透明材质", "为窗口背景加系统混合层毛玻璃效果；选「关闭」恢复纯色底", self.material_combo))
+        header_btns = QWidget()
+        hb = QHBoxLayout(header_btns)
+        hb.setContentsMargins(0, 0, 0, 0)
+        hb.setSpacing(8)
         self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
         self.header_pick_btn.clicked.connect(self._pick_header_image)
         self.header_clear_btn = PushButton(FIF.DELETE, "清除头图")
         self.header_clear_btn.clicked.connect(self._clear_header_image)
-        row7.addWidget(self.header_pick_btn)
-        row7.addWidget(self.header_clear_btn)
-        row7.addStretch(1)
-        r3.addLayout(row7)
+        hb.addWidget(self.header_pick_btn)
+        hb.addWidget(self.header_clear_btn)
+        r3.addWidget(SettingRow(
+            "首页头图", "图片会铺满工具首页顶部并自然过渡到背景；清除后显示占位渐变", header_btns))
         lay.addWidget(look_card)
 
         # ── 卡片五：工作区与通知（默认收起） ──
         ws_card = CollapsibleCard("工作区与通知", expanded=False)
         r4 = ws_card.body_lay
-        r4.addWidget(sub_title("工作区（自动检测新 PDF）"))
-        r4.addWidget(note_label("目录里出现新 PDF 时自动：命名检查并改名 → 超过 9.5MB 自动压缩 → 加入批量上传列表"))
-        row5 = QHBoxLayout()
+        ws_ctrl = QWidget()
+        wb = QHBoxLayout(ws_ctrl)
+        wb.setContentsMargins(0, 0, 0, 0)
+        wb.setSpacing(8)
         self.ws_edit = LineEdit()
-        self.ws_edit.setPlaceholderText("选择工作区目录（自动监听新文件）")
+        self.ws_edit.setPlaceholderText("选择工作区目录")
+        self.ws_edit.setFixedWidth(230)
         self.ws_btn = PushButton(FIF.FOLDER, "选择目录")
         self.ws_btn.clicked.connect(self._pick_workspace)
+        wb.addWidget(self.ws_edit)
+        wb.addWidget(self.ws_btn)
+        r4.addWidget(SettingRow(
+            "工作区", "目录里出现新 PDF 时自动：命名检查并改名 → 超过 9.5MB 自动压缩 → 加入批量上传列表",
+            ws_ctrl))
         self.ws_status = note_label("未监听")
-        row5.addWidget(self.ws_edit, 1)
-        row5.addWidget(self.ws_btn)
-        row5.addWidget(self.ws_status)
-        r4.addLayout(row5)
-        r4.addWidget(sub_title("每日通知与后台自启动"))
-        r4.addWidget(note_label("到点通过系统通知推送团员情况；开启自启动后开机即在后台运行"))
-        row4 = QHBoxLayout()
-        row4.addWidget(BodyLabel("每天"))
+        r4.addWidget(self.ws_status)
+        notify_ctrl = QWidget()
+        nb = QHBoxLayout(notify_ctrl)
+        nb.setContentsMargins(0, 0, 0, 0)
+        nb.setSpacing(8)
         self.notify_time_edit = LineEdit()
-        self.notify_time_edit.setFixedWidth(80)
+        self.notify_time_edit.setFixedWidth(90)
         self.notify_time_edit.setPlaceholderText("08:00")
         self.notify_time_edit.setClearButtonEnabled(False)
-        row4.addWidget(self.notify_time_edit)
-        row4.addStretch(1)
+        nb.addWidget(self.notify_time_edit)
+        r4.addWidget(SettingRow("每日通知", "每天这个时间通过系统通知推送团员情况", notify_ctrl))
         self.autostart_btn = PushButton()
         self.autostart_btn.clicked.connect(self._toggle_autostart)
-        row4.addWidget(self.autostart_btn)
-        r4.addLayout(row4)
+        r4.addWidget(SettingRow("开机自启动", "开启后开机即在后台运行，每天自动检查团员情况", self.autostart_btn))
         lay.addWidget(ws_card)
 
         self._watcher = None
