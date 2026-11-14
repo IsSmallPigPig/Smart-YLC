@@ -32,6 +32,7 @@ from qfluentwidgets import (
 )
 
 from app.ui.page import FluentPage, fit_table_columns, note_label
+from app.domain.account_health import excluded_note, split_accounts
 from app.constants import LIMITS, MB
 from app.domain.chunk_protocol import check_site_limits
 from app.domain.naming import analyze_file_name
@@ -306,7 +307,12 @@ class UploadPage(FluentPage):
 
         # 2) 按班级分流；解析不到的标记失败行，不弹窗阻断一键上传
         sp = self.window_ref.settings_page
-        accounts = sp.accounts
+        usable, excluded = split_accounts(sp.accounts)
+        if excluded:
+            InfoBar.warning("跳过异常账号",
+                f"{excluded_note(excluded)} 不参与上传；测活恢复正常后自动纳入",
+                duration=6000, parent=self)
+        accounts = usable
         creds = {a["userName"]: a["password"] for a in accounts if a.get("password")}
         targets = resolve_file_targets(
             [os.path.basename(p) for p in files], parsed, list(creds), roster_class_lookup(sp.roster))

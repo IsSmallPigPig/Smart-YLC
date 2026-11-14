@@ -25,6 +25,7 @@ from qfluentwidgets import (
 )
 
 from app.ui.page import FluentPage, fit_table_columns
+from app.domain.account_health import excluded_note, split_accounts
 from app.domain.check_rules import (
     CheckResult,
     CheckTemplate,
@@ -192,8 +193,9 @@ class CheckPage(FluentPage):
             self.roster_combo.setCurrentText(cur_roster)
         self.roster_combo.blockSignals(False)
 
+        usable, _ = split_accounts(sp.accounts)
         labels = [f"{a['userName']}" + (f"（{a.get('remark')}）" if a.get("remark") else "")
-                  for a in sp.accounts]
+                  for a in usable]
         self.org_combo.blockSignals(True)
         self.org_combo.clear()
         self.org_combo.addItems([ALL_ORG] + labels)
@@ -202,12 +204,14 @@ class CheckPage(FluentPage):
         self.org_combo.blockSignals(False)
 
     def _selected_accounts(self) -> list[dict]:
+        """检查范围只用健康状态可用的账号；异常账号一律排除。"""
         sp = self.window_ref.settings_page
+        usable, _ = split_accounts(sp.accounts)
         org = self.org_combo.currentText()
         if org == ALL_ORG or not org:
-            return [dict(a) for a in sp.accounts]
+            return [dict(a) for a in usable]
         user = org.split("（")[0]
-        return [dict(a) for a in sp.accounts if a["userName"] == user]
+        return [dict(a) for a in usable if a["userName"] == user]
 
     def _selected_roster(self):
         sp = self.window_ref.settings_page
@@ -221,9 +225,15 @@ class CheckPage(FluentPage):
     def _start(self):
         self._refresh_scope()
         accounts = self._selected_accounts()
+        _, excluded = split_accounts(self.window_ref.settings_page.accounts)
         if not accounts:
-            InfoBar.warning("没有可检查的支部", "请先到「系统配置」添加团支部账号", duration=3000, parent=self)
+            hint = f"其余账号均被标记为异常（{excluded_note(excluded)}）" if excluded else "请先到「系统配置」添加团支部账号"
+            InfoBar.warning("没有可检查的支部", hint, duration=6000, parent=self)
             return
+        if excluded:
+            InfoBar.warning("跳过异常账号",
+                f"{excluded_note(excluded)} 不会被检查；测活恢复正常后自动纳入",
+                duration=6000, parent=self)
         self.scan_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
         self._errors: list[tuple[str, str]] = []

@@ -16,6 +16,7 @@ from qfluentwidgets import (
     qrouter,
 )
 
+from app.domain.account_health import excluded_note, split_accounts
 from app.services import store
 from app.ui.check_page import CheckPage
 from app.ui.compress_page import CompressPage
@@ -141,11 +142,19 @@ class MainWindow(MSFluentWindow):
         from app.ui.messages_page import MessageFetchWorker
         from app.ui.org_manage_page import MemberSyncWorker, mark_synced
 
-        accounts = self.settings_page.accounts
+        usable, excluded = split_accounts(self.settings_page.accounts)
+        accounts = usable
         if not accounts:
             if not silent:
-                InfoBar.warning("没有账号", "先在「系统配置」添加团支部账号", duration=3000, parent=self)
+                hint = (f"其余账号均被标记为异常（{excluded_note(excluded)}），"
+                        "请先处理（测活或打开网页端重新登录）") if excluded \
+                    else "先在「系统配置」添加团支部账号"
+                InfoBar.warning("没有可用账号", hint, duration=6000, parent=self)
             return False
+        if excluded and not silent:
+            InfoBar.warning("跳过异常账号",
+                f"{excluded_note(excluded)} 不参与本轮刷新；测活恢复正常后自动纳入",
+                duration=6000, parent=self)
         if self._refreshing:
             if not silent:
                 InfoBar.info("刷新进行中", "上一轮还没跑完，稍候", duration=3000, parent=self)
