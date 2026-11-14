@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -167,6 +167,8 @@ class LoadingOverlay(QWidget):
 
 
 class HomePage(FluentPage):
+    stats_ready = Signal()  # 首屏快照已应用 → 主窗口据此收起启动闪屏
+
     def __init__(self, window, parent=None):
         super().__init__('page-home', parent)
         self.window_ref = window
@@ -289,6 +291,7 @@ class HomePage(FluentPage):
             if show_loading:
                 self._hide_loading()
             self._apply_stats(data, animate)
+            self.stats_ready.emit()
 
         worker = CallbackWorker(_snapshot, self)
         worker.ok.connect(_on_done)
@@ -296,7 +299,11 @@ class HomePage(FluentPage):
         worker.start()
 
     def _show_loading(self):
-        """铺一层加载过渡页：盖住首页内容，挡住快照延迟与布局未稳。"""
+        """铺一层加载过渡页：盖住首页内容，挡住快照延迟与布局未稳。
+
+        启动闪屏（MainWindow.splash）已经盖住整窗时不再叠第二层。"""
+        if getattr(self, "_startup_loading", False):
+            return
         if getattr(self, "_loading", None) is None:
             self._loading = LoadingOverlay(self)
         ov = self._loading

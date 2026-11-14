@@ -154,6 +154,27 @@ class MainWindow(MSFluentWindow):
         self._sync_timer.start()
         QTimer.singleShot(15 * 1000, self._maybe_background_sync)
 
+        # 启动闪屏：盖住整个窗口（侧边栏、标题栏都在下面）。首屏快照回来后
+        # 由 home_page.stats_ready 收起；5 秒兜底，快照失败也不会卡住界面。
+        from app.ui.splash import SplashScreen
+
+        self._splash_done = False
+        self.splash = SplashScreen(self)
+        self.splash.setGeometry(self.rect())
+        self.splash.show()
+        self.splash.raise_()
+        self.splash.start()
+        self.home_page._startup_loading = True
+        self.home_page.stats_ready.connect(self._dismiss_splash)
+        QTimer.singleShot(5000, self._dismiss_splash)
+
+    def _dismiss_splash(self):
+        if self._splash_done:
+            return
+        self._splash_done = True
+        self.home_page._startup_loading = False
+        self.splash.finish()
+
     def _maybe_background_sync(self):
         """30 秒同步一次系统数据；上一轮未结束就跳过本轮，没有账号也跳过。"""
         if not self.settings_page.accounts:
@@ -457,6 +478,10 @@ class MainWindow(MSFluentWindow):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._place_search()
+        splash = getattr(self, "splash", None)
+        if splash is not None and not self._splash_done:
+            splash.setGeometry(self.rect())
+            splash.raise_()
 
     def _place_back_button(self):
         tb = self.titleBar.hBoxLayout
@@ -476,6 +501,10 @@ class MainWindow(MSFluentWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
+        splash = getattr(self, "splash", None)
+        if splash is not None and not self._splash_done:
+            splash.setGeometry(self.rect())
+            splash.raise_()
         if not self._material_applied:
             # 等窗口布局稳定再挂：showEvent 当帧 window.width() 还是初始几何，
             # 官方 setAcrylicEffect 用它建 frame 会错位。效果层也要窗口稳定
