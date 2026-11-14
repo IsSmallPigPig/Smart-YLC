@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QThread, Signal
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import QHBoxLayout, QTableWidgetItem, QVBoxLayout
 
 from qfluentwidgets import (
@@ -42,11 +44,15 @@ KIND_COLOR = {"identity": "#ef6c00", "report": "#c62828", "fees": "#8e24aa"}
 
 
 class OrgWorker(QThread):
-    """逐账号：会话探测 → 失效才登录 → 拉取团员 → 三项检查 → 统计。只读查询。"""
+    """并发逐账号：会话探测 → 失效才登录 → 拉取团员 → 三项检查 → 统计。只读查询。
+
+    单账号失败（密码错误/网络异常）只影响它自己一行，不阻塞其他账号。"""
 
     account_done = Signal(str, int, int, int, dict, str, str)
     # user, total, uploaded, abnormal, by_kind, status, message
     all_done = Signal()
+
+    MAX_WORKERS = 4  # 团员列表是重接口，并发数低于测活
 
     def __init__(self, accounts: list[dict]):
         super().__init__()
@@ -56,34 +62,41 @@ class OrgWorker(QThread):
     def stop(self):
         self._stop = True
 
+    def _check_one(self, acc: dict) -> tuple[str, int, int, int, dict, str, str]:
+        user, pwd = acc.get("userName", ""), acc.get("password", "")
+        if not user or not pwd:
+            return user, 0, 0, 0, {}, "empty", "账号或密码为空"
+        try:
+            client = SiteClient(user, pwd)
+            probe = client.session_account()
+            if not probe.ok:
+                verdict = client.login()
+                kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
+                if kind != "ok":
+                    return user, 0, 0, 0, {}, kind, verdict.message
+            members, _ = client.get_all_members()
+            id_tpl, rep_tpl = default_identity_template(), default_report_template()
+            results = (
+                build_identity_results(members, id_tpl)
+                + build_report_results(members, rep_tpl)
+                + build_fee_results(members)
+            )
+            s = summarize_members(members, results)
+            return user, s.total, s.uploaded, s.abnormal, dict(s.by_kind), "ok", ""
+        except Exception as e:
+            return user, 0, 0, 0, {}, "network", str(e)
+
     def run(self):
-        id_tpl, rep_tpl = default_identity_template(), default_report_template()
-        for acc in self.accounts:
-            if self._stop:
-                break
-            user, pwd = acc.get("userName", ""), acc.get("password", "")
-            if not user or not pwd:
-                self.account_done.emit(user, 0, 0, 0, {}, "empty", "账号或密码为空")
-                continue
-            try:
-                client = SiteClient(user, pwd)
-                probe = client.session_account()
-                if not probe.ok:
-                    verdict = client.login()
-                    kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
-                    if kind != "ok":
-                        self.account_done.emit(user, 0, 0, 0, {}, kind, verdict.message)
-                        continue
-                members, _ = client.get_all_members()
-                results = (
-                    build_identity_results(members, id_tpl)
-                    + build_report_results(members, rep_tpl)
-                    + build_fee_results(members)
-                )
-                s = summarize_members(members, results)
-                self.account_done.emit(user, s.total, s.uploaded, s.abnormal, dict(s.by_kind), "ok", "")
-            except Exception as e:
-                self.account_done.emit(user, 0, 0, 0, {}, "network", str(e))
+        workers = min(self.MAX_WORKERS, max(1, len(self.accounts)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(self._check_one, dict(a)) for a in self.accounts]
+            for fut in as_completed(futures):
+                if self._stop:
+                    break
+                try:
+                    self.account_done.emit(*fut.result())
+                except Exception as e:
+                    self.account_done.emit("", 0, 0, 0, {}, "network", f"统计线程异常：{e}")
         self.all_done.emit()
 
 
@@ -131,7 +144,7 @@ class OrgPage(FluentPage):
         card_lay.addLayout(row)
         lay.addWidget(card)
 
-        # 明细表
+        # 明细表：全部只读，列宽按内容自适应，状态与错误信息完整展示
         self.table = TableWidget()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(8)
@@ -139,7 +152,9 @@ class OrgPage(FluentPage):
         self.table.setHorizontalHeaderLabels(
             ["账号", "在册", "已上传", "信息错误", "没有报道", "欠缴团费"])
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, header.ResizeMode.Stretch)
+        header.setStretchLastSection(False)
+        for col in range(6):
+            header.setSectionResizeMode(col, header.ResizeMode.ResizeToContents)
         self.add_table(self.table, 1)
 
     def _set_ratio(self, total: int, uploaded: int):
@@ -186,8 +201,10 @@ class OrgPage(FluentPage):
             str(by_kind.get("report", "-")) if total else "-",
             str(by_kind.get("fees", "-")) if total else "-",
         ]
-        for col, v in enumerate(vals):
-            self.table.setItem(r, col, QTableWidgetItem(v))
+        readonly = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         if status != "ok":
-            self.table.setItem(r, 0, QTableWidgetItem(
-                f"{user or '（空）'}　⚠ {STATUS_LABEL.get(status, status)}：{message[:50]}"))
+            vals[0] = f"{user or '（空）'}　⚠ {STATUS_LABEL.get(status, status)}：{message}"
+        for col, v in enumerate(vals):
+            item = QTableWidgetItem(v)
+            item.setFlags(readonly)
+            self.table.setItem(r, col, item)
