@@ -8,8 +8,10 @@ Qt6 会自己把控件、字体、布局按 devicePixelRatio 放大，但 QPixma
 
 from __future__ import annotations
 
+from typing import Callable
+
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication, QPixmap
+from PySide6.QtGui import QGuiApplication, QImage, QPainter, QPixmap
 
 
 def ui_dpr() -> float:
@@ -23,16 +25,6 @@ def ui_dpr() -> float:
     return max(float(s.devicePixelRatio()) for s in screens)
 
 
-def canvas_pixmap(size: int) -> QPixmap:
-    """透明画布：物理像素 size×dpr，逻辑尺寸仍是 size。"""
-    dpr = ui_dpr()
-    px = max(1, round(size * dpr))
-    pm = QPixmap(px, px)
-    pm.fill(Qt.GlobalColor.transparent)
-    pm.setDevicePixelRatio(dpr)
-    return pm
-
-
 def scale_to(pm: QPixmap, size: int) -> QPixmap:
     """把位图缩到逻辑尺寸 size，并按当前 dpr 标记，避免在 2× 屏上二次插值。"""
     dpr = ui_dpr()
@@ -41,3 +33,25 @@ def scale_to(pm: QPixmap, size: int) -> QPixmap:
                     Qt.TransformationMode.SmoothTransformation)
     out.setDevicePixelRatio(dpr)
     return out
+
+
+def hidpi_canvas(size: int, paint: Callable[[QPainter], None]) -> QPixmap:
+    """逻辑尺寸 size 的位图，paint 里按逻辑坐标画，物理像素自动 ×dpr。
+
+    必须这么绕：QPainter 画在带 devicePixelRatio 的 QPixmap 上时坐标仍是
+    物理像素（不像画在控件上会自动缩放），直接按逻辑坐标画就会只占左上角
+    1/dpr² 一块——首页卡片图标在 2× 屏被判成 1/4 大小就是这么来的。
+    先画进 QImage（纯物理像素、无 DPR 概念），再把 dpr 标上去。
+    """
+    dpr = ui_dpr()
+    px = max(1, round(size * dpr))
+    img = QImage(px, px, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(img)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(dpr, dpr)          # 之后一律用逻辑坐标
+    paint(painter)
+    painter.end()
+    pm = QPixmap.fromImage(img)
+    pm.setDevicePixelRatio(dpr)
+    return pm

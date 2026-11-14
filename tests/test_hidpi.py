@@ -22,13 +22,20 @@ def dpr2(monkeypatch):
     return 2.0
 
 
-def test_canvas_pixmap_doubles_physical_pixels(app, dpr2):
-    from app.ui.hidpi import canvas_pixmap
+def test_hidpi_canvas_doubles_physical_pixels(app, dpr2):
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QColor
 
-    pm = canvas_pixmap(64)
+    from app.ui.hidpi import hidpi_canvas
+
+    pm = hidpi_canvas(64, lambda p: p.fillRect(QRectF(0, 0, 64, 64), QColor("#ff0000")))
     assert pm.width() == 128 and pm.height() == 128     # 物理像素翻倍
     assert pm.devicePixelRatio() == 2.0                 # 逻辑尺寸仍是 64
     assert pm.deviceIndependentSize().width() == 64
+    # 逻辑坐标铺满 → 四角都得有颜色（2× 下画成 1/4 大小的那个 bug 的回归点）
+    img = pm.toImage()
+    for x, y in ((2, 2), (126, 2), (2, 126), (126, 126)):
+        assert img.pixelColor(x, y).alpha() > 200, f"({x},{y}) 没画到"
 
 
 def test_scale_to_keeps_logical_size(app, dpr2):

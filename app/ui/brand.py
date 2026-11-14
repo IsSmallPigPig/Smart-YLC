@@ -15,10 +15,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtCore import QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
 
-from app.ui.hidpi import canvas_pixmap, scale_to
+from app.ui.hidpi import hidpi_canvas, scale_to
 
 
 def assets_dir() -> Path:
@@ -47,11 +47,7 @@ def app_pixmap(size: int = 256) -> QPixmap:
         from PySide6.QtSvg import QSvgRenderer
 
         renderer = QSvgRenderer(str(svg))
-        pm = canvas_pixmap(size)
-        painter = QPainter(pm)
-        renderer.render(painter)
-        painter.end()
-        return pm
+        return hidpi_canvas(size, lambda p: renderer.render(p, QRectF(0, 0, size, size)))
     return QPixmap()
 
 
@@ -96,16 +92,12 @@ def app_icon() -> QIcon:
 def mark_pixmap(size: int = 64) -> QPixmap:
     """透明底的团徽标记：欢迎页、标题栏这类地方用。"""
     svg = icon_path("smart-ylc-mark.svg")
-    pm = canvas_pixmap(size)
     if not svg.is_file():
-        return pm
+        return QPixmap()
     try:
         from PySide6.QtSvg import QSvgRenderer
 
         renderer = QSvgRenderer(str(svg))
-        painter = QPainter(pm)
-        renderer.render(painter)
-        painter.end()
+        return hidpi_canvas(size, lambda p: renderer.render(p, QRectF(0, 0, size, size)))
     except Exception:
-        pass
-    return pm
+        return QPixmap()
