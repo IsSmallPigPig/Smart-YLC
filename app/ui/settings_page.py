@@ -48,29 +48,10 @@ from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, describe_code, parse_class_code
 from app.domain.transfer import is_graduated
 from app.services import store
+from app.domain.account_health import HEALTH_COLOR, HEALTH_LABEL
 from app.services.api import SiteClient
 
-HEALTH_LABEL = {
-    "ok": "正常",
-    "failed": "密码错误",
-    "captcha": "需验证码（先去网页端登录一次）",
-    "cooldown": "登录冷却（验证码/风控，1 小时后自动重试）",
-    "passwordChange": "需改密（EXPIREDPASS/WEAKPASS）",
-    "needMemberName": "需姓名校验",
-    "network": "网络错误",
-    "unknown": "未检测",
-}
 THEME_INDEX = {"auto": 0, "light": 1, "dark": 2}
-HEALTH_COLOR = {
-    "ok": "#2e7d32",
-    "failed": "#c62828",
-    "captcha": "#ef6c00",
-    "cooldown": "#9e9e9e",
-    "passwordChange": "#ef6c00",
-    "needMemberName": "#ef6c00",
-    "network": "#9e9e9e",
-    "unknown": "#9e9e9e",
-}
 
 
 def guess_semester() -> str:

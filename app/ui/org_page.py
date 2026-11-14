@@ -29,6 +29,7 @@ from app.domain.check_rules import (
     build_report_results,
 )
 from app.domain.org_stats import KIND_LABEL, build_error_rows, summarize_members
+from app.domain.account_health import excluded_note, split_accounts
 from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services.api import SiteClient
 from app.ui.charts import BarRowWidget, ProgressDonut
@@ -192,10 +193,16 @@ class OrgPage(FluentPage):
         self.transfer_bar.set_value(self._transfer_applied, self._total)
 
     def _start(self):
-        accounts = self.window_ref.settings_page.accounts
+        usable, excluded = split_accounts(self.window_ref.settings_page.accounts)
+        accounts = usable
         if not accounts:
-            InfoBar.warning("未配置账号", "请先到「系统配置」添加团支部账号", duration=3000, parent=self)
+            hint = f"其余账号均被标记为异常（{excluded_note(excluded)}）" if excluded else "请先到「系统配置」添加团支部账号"
+            InfoBar.warning("没有可统计的账号", hint, duration=6000, parent=self)
             return
+        if excluded:
+            InfoBar.warning("跳过异常账号",
+                f"{excluded_note(excluded)} 不参与统计；测活恢复正常后自动纳入",
+                duration=6000, parent=self)
         self.start_btn.setEnabled(False)
         # 保留现有展示：归零累加器但不重绘，新账号结果陆续抵达时逐个替换；
         # 整轮一无所获（全失败/全跳过）时回滚快照，组织状况数据不丢
