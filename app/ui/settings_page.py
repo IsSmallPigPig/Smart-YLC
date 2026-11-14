@@ -321,16 +321,27 @@ class SettingsPage(FluentPage):
         row_rdel.addStretch(1)
         r.addLayout(row_rdel)
         r.addWidget(sub_title("团支书名单"))
-        r.addWidget(note_label("xlsx 列：支部（编号或名称） / 团支书（姓名） / 手机号码（可选）；展示在「组织管理」的支部信息里"))
+        r.addWidget(note_label("xlsx 列：支部（编号或名称） / 团支书（姓名） / 手机号码（可选）；展示在「组织管理」的支部信息里；重新导入会整体替换"))
         row_sec = QHBoxLayout()
         self.sec_btn = PushButton(FIF.DOCUMENT, "导入团支书名单")
         self.sec_btn.clicked.connect(self._import_secretaries)
-        self.sec_status = note_label("未导入")
+        self.sec_del_btn = PushButton(FIF.DELETE, "删除所选团支书")
+        self.sec_del_btn.setToolTip("从配置中移除所选支部的团支书记录")
+        self.sec_del_btn.clicked.connect(self._delete_selected_secretaries)
         row_sec.addWidget(self.sec_btn)
         row_sec.addSpacing(8)
+        row_sec.addWidget(self.sec_del_btn)
+        row_sec.addSpacing(8)
+        self.sec_status = note_label("未导入")
         row_sec.addWidget(self.sec_status)
         row_sec.addStretch(1)
         r.addLayout(row_sec)
+        # 团支书名单表：一行一个支部，与成员名单列表同款
+        self.sec_table = TableWidget()
+        self.sec_table.setColumnCount(3)
+        self.sec_table.setHorizontalHeaderLabels(["支部", "团支书", "手机号码"])
+        self.sec_table.setEditTriggers(self.sec_table.EditTrigger.NoEditTriggers)
+        r.addWidget(self.sec_table)
         lay.addWidget(ros_card)
 
         # ── 卡片三：检查与编号规则（默认收起） ──
@@ -1426,8 +1437,31 @@ class SettingsPage(FluentPage):
             self.window_ref.org_manage_page.refresh()
 
     def _refresh_secretary_status(self, rows: list | None = None):
+        """团支书名单表：一行一个支部（支部 / 团支书 / 手机号码）。"""
         rows = store.load().get("secretaries", []) if rows is None else rows
+        self.sec_table.blockSignals(True)
+        self.sec_table.setRowCount(len(rows))
+        for i, sec in enumerate(rows):
+            for col, key in enumerate(("branch", "name", "mobile")):
+                item = QTableWidgetItem(str(sec.get(key, "") or ""))
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                self.sec_table.setItem(i, col, item)
+        self.sec_table.blockSignals(False)
+        self.sec_table.setFixedHeight(min(max(len(rows), 1), 8) * 36 + 42)
+        fit_table_columns(self.sec_table, stretch_last=True)
         self.sec_status.setText(f"已登记 {len(rows)} 个支部" if rows else "未导入")
+
+    def _delete_selected_secretaries(self):
+        """删除选中行的团支书记录（与删除所选学期名单同款交互）。"""
+        rows = store.load().get("secretaries", []) or []
+        row = self.sec_table.currentRow()
+        if row < 0 or row >= len(rows):
+            InfoBar.warning("未选中记录", "先在团支书名单表中点选一行", duration=3000, parent=self)
+            return
+        removed = rows.pop(row)
+        store.update(lambda cfg: cfg.__setitem__("secretaries", rows))
+        self._refresh_secretary_status(rows)
+        InfoBar.success("已删除", f"支部 {removed.get('branch', '')} 的团支书记录已移除", duration=3000, parent=self)
 
     # ---------- 对外提供 ----------
 
