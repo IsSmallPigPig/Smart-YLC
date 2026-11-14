@@ -225,6 +225,20 @@ def test_pick_asset_ignores_non_installable_files():
     assert updater._pick_asset([{"name": "README.md"}], "darwin") is None
 
 
+@pytest.mark.parametrize("machine,expected", [
+    ("arm64", "SmartYouth-macOS-arm64.dmg"),
+    ("x86_64", "SmartYouth-macOS-x86_64.dmg"),
+])
+def test_pick_asset_prefers_matching_mac_arch(monkeypatch, machine, expected):
+    """macOS 的 dmg 分 arm64/x86_64 两份，必须挑和本机芯片匹配的那份。"""
+    monkeypatch.setattr(updater.platform_module, "machine", lambda: machine)
+    assets = [
+        {"name": "SmartYouth-macOS-x86_64.dmg", "browser_download_url": "u1"},
+        {"name": "SmartYouth-macOS-arm64.dmg", "browser_download_url": "u2"},
+    ]
+    assert updater._pick_asset(assets, "darwin")["name"] == expected
+
+
 def test_release_on_macos_never_downloads_windows_exe(monkeypatch):
     monkeypatch.setattr(updater.sys, "platform", "darwin")
     fake_urlopen(monkeypatch, {

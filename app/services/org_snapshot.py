@@ -37,8 +37,13 @@ def snapshot(cfg: dict) -> dict:
     by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
 
     if cache:
+        org_names: set[str] = set()
         for blob in cache.values():
             members = [record_from_dict(d) for d in (blob.get("members") or [])]
+            for m in members:
+                name = (m.org_name or "").strip()
+                if name:
+                    org_names.add(name)
             results = (
                 build_identity_results(members, default_identity_template())
                 + build_report_results(members, default_report_template())
@@ -49,6 +54,9 @@ def snapshot(cfg: dict) -> dict:
             uploaded += summary.uploaded
             for kind, value in summary.by_kind.items():
                 by_kind[kind] = by_kind.get(kind, 0) + value
+        # 支部数量 = 系统里实际出现的不同团支部（所属团支部字段），
+        # 不再等于已配置账号数：一个账号可能覆盖多个支部
+        branches = len(org_names)
     else:
         for entry in stats.values():
             total += int(entry.get("total") or 0)
@@ -56,6 +64,7 @@ def snapshot(cfg: dict) -> dict:
             for kind, value in (entry.get("by_kind") or {}).items():
                 if kind in by_kind:
                     by_kind[kind] += int(value or 0)
+        branches = len(accounts)
 
     applied = sum(int((entry.get("transfer") or {}).get("applied") or 0)
                   for entry in stats.values())
@@ -66,7 +75,7 @@ def snapshot(cfg: dict) -> dict:
         "uploaded": uploaded,
         "by_kind": by_kind,
         "applied": applied,
-        "branches": len(accounts),
+        "branches": branches,
         "unread": _unread_count(cfg),
         "updated": updated,
     }

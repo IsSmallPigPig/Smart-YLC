@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform as platform_module
 import re
 import ssl
 import subprocess
@@ -123,7 +124,8 @@ INSTALLABLE = (".zip", ".dmg", ".pkg", ".exe", ".msi")
 def _pick_asset(assets: list[dict], platform: str | None = None) -> dict | None:
     """按平台挑安装包：macOS 优先 dmg，Windows 优先 exe，其它平台优先 zip。
 
-    Release 工作流会同时上传 dmg 和 exe，GitHub 返回顺序不保证，不能取第一个。
+    Release 工作流会同时上传 dmg 和 exe，GitHub 返回顺序不保证，不能取第一个；
+    macOS 的 dmg 还分 arm64 / x86_64 两份，要挑和本机芯片匹配的那份。
     """
     p = platform or sys.platform
     if p == "darwin":
@@ -134,7 +136,15 @@ def _pick_asset(assets: list[dict], platform: str | None = None) -> dict | None:
         prefs = INSTALLABLE
     pool = [a for a in (assets or [])
             if str(a.get("name", "")).lower().endswith(INSTALLABLE)]
+    # mac 上优先挑同架构的安装包：M 系列认 arm64，Intel 认 x86_64
+    arch_marker = ("arm64" if platform_module.machine().startswith("arm") else "x86_64") \
+        if p == "darwin" else ""
     for ext in prefs:
+        for a in pool:
+            name = str(a.get("name", "")).lower()
+            if name.endswith(ext) and (not arch_marker or arch_marker in name):
+                return a
+        # 同扩展名里没有标着本机架构的（旧版 Release 只有一份 dmg），退回第一个
         for a in pool:
             if str(a.get("name", "")).lower().endswith(ext):
                 return a

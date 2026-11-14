@@ -232,7 +232,7 @@ class UploadPage(FluentPage):
         self.worker: UploadWorker | None = None
         self.inspector: InspectWorker | None = None
         self.statuses = []
-        self._row_index: dict[str, int] = {}
+        self._branch_rows: dict[str, tuple[StatusList, int]] = {}
 
         lay = self.vBoxLayout
 
@@ -260,11 +260,12 @@ class UploadPage(FluentPage):
             self.header.add_control(w)
         lay.addWidget(self.header)
 
-        self.status_list = StatusList()
-        lay.addWidget(self.status_list)
-
         self.summary = note_label("")
         lay.addWidget(self.summary)
+
+        # 上方不再放不按支部分组的扁平列表：文件只按团支部收进下方折叠卡片，
+        # 单一入口避免「同一份档案上面一张卡、下面又一张卡」的重复。
+        self._empty_text = "工作目录里还没有 PDF"
 
         self.branch_box = QWidget()
         self.branch_lay = QVBoxLayout(self.branch_box)
@@ -319,7 +320,7 @@ class UploadPage(FluentPage):
         if not directory:
             self.header.set_desc("先选择工作目录，里面的 PDF 会自动加入待处理")
             self.statuses = []
-            self.status_list.set_items([], "还没有选择工作目录")
+            self._empty_text = "还没有选择工作目录"
             self.summary.setText("")
             self.upload_btn.setEnabled(False)
             self._rebuild_branches()
@@ -329,7 +330,7 @@ class UploadPage(FluentPage):
             f"正在监听 {os.path.basename(directory) or directory}，{len(files)} 份待处理")
         if not files:
             self.statuses = []
-            self.status_list.set_items([], "工作目录里还没有 PDF")
+            self._empty_text = "工作目录里还没有 PDF"
             self.summary.setText("")
             self.upload_btn.setEnabled(False)
             self._rebuild_branches()
@@ -355,34 +356,6 @@ class UploadPage(FluentPage):
     def _apply_statuses(self, statuses):
         self.rescan_btn.setEnabled(True)
         self.statuses = statuses
-        self._row_index = {}
-        items = []
-        for index, status in enumerate(statuses):
-            self._row_index[status.path] = index
-            meta = []
-            if status.pages:
-                meta.append(f"{status.pages} 页")
-            note = status.problem
-            if not note and status.renamed_from:
-                note = f"原名 {status.renamed_from}，已自动改名"
-            if not note:
-                note = status.notice
-            # 恢复「正常档案按班级支部组织」：可路由的档案明确标出目标团支部，
-            # 让「上传前按班级分流到对应账号」的逻辑重新可见，不再被「只通知错误」吞掉
-            if status.branch and not status.problem:
-                target = f"目标支部：{status.branch}"
-                note = f"{note}　{target}" if note else target
-            elif status.branch:
-                meta.append(status.branch)
-            items.append({
-                "title": status.name,
-                "note": note,
-                "tone": status.tone,
-                "status": status.status_text,
-                "meta": meta,
-            })
-        self._items_all = items
-        self._apply_filter()
         stats = summarize(statuses)
         parts = [f"正常 {stats['ok']}"]
         if stats["fixed"]:
@@ -403,23 +376,37 @@ class UploadPage(FluentPage):
                 duration=9000, parent=self)
 
     def set_search(self, text: str):
-        """标题栏搜索框：按文件名、支部或问题说明过滤待处理清单。"""
+        """标题栏搜索框：按文件名、支部或问题说明过滤下方折叠卡片。"""
         text = (text or "").strip()
         if text == getattr(self, "_search", ""):
             return
         self._search = text
-        self._apply_filter()
+        self._rebuild_branches()
 
-    def _apply_filter(self):
-        needle = getattr(self, "_search", "").lower()
-        items = getattr(self, "_items_all", [])
-        if needle:
-            items = [it for it in items
-                     if needle in str(it.get("title", "")).lower()
-                     or needle in str(it.get("note", "")).lower()
-                     or any(needle in str(m).lower() for m in it.get("meta") or [])]
-        self.status_list.set_items(items, "没有匹配的档案" if needle else
-                                   "工作目录里还没有 PDF")
+    def _row_item(self, status) -> dict:
+        """把一份档案的状态翻译成折叠卡片里一行的展示数据。"""
+        meta = []
+        if status.pages:
+            meta.append(f"{status.pages} 页")
+        note = status.problem
+        if not note and status.renamed_from:
+            note = f"原名 {status.renamed_from}，已自动改名"
+        if not note:
+            note = status.notice
+        # 可路由的档案标出目标团支部，让「按班级分流到对应账号」的逻辑可见，
+        # 而不是被「只通知错误」吞掉
+        if status.branch and not status.problem:
+            target = f"目标支部：{status.branch}"
+            note = f"{note}　{target}" if note else target
+        elif status.branch:
+            meta.append(status.branch)
+        return {
+            "title": status.name,
+            "note": note,
+            "tone": status.tone,
+            "status": status.status_text,
+            "meta": meta,
+        }
 
     def _rebuild_branches(self):
         while self.branch_lay.count():
@@ -427,27 +414,39 @@ class UploadPage(FluentPage):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        for branch, statuses in group_by_branch(self.statuses).items():
+        self._branch_rows = {}
+
+        needle = getattr(self, "_search", "").lower()
+        statuses = self.statuses
+        if needle:
+            statuses = [s for s in statuses
+                        if needle in str(s.name).lower()
+                        or needle in str(s.problem or "").lower()
+                        or needle in str(s.notice or "").lower()
+                        or (s.branch and needle in str(s.branch).lower())]
+
+        groups = group_by_branch(statuses)
+        if not groups:
+            empty = ("没有匹配的档案" if needle
+                     else getattr(self, "_empty_text", "工作目录里还没有 PDF"))
+            self.branch_lay.addWidget(note_label(empty))
+            return
+        for branch, bstatuses in groups.items():
             stage, name = split_branch_label(branch)
-            tags = ([(stage, "gray")] if stage else []) + [(f"{len(statuses)} 份", "gray")]
-            todo = sum(1 for s in statuses if not s.usable)
+            tags = ([(stage, "gray")] if stage else []) + [(f"{len(bstatuses)} 份", "gray")]
+            todo = sum(1 for s in bstatuses if not s.usable)
             if todo:
                 tags.append((f"{todo} 待处理", "orange"))
-            missing = sum(1 for s in statuses if s.usable and s.member == "missing")
+            missing = sum(1 for s in bstatuses if s.usable and s.member == "missing")
             if missing:
-                tags.append((f"{missing} 缺团员", "orange"))
+                tags.append((f"缺团员 {missing}", "orange"))
             card = CollapsibleCard(name or branch, expanded=True, tags=tags)
-            rows = [{
-                "title": s.name,
-                "note": s.problem or s.notice or "",
-                "tone": s.tone,
-                "status": s.status_text,
-                "meta": [f"{s.pages} 页"] if s.pages else [],
-            } for s in statuses]
             listing = StatusList()
-            listing.set_items(rows)
+            listing.set_items([self._row_item(s) for s in bstatuses])
             card.body_lay.addWidget(listing)
             self.branch_lay.addWidget(card)
+            for row_index, s in enumerate(bstatuses):
+                self._branch_rows[s.path] = (listing, row_index)
 
     # ---------- 上传 ----------
 
@@ -478,9 +477,9 @@ class UploadPage(FluentPage):
 
         for status in self.statuses:
             if status.usable:
-                index = self._row_index.get(status.path)
-                if index is not None:
-                    self.status_list.set_row_state(index, "等待", "muted")
+                ref = self._branch_rows.get(status.path)
+                if ref is not None:
+                    ref[0].set_row_state(ref[1], "等待", "muted")
         self.upload_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.rescan_btn.setEnabled(False)
@@ -495,10 +494,10 @@ class UploadPage(FluentPage):
         QTimer.singleShot(0, lambda: self._apply_row(account, path, result, reason))
 
     def _apply_row(self, account: str, path: str, result: str, reason: str):
-        index = self._row_index.get(path)
-        if index is not None:
-            self.status_list.set_row_state(
-                index, result, RESULT_TONE.get(result, "muted"), reason)
+        ref = self._branch_rows.get(path)
+        if ref is not None:
+            ref[0].set_row_state(
+                ref[1], result, RESULT_TONE.get(result, "muted"), reason)
         if result == "成功":
             remove_pending(path)
 
