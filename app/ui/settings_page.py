@@ -17,6 +17,8 @@ from PySide6.QtCore import QThread, QTimer, Signal, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QTableWidgetItem, QWidget
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
@@ -63,7 +65,7 @@ def guess_semester() -> str:
 
 
 class HealthWorker(QThread):
-    """逐账号测活：先只读探测，失效才尝试登录；结果逐个回报。"""
+    """并发测活：每个账号独立线程探测，互不影响，结果完成一个回报一个。"""
 
     account_checked = Signal(str, str, str)  # userName, status, message
 
@@ -71,30 +73,37 @@ class HealthWorker(QThread):
         super().__init__()
         self.accounts = accounts
 
+    def _check_one(self, acc: dict) -> tuple[str, str, str]:
+        user, pwd = acc.get("userName", ""), acc.get("password", "")
+        if not user or not pwd:
+            return user, "unknown", "账号或密码为空"
+        try:
+            client = SiteClient(user, pwd)
+            probe = client.session_account()
+            if probe.ok:
+                return user, "ok", probe.message or "会话有效"
+            verdict = client.login()
+            mapping = {
+                "ok": "ok",
+                "failed": "failed",
+                "captcha": "captcha",
+                "passwordChange": "passwordChange",
+                "needMemberName": "needMemberName",
+            }
+            kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
+            return user, mapping.get(kind, "failed"), verdict.message
+        except Exception as e:
+            return user, "network", str(e)
+
     def run(self):
-        for acc in self.accounts:
-            user, pwd = acc.get("userName", ""), acc.get("password", "")
-            if not user or not pwd:
-                self.account_checked.emit(user, "unknown", "账号或密码为空")
-                continue
-            try:
-                client = SiteClient(user, pwd)
-                probe = client.session_account()
-                if probe.ok:
-                    self.account_checked.emit(user, "ok", probe.message or "会话有效")
-                    continue
-                verdict = client.login()
-                mapping = {
-                    "ok": "ok",
-                    "failed": "failed",
-                    "captcha": "captcha",
-                    "passwordChange": "passwordChange",
-                    "needMemberName": "needMemberName",
-                }
-                kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
-                self.account_checked.emit(user, mapping.get(kind, "failed"), verdict.message)
-            except Exception as e:
-                self.account_checked.emit(user, "network", str(e))
+        workers = min(8, max(1, len(self.accounts)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(self._check_one, dict(a)) for a in self.accounts]
+            for fut in as_completed(futures):
+                try:
+                    self.account_checked.emit(*fut.result())
+                except Exception as e:  # 单账号线程异常不影响其余结果
+                    self.account_checked.emit("", "network", f"测活线程异常：{e}")
 
 
 class WorkspaceWorker(QThread):
@@ -163,17 +172,37 @@ class SettingsPage(FluentPage):
         top_lay.addLayout(row0)
         lay.addWidget(top)
 
-        # 账号表：勾选框 + 账号 + 备注 + 健康状态 + 最近检查 + 操作
+        # 表格上方工具行：图标按钮（无文字）
+        tools = QHBoxLayout()
+        self.sel_all_btn = ToolButton(FIF.CHECKBOX)
+        self.sel_all_btn.setToolTip("全选 / 取消全选")
+        self.sel_all_btn.clicked.connect(self._toggle_select_all)
+        self.del_checked_btn = ToolButton(FIF.DELETE)
+        self.del_checked_btn.setToolTip("删除勾选账号")
+        self.del_checked_btn.clicked.connect(self._delete_checked)
+        self.recheck_btn = ToolButton(FIF.SYNC)
+        self.recheck_btn.setToolTip("全部测活")
+        self.recheck_btn.clicked.connect(self.start_health_check)
+        tools.addWidget(self.sel_all_btn)
+        tools.addWidget(self.del_checked_btn)
+        tools.addWidget(self.recheck_btn)
+        tools.addStretch(1)
+        lay.addLayout(tools)
+
+        # 账号表：勾选框 + 账号 + 密码 + 备注 + 健康状态 + 最近检查
+        # 只有账号/密码/备注可编辑，健康状态等属性列只读；编辑实时回写配置
         self.table = TableWidget()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(8)
         self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["", "账号", "备注", "健康状态", "最近检查", "操作"])
+        self.table.setHorizontalHeaderLabels(["", "账号", "密码", "备注", "健康状态", "最近检查"])
         self.table.setColumnWidth(0, 32)
-        self.table.setColumnWidth(5, 56)
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(4, header.ResizeMode.Stretch)
+        for col in (1, 2, 3, 4):  # 账号/密码/备注/健康状态列宽随内容自适应，保证完整展示
+            header.setSectionResizeMode(col, header.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, header.ResizeMode.Stretch)
+        self.table.itemChanged.connect(self._on_item_changed)
         self.add_table(self.table, 2)
 
         # 添加账号
@@ -200,10 +229,7 @@ class SettingsPage(FluentPage):
         row2 = QHBoxLayout()
         self.import_btn = PushButton(FIF.DOCUMENT, "批量导入")
         self.import_btn.clicked.connect(self._import_accounts)
-        self.del_btn = PushButton(FIF.DELETE, "删除勾选账号")
-        self.del_btn.clicked.connect(self._delete_checked)
         row2.addWidget(self.import_btn)
-        row2.addWidget(self.del_btn)
         row2.addStretch(1)
         add_lay.addLayout(row2)
         lay.addWidget(add)
@@ -391,7 +417,7 @@ class SettingsPage(FluentPage):
             self.window(),
         )
         box.yesButton.setText("覆盖")
-        box.noButton.setText("保留原密码")
+        box.cancelButton.setText("保留原密码")
         box.exec()
         return "overwrite" if box.result() else "keep"
 
@@ -499,7 +525,7 @@ class SettingsPage(FluentPage):
             self.window(),
         )
         box.yesButton.setText("删除")
-        box.noButton.setText("取消")
+        box.cancelButton.setText("取消")
         box.exec()
         if not box.result():
             return
@@ -511,8 +537,17 @@ class SettingsPage(FluentPage):
         self._after_accounts_changed()
         InfoBar.success("已删除", f"移除 {len(users)} 个账号", duration=3000, parent=self)
 
-    def _delete_row(self, row: int):
-        self._remove_accounts([row])
+    def _toggle_select_all(self):
+        """有未勾选的就全选，否则全部取消。"""
+        rows = range(self.table.rowCount())
+        any_unchecked = any(
+            self.table.item(i, 0) and self.table.item(i, 0).checkState() != Qt.CheckState.Checked
+            for i in rows
+        )
+        state = Qt.CheckState.Checked if any_unchecked else Qt.CheckState.Unchecked
+        for i in rows:
+            if self.table.item(i, 0):
+                self.table.item(i, 0).setCheckState(state)
 
     def _delete_checked(self):
         rows = [i for i in range(self.table.rowCount())
@@ -521,7 +556,11 @@ class SettingsPage(FluentPage):
 
     # ---------- 表格 / 当前账号 ----------
 
+    READONLY_FLAGS = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+    EDITABLE_COLS = {1: "userName", 2: "password", 3: "remark"}  # 列号 → 账号字段
+
     def _refresh_table(self):
+        self.table.blockSignals(True)
         self.table.setRowCount(len(self.accounts))
         for i, acc in enumerate(self.accounts):
             # 勾选框列
@@ -529,20 +568,19 @@ class SettingsPage(FluentPage):
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
             chk.setCheckState(Qt.CheckState.Unchecked)
             self.table.setItem(i, 0, chk)
-            self.table.setItem(i, 1, QTableWidgetItem(acc["userName"]))
-            self.table.setItem(i, 2, QTableWidgetItem(acc.get("remark", "")))
+            # 可编辑列：账号 / 密码 / 备注
+            for col, key in self.EDITABLE_COLS.items():
+                self.table.setItem(i, col, QTableWidgetItem(str(acc.get(key, ""))))
             h = acc.get("health") or {}
             status, msg = h.get("status", "unknown"), h.get("message", "")
             label = HEALTH_LABEL.get(status, status) + (f"：{msg}" if msg and status != "ok" else "")
-            self.table.setItem(i, 3, QTableWidgetItem(label))
-            self.table.item(i, 3).setForeground(QColor(HEALTH_COLOR.get(status, "#9e9e9e")))
+            self.table.setItem(i, 4, QTableWidgetItem(label))
+            self.table.item(i, 4).setFlags(self.READONLY_FLAGS)
+            self.table.item(i, 4).setForeground(QColor(HEALTH_COLOR.get(status, "#9e9e9e")))
             checked = h.get("checkedAt", "")
-            self.table.setItem(i, 4, QTableWidgetItem(checked.replace("T", " ")[:19] if checked else "—"))
-            # 行内删除按钮
-            btn = ToolButton(FIF.DELETE)
-            btn.setToolTip(f"删除 {acc['userName']}")
-            btn.clicked.connect(lambda _=False, r=i: self._delete_row(r))
-            self.table.setCellWidget(i, 5, btn)
+            self.table.setItem(i, 5, QTableWidgetItem(checked.replace("T", " ")[:19] if checked else "—"))
+            self.table.item(i, 5).setFlags(self.READONLY_FLAGS)
+        self.table.blockSignals(False)
         # 当前使用下拉
         self.active_combo.blockSignals(True)
         self.active_combo.clear()
@@ -552,6 +590,51 @@ class SettingsPage(FluentPage):
         elif self.accounts:
             self.active_user = self.accounts[0]["userName"]
             self.active_combo.setCurrentText(self.active_user)
+        self.active_combo.blockSignals(False)
+
+    def _on_item_changed(self, item: QTableWidgetItem):
+        """表格内编辑账号/密码/备注后回写配置；无效改动回退。"""
+        row, col = item.row(), item.column()
+        if col not in self.EDITABLE_COLS or not (0 <= row < len(self.accounts)):
+            return
+        acc = self.accounts[row]
+        key = self.EDITABLE_COLS[col]
+        text = item.text()
+        if key == "password":
+            new_value = text  # 密码不去空白（可能含空格），不显示明文提示
+        elif key == "userName":
+            new_value = text.strip()
+        else:
+            new_value = text.strip()
+
+        if key == "userName" and (not new_value or any(
+                a["userName"] == new_value for j, a in enumerate(self.accounts) if j != row)):
+            # 空账号或重名：回退
+            self.table.blockSignals(True)
+            item.setText(acc["userName"])
+            self.table.blockSignals(False)
+            InfoBar.warning("账号无效", "账号不能为空，也不能与其他账号重复", duration=3000, parent=self)
+            return
+
+        changed = acc.get(key, "") != new_value
+        if not changed:
+            return
+        acc[key] = new_value
+        if key in ("userName", "password"):
+            acc["health"] = {"status": "unknown", "message": "", "checkedAt": ""}
+        self._save_config()
+        if key == "userName":
+            if self.active_user == text.strip() or not self.active_user:
+                self.active_user = new_value
+            self._refresh_combo_only()
+        if key in ("userName", "password"):
+            self.start_health_check()
+
+    def _refresh_combo_only(self):
+        self.active_combo.blockSignals(True)
+        self.active_combo.clear()
+        self.active_combo.addItems([a["userName"] for a in self.accounts])
+        self.active_combo.setCurrentText(self.active_user)
         self.active_combo.blockSignals(False)
 
     def _on_active_changed(self, user: str):
