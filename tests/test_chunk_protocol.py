@@ -12,6 +12,7 @@ from app.domain.chunk_protocol import (
     chunk_count,
     chunk_range,
     parse_chunk_response,
+    parse_audit_response,
     parse_file_add_response,
     parse_validation_response,
 )
@@ -54,10 +55,23 @@ def test_parse_validation():
 
 def test_parse_file_add():
     r = parse_file_add_response({"status": "OK", "msg": {"mid": "m1", "retpath": "/f", "token": "t"}})
-    assert r.ok and r.mid == "m1" and "审核" in r.reason
+    assert r.ok and r.mid == "m1"
     r2 = parse_file_add_response({"status": "ERROR", "msg": "x"})
     assert not r2.ok
     assert not parse_file_add_response(None).ok
+
+
+def test_parse_audit():
+    ok, msg = parse_audit_response({"status": "OK", "msg": "成功"})
+    assert ok and msg == "成功"
+    ok, msg = parse_audit_response({"status": "OK"})
+    assert ok and msg == "审核通过"
+    ok, msg = parse_audit_response({"status": "ERROR", "msg": "未报到"})
+    assert not ok and msg == "未报到"
+    ok, msg = parse_audit_response({"status": "EXPIRE"})
+    assert not ok and "EXPIRE" in msg
+    ok, msg = parse_audit_response(None)
+    assert not ok
 
 
 def test_parse_chunk():

@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+from typing import Callable
 
 from app.constants import CONFIG_FILE
 
 DEFAULT_NOTIFY_TIME = "08:00"
+
+_LOCK = threading.Lock()  # 配置文件唯一的写入口：load→mutate→save 必须整段持锁
 
 
 def load() -> dict:
@@ -32,6 +36,18 @@ def save(cfg: dict) -> None:
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def update(mutate: Callable[[dict], None]) -> dict:
+    """线程安全的 load → mutate → save。
+
+    工作线程（成员缓存/站内信缓存逐账号落盘）与 GUI 线程（账号/健康状态落盘）
+    都走这里：先拿最新配置再改，后写者不会用旧快照把先写者的数据抹掉。"""
+    with _LOCK:
+        cfg = load()
+        mutate(cfg)
+        save(cfg)
+        return cfg
 
 
 def notify_time(cfg: dict) -> str:

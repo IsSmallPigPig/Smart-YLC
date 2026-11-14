@@ -159,9 +159,12 @@ class CheckPage(FluentPage):
         self.export_btn = PushButton(FIF.SAVE, "导出异常清单 xlsx")
         self.export_btn.setEnabled(False)
         self.export_btn.clicked.connect(self._export)
+        self.clear_btn = PushButton(FIF.DELETE, "清除结果")
+        self.clear_btn.clicked.connect(self._clear_results)
         row.addWidget(self.kind_combo, 1)
         row.addWidget(self.scan_btn)
         row.addWidget(self.export_btn)
+        row.addWidget(self.clear_btn)
         lay.addLayout(row)
 
         self.stat = BodyLabel("名单选学期即对照该学期名单；支部选单个团支部或全部；只读查询，不修改数据")
@@ -172,7 +175,6 @@ class CheckPage(FluentPage):
         self.table.setBorderRadius(8)
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(["检查项", "姓名", "手机号", "团支部", "异常点", "判定依据"])
-        self.table.horizontalHeader().setStretchLastSection(True)
         self.add_table(self.table, 1)
 
     # ---------- 范围下拉 ----------
@@ -297,6 +299,14 @@ class CheckPage(FluentPage):
                 if col == 4:
                     item.setForeground(QColor("#c62828" if r.is_error else "#ef6c00"))
                 self.table.setItem(i, col, item)
+
+    def _clear_results(self):
+        self.table.setRowCount(0)
+        self.results = []
+        self._all_results = []
+        self._errors = []
+        self.export_btn.setEnabled(False)
+        self.stat.setText("名单选学期即对照该学期名单；支部选单个团支部或全部；只读查询，不修改数据")
 
     def _export(self):
         path, _ = QFileDialog.getSaveFileName(self, "导出异常清单", "异常清单.xlsx", "Excel (*.xlsx)")

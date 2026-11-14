@@ -1,13 +1,11 @@
-"""站内信分类、手机号提取、支部账号定位。"""
+"""站内信分类、手机号提取、姓名索引。"""
 
 from app.domain.messages import (
     MessageView,
-    build_member_index,
     build_member_name_index,
     classify_message,
     clean_title,
     extract_mobile,
-    locate_account,
     strip_html,
 )
 
@@ -33,7 +31,10 @@ def test_classify_report():
 
 def test_classify_transfer():
     assert classify_message("[系统通知]", "王瑜向您所在团组织提交了团员关系转接申请，请您尽快审核。") == "transfer"
-    # 转接优先于报到（内容可能同时出现两个词）
+    # 站点标题可能是「转出支部审核提醒」/「转入支部审核提醒」，不带「转接」二字
+    assert classify_message("[系统通知][转出支部审核提醒]", "谢维恩向所在团组织提交了团员转出申请，请尽快审核。") == "transfer"
+    assert classify_message("[系统通知][转入支部审核提醒]", "李四向所在团组织提交了团员转入申请，请尽快审核。") == "transfer"
+    # 转接类优先于报到（内容可能同时出现两个词）
     assert classify_message("报到提醒", "该团员已发起转接申请") == "transfer"
 
 
@@ -61,12 +62,5 @@ def test_build_views_and_locate():
     views = [v for v in __import__("app.domain.messages", fromlist=["build_message_views"]).build_message_views(rows, "ssfz12407")]
     v = views[0]
     assert v.kind == "report" and v.mobile == "19925691060" and v.status_str == "未读"
-
-    accounts = [{"userName": "ssfz12407", "remark": "普通高中高三七班"}]
-    index = build_member_index([], {"ssfz12407": {"members": [{"mobile": "19925691060"}]}}, [])
-    assert locate_account(v, accounts, index) == "ssfz12407"
-
-    # 系统缓存没命中时走 本地班级编号 → 编号规则 → 账号备注
-    index2 = build_member_index([], {}, [])
-    index2["19925691060"] = ("", "12407")
-    assert locate_account(v, accounts, index2) == "ssfz12407"
+    # 点击消息直接用拉取来源账号（支部即账号），不再经团员定位
+    assert v.account == "ssfz12407"

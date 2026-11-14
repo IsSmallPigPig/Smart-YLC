@@ -92,10 +92,13 @@ class CompressPage(FluentPage):
         self.stop_btn.clicked.connect(lambda: self.worker and self.worker.stop())
         self.ring = ProgressRing()
         self.ring.setFixedSize(56, 56)
+        self.clear_btn = PushButton(FIF.DELETE, "清除结果")
+        self.clear_btn.clicked.connect(self._clear_results)
         row2.addWidget(self.target_combo, 1)
         row2.addWidget(self.start_btn)
         row2.addWidget(self.stop_btn)
         row2.addWidget(self.ring)
+        row2.addWidget(self.clear_btn)
         lay.addLayout(row2)
 
         self.stat = BodyLabel("待开始")
@@ -106,8 +109,15 @@ class CompressPage(FluentPage):
         self.table.setBorderRadius(8)
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(["文件", "原大小", "压缩后", "结果", "参数", "输出路径"])
-        self.table.horizontalHeader().setStretchLastSection(True)
         self.add_table(self.table, 1)
+
+    def _clear_results(self):
+        if self.worker is not None and self.worker.isRunning():
+            InfoBar.warning("压缩进行中", "等当前批次结束或先点「停止」再清除", duration=3000, parent=self)
+            return
+        self.table.setRowCount(0)
+        self.ring.setValue(0)
+        self.stat.setText("待开始")
 
     def _pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")

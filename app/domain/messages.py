@@ -3,7 +3,8 @@
 端点（前端 MessageApi.js）：GET /api/v1/admin/message/findAllMessage
 type=0 组织账号；信封 {code, total, listData}，total 是本页条数（不可靠），
 按「返回空页」停止翻页。content 是 HTML，团员申请类消息带
-data-mobile（团员手机号）——用它把消息定位到团员所在支部账号。
+data-mobile（团员手机号）——仅用于卡片上显示团员姓名；点击消息打开的
+网页端账号就是拉取该消息的支部账号（view.account），无需再定位团员。
 """
 
 from __future__ import annotations
@@ -13,8 +14,9 @@ from dataclasses import dataclass, field
 
 KIND_LABEL = {"report": "报到申请", "transfer": "转接申请", "other": "其他消息"}
 KIND_COLOR = {"report": "#1565c0", "transfer": "#2e7d32", "other": "#6b7280"}
-# 站点把「报到」错打成「报道」，两种写法都要认
+# 站点把「报到」错打成「报道」，两种写法都要认；关系转接含 转出/转入 两种审核提醒
 _REPORT_WORDS = ("报到", "报道")
+_TRANSFER_WORDS = ("转接", "转出", "转入")
 _MOBILE_RE = re.compile(r"1\d{10}")
 _TAG_RE = re.compile(r"<[^>]+>")
 # 站点标题形如「[系统通知][报道认证审核提醒]」：第一层是系统通知前缀，第二层才是标题
@@ -53,9 +55,9 @@ class MessageView:
 
 
 def classify_message(title: str, content: str) -> str:
-    """报到申请 / 转接申请 / 其他。转接优先（转接标题可能不带「转接」二字）。"""
+    """报到申请 / 转接申请 / 其他。转接类优先（转出/转入审核提醒都不带「转接」二字）。"""
     text = f"{title} {content}"
-    if "转接" in text:
+    if any(w in text for w in _TRANSFER_WORDS):
         return "transfer"
     if any(w in text for w in _REPORT_WORDS):
         return "report"
@@ -116,39 +118,6 @@ def fetch_all_messages(client, account: str, page_size: int = 100, max_pages: in
         if len(rows) < page_size:
             break
     return views
-
-
-def locate_account(view: MessageView, accounts: list[dict], member_index: dict[str, tuple[str, str]]) -> str:
-    """消息 → 负责该团员所在支部的账号 userName。
-
-    member_index：手机号 → (账号 userName|"", 班级编号)。有 userName 直接用；
-    只有班级编号时由调用方经编号规则/账号备注匹配。找不到返回空串。"""
-    user, cls = member_index.get(view.mobile, ("", "")) if view.mobile else ("", "")
-    if user:
-        return user
-    if cls:
-        from app.domain.org_rule import describe_code
-
-        branch = describe_code(cls)
-        for a in accounts:
-            if (a.get("remark") or "") == branch:
-                return a.get("userName", "")
-    return ""
-
-
-def build_member_index(accounts: list[dict], member_cache: dict, local_rows: list) -> dict[str, tuple[str, str]]:
-    """手机号 → (账号 userName|"", 班级编号)。系统缓存优先（真实在册），本地名单兜底。"""
-    index: dict[str, tuple[str, str]] = {}
-    for user, blob in (member_cache or {}).items():
-        for m in blob.get("members", []):
-            mob = str(m.get("mobile") or "")
-            if mob:
-                index.setdefault(mob, (user, ""))
-    for r in local_rows:
-        mob = getattr(r, "mobile", "")
-        if mob and mob not in index:
-            index[mob] = ("", getattr(r, "extra", {}).get("class", ""))
-    return index
 
 
 def build_member_name_index(member_cache: dict, local_rows: list) -> dict[str, str]:

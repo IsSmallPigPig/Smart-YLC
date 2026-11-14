@@ -100,9 +100,16 @@ class MainWindow(MSFluentWindow):
         if store.load().get("translucent"):
             self.set_translucent(True)
 
-        # 后台静默刷新：智慧团建数据每 4 小时一轮，无用户主动刷新时才跑；
-        # 逐账号串行 + 间隔，避免触发风控。启动 1 分钟后先检查一次。
-        self._bg_sync_worker: "MemberSyncWorker | None" = None
+        # 明暗模式切换（手动或跟随系统变化）：重绘窗口底色 + 重建带烘焙颜色的页面
+        from qfluentwidgets import qconfig
+
+        qconfig.themeChanged.connect(lambda *_: self.on_theme_changed())
+
+        # 统一数据刷新：成员缓存 → 站内信 → 组织状况统计，三段都在工作线程串行执行。
+        # 后台静默轮：每 4 小时一轮，启动 1 分钟后先检查一次；手动入口在「系统配置」。
+        self._refreshing = False
+        self._refresh_silent = True
+        self._refresh_worker: "QThread | None" = None
         self._sync_timer = QTimer(self)
         self._sync_timer.setInterval(4 * 3600 * 1000)
         self._sync_timer.timeout.connect(self._maybe_background_sync)
@@ -113,10 +120,7 @@ class MainWindow(MSFluentWindow):
         """距上次刷新 ≥4 小时（或从没刷过）才静默刷新；刷新中不重复启动。"""
         from datetime import datetime, timezone
 
-        if self._bg_sync_worker is not None and self._bg_sync_worker.isRunning():
-            return
-        accounts = self.settings_page.accounts
-        if not accounts:
+        if not self.settings_page.accounts:
             return
         last = store.load().get("lastSyncAt", "")
         if last:
@@ -126,16 +130,68 @@ class MainWindow(MSFluentWindow):
                 elapsed = None
             if elapsed is not None and elapsed < 4 * 3600:
                 return
+        self.refresh_all(silent=True)
+
+    def refresh_all(self, silent: bool = True) -> bool:
+        """刷新所有数据：成员缓存 → 站内信 → 组织状况统计。
+
+        全程工作线程（网络不进 GUI 线程）；进行中再次调用直接返回 False。
+        「系统配置」的按钮走 silent=False（有开始/完成提示），添加账号与后台定时走静默。"""
+        from qfluentwidgets import InfoBar
+
+        from app.ui.messages_page import MessageFetchWorker
         from app.ui.org_manage_page import MemberSyncWorker, mark_synced
 
-        self._bg_sync_worker = MemberSyncWorker(accounts, sequential=True)
-        self._bg_sync_worker.all_done.connect(lambda: mark_synced())
-        self._bg_sync_worker.all_done.connect(
-            lambda: self.org_manage_page.refresh()
-            if self.stackedWidget.currentWidget() is self.org_manage_page else None)
-        # 成员同步完成后顺带自动拉取站内信（缓存新鲜则跳过）
-        self._bg_sync_worker.all_done.connect(lambda: self.messages_page.auto_fetch())
-        self._bg_sync_worker.start()
+        accounts = self.settings_page.accounts
+        if not accounts:
+            if not silent:
+                InfoBar.warning("没有账号", "先在「系统配置」添加团支部账号", duration=3000, parent=self)
+            return False
+        if self._refreshing:
+            if not silent:
+                InfoBar.info("刷新进行中", "上一轮还没跑完，稍候", duration=3000, parent=self)
+            return False
+
+        self._refreshing = True
+        self._refresh_silent = silent
+        if not silent:
+            InfoBar.info("开始刷新", f"成员缓存 → 站内信 → 组织状况，共 {len(accounts)} 个账号", duration=4000, parent=self)
+
+        def _after_sync():
+            self.org_manage_page.refresh()
+            mark_synced()
+            msg_w = MessageFetchWorker(accounts)
+            self._refresh_worker = msg_w
+            msg_w.all_done.connect(_after_messages)
+            msg_w.start()
+
+        def _after_messages():
+            self.messages_page._load_cache()
+            self.org_page._start()  # 组织状况统计自己开线程，结束回调收尾
+            org_w = self.org_page.worker
+            if org_w is not None:
+                org_w.all_done.connect(_finish)
+            else:
+                _finish()
+
+        def _finish():
+            self._refreshing = False
+            self._refresh_worker = None
+            if not self._refresh_silent:
+                InfoBar.success("刷新完成", "成员、站内信、组织状况均已更新", duration=4000, parent=self)
+
+        sync_w = MemberSyncWorker(accounts, sequential=True)
+        self._refresh_worker = sync_w
+        sync_w.all_done.connect(_after_sync)
+        sync_w.start()
+        return True
+
+    def on_theme_changed(self):
+        """明暗模式变化：窗口底色重绘；消息卡片的未读底色/chip 底色是按当前
+        主题烘焙的，需要重建列表。其余页面样式由 fluent 主题联动自动更新。"""
+        self.update()
+        if hasattr(self, "messages_page") and self.messages_page._views:
+            self.messages_page._rebuild()
 
     def _setup_back_button(self):
         self.back_btn = TransparentToolButton(FIF.RETURN, self.titleBar)

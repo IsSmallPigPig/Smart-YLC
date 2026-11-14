@@ -97,7 +97,6 @@ class NamingPage(FluentPage):
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(8)
         self.table.setWordWrap(False)
-        self.table.horizontalHeader().setStretchLastSection(True)
         self.add_table(self.table, 1)
 
     def _hint_text(self) -> str:

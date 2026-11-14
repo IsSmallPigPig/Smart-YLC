@@ -21,7 +21,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from qfluentwidgets import (
     BodyLabel,
-    CardWidget,
     ComboBox,
     EditableComboBox,
     FluentIcon as FIF,
@@ -33,12 +32,11 @@ from qfluentwidgets import (
     SubtitleLabel,
     SwitchButton,
     TableWidget,
-    ToolButton,
     TreeWidget,
 )
 
 from app.ui import dialogs
-from app.ui.page import FluentPage, note_label
+from app.ui.page import CollapsibleCard, FluentPage, note_label, sub_title
 from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, describe_code, parse_class_code
 from app.domain.transfer import is_graduated
@@ -49,15 +47,18 @@ HEALTH_LABEL = {
     "ok": "正常",
     "failed": "密码错误",
     "captcha": "需验证码（先去网页端登录一次）",
+    "cooldown": "登录冷却（验证码/风控，1 小时后自动重试）",
     "passwordChange": "需改密（EXPIREDPASS/WEAKPASS）",
     "needMemberName": "需姓名校验",
     "network": "网络错误",
     "unknown": "未检测",
 }
+THEME_INDEX = {"auto": 0, "light": 1, "dark": 2}
 HEALTH_COLOR = {
     "ok": "#2e7d32",
     "failed": "#c62828",
     "captcha": "#ef6c00",
+    "cooldown": "#9e9e9e",
     "passwordChange": "#ef6c00",
     "needMemberName": "#ef6c00",
     "network": "#9e9e9e",
@@ -71,35 +72,33 @@ def guess_semester() -> str:
 
 
 class HealthWorker(QThread):
-    """并发测活：每个账号独立线程探测，互不影响，结果完成一个回报一个。"""
+    """并发测活：恢复已保存会话 → 只读探测，探测有效不登录；冷却中的账号
+    （验证码/风控）本轮不尝试登录，只回报冷却状态。"""
 
     account_checked = Signal(str, str, str)  # userName, status, message
+
+    # 登录闸门的 kind → 测活展示状态
+    KIND_MAP = {
+        "ok": "ok", "failed": "failed", "captcha": "captcha",
+        "passwordChange": "passwordChange", "needMemberName": "needMemberName",
+        "risk": "cooldown", "cooldown": "cooldown", "network": "network",
+    }
 
     def __init__(self, accounts: list[dict]):
         super().__init__()
         self.accounts = accounts
 
     def _check_one(self, acc: dict) -> tuple[str, str, str]:
+        from app.services import login_gate
+
         user, pwd = acc.get("userName", ""), acc.get("password", "")
         if not user or not pwd:
             return user, "unknown", "账号或密码为空"
         try:
-            client = SiteClient(user, pwd)
-            probe = client.session_account()
-            if probe.ok:
-                return user, "ok", probe.message or "会话有效"
-            verdict = client.login()
-            mapping = {
-                "ok": "ok",
-                "failed": "failed",
-                "captcha": "captcha",
-                "passwordChange": "passwordChange",
-                "needMemberName": "needMemberName",
-            }
-            kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
-            return user, mapping.get(kind, "failed"), verdict.message
+            kind, message = login_gate.ensure_logged_in(SiteClient(user, pwd))
+            return user, self.KIND_MAP.get(kind, "failed"), message
         except Exception as e:
-            return user, "network", str(e)
+            return user, "network", f"测活线程异常：{e}"
 
     def run(self):
         workers = min(8, max(1, len(self.accounts)))
@@ -185,54 +184,46 @@ class SettingsPage(FluentPage):
 
         lay = self.vBoxLayout
 
-        # 当前使用账号
-        top = CardWidget()
-        top_lay = QVBoxLayout(top)
-        top_lay.setContentsMargins(20, 16, 20, 16)
-        top_lay.addWidget(StrongBodyLabel("当前使用的团支部账号"))
-        top_lay.addWidget(note_label("测活先只读探测会话，会话有效不触发登录，避免误增密码错误次数"))
-        top_lay.addSpacing(4)
+        # ── 卡片一：团支部账号（当前账号 / 测活 / 账号表 / 添加导入） ──
+        acc_card = CollapsibleCard("团支部账号", expanded=True)
+        a = acc_card.body_lay
+        a.addWidget(note_label("测活复用上次登录的会话探测，有效不登录；触发验证码/风控的账号 1 小时内不再尝试登录"))
         row0 = QHBoxLayout()
+        row0.addWidget(BodyLabel("当前账号"))
         self.active_combo = ComboBox()
         self.active_combo.currentTextChanged.connect(self._on_active_changed)
-        self.health_btn = PushButton(FIF.SYNC, "全部测活")
-        self.health_btn.clicked.connect(self.start_health_check)
-        row0.addWidget(self.active_combo, 1)
-        row0.addWidget(self.health_btn)
-        top_lay.addLayout(row0)
-        lay.addWidget(top)
-
-        # 表格上方工具行：图标按钮（无文字）
-        tools = QHBoxLayout()
-        self.sel_all_btn = ToolButton(FIF.CHECKBOX)
-        self.sel_all_btn.setToolTip("全选 / 取消全选（仅可见行）")
-        self.sel_all_btn.clicked.connect(self._toggle_select_all)
-        self.del_checked_btn = ToolButton(FIF.DELETE)
-        self.del_checked_btn.setToolTip("删除勾选账号")
-        self.del_checked_btn.clicked.connect(self._delete_checked)
-        self.filter_btn = ToolButton(FIF.FILTER)
-        self.filter_btn.setToolTip("按团支部筛选（树状：学部 → 年级 → 班级）")
-        self.filter_btn.clicked.connect(self._show_filter_menu)
-        self.recheck_btn = ToolButton(FIF.SYNC)
-        self.recheck_btn.setToolTip("全部测活")
-        self.recheck_btn.clicked.connect(self.start_health_check)
-        self.web_btn = ToolButton(FIF.GLOBE)
+        self.web_btn = PushButton(FIF.GLOBE, "打开网页端")
         self.web_btn.setToolTip("在浏览器打开当前账号的网页端（携带登录态）")
         self.web_btn.clicked.connect(self._open_web)
-        self.tpl_btn = ToolButton(FIF.DOWNLOAD)
-        self.tpl_btn.setToolTip("下载账号导入模板（备注 / 账号 / 密码）")
-        self.tpl_btn.clicked.connect(self._download_account_template)
-        tools.addWidget(self.sel_all_btn)
-        tools.addWidget(self.del_checked_btn)
-        tools.addWidget(self.filter_btn)
-        tools.addWidget(self.recheck_btn)
-        tools.addWidget(self.web_btn)
-        tools.addWidget(self.tpl_btn)
+        self.health_btn = PushButton(FIF.SYNC, "全部测活")
+        self.health_btn.clicked.connect(self.start_health_check)
+        self.refresh_all_btn = PrimaryPushButton(FIF.SYNC, "刷新所有数据")
+        self.refresh_all_btn.setToolTip("成员缓存 → 站内信 → 组织状况，全部在工作线程串行刷新")
+        self.refresh_all_btn.clicked.connect(self._refresh_all_clicked)
+        row0.addWidget(self.active_combo, 1)
+        row0.addWidget(self.web_btn)
+        row0.addWidget(self.health_btn)
+        row0.addWidget(self.refresh_all_btn)
+        a.addLayout(row0)
+
+        row_t = QHBoxLayout()
+        self.sel_all_btn = PushButton("全选")
+        self.sel_all_btn.setToolTip("全选 / 取消全选（仅可见行）")
+        self.sel_all_btn.clicked.connect(self._toggle_select_all)
+        self.del_checked_btn = PushButton(FIF.DELETE, "删除勾选")
+        self.del_checked_btn.setToolTip("删除勾选账号")
+        self.del_checked_btn.clicked.connect(self._delete_checked)
+        self.filter_btn = PushButton(FIF.FILTER, "筛选")
+        self.filter_btn.setToolTip("按团支部筛选（树状：学部 → 年级 → 班级）")
+        self.filter_btn.clicked.connect(self._show_filter_menu)
         self.filter_note = note_label("")
-        tools.addSpacing(8)
-        tools.addWidget(self.filter_note)
-        tools.addStretch(1)
-        lay.addLayout(tools)
+        row_t.addWidget(self.sel_all_btn)
+        row_t.addWidget(self.del_checked_btn)
+        row_t.addWidget(self.filter_btn)
+        row_t.addSpacing(8)
+        row_t.addWidget(self.filter_note)
+        row_t.addStretch(1)
+        a.addLayout(row_t)
 
         # 账号表：勾选框 + 账号 + 密码 + 备注 + 届别 + 状态 + 健康状态 + 最近检查
         # 账号/密码/备注/届别可编辑，状态按届别自动算（毕业应转出），其余只读
@@ -242,21 +233,18 @@ class SettingsPage(FluentPage):
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels(["", "账号", "密码", "备注", "届别", "状态", "健康状态", "最近检查"])
         self.table.setColumnWidth(0, 46)
+        self.table.setMinimumHeight(180)
+        a.addWidget(self.table)
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, header.ResizeMode.Fixed)  # 勾选框列固定宽
         for col in (1, 2, 3, 4, 5, 6):  # 内容自适应，保证完整展示
             header.setSectionResizeMode(col, header.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(7, header.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._on_item_changed)
-        self.add_table(self.table, 2)
 
-        # 添加账号
-        add = CardWidget()
-        add_lay = QVBoxLayout(add)
-        add_lay.setContentsMargins(20, 16, 20, 16)
-        add_lay.addWidget(StrongBodyLabel("添加 / 导入账号"))
-        add_lay.addWidget(note_label("同账号同密码自动去重；同名账号密码不同时会询问如何处理"))
-        add_lay.addSpacing(4)
+        a.addWidget(sub_title("添加 / 导入账号"))
+        a.addWidget(note_label("同账号同密码自动去重；同名账号密码不同时会询问如何处理"))
         row1 = QHBoxLayout()
         self.new_user = LineEdit()
         self.new_user.setPlaceholderText("账号")
@@ -273,57 +261,73 @@ class SettingsPage(FluentPage):
         row1.addWidget(self.new_remark, 1)
         row1.addWidget(self.new_year, 1)
         row1.addWidget(self.add_btn)
-        add_lay.addLayout(row1)
+        a.addLayout(row1)
         row2 = QHBoxLayout()
         self.import_btn = PushButton(FIF.DOCUMENT, "批量导入")
         self.import_btn.clicked.connect(self._import_accounts)
+        self.tpl_btn = PushButton(FIF.DOWNLOAD, "下载账号模板")
+        self.tpl_btn.setToolTip("下载账号导入模板（备注 / 账号 / 密码）")
+        self.tpl_btn.clicked.connect(self._download_account_template)
+        self.export_cfg_btn = PushButton(FIF.SHARE, "导出配置 JSON")
+        self.export_cfg_btn.setToolTip("导出系统配置为 JSON 文件（完整备份，含账号密码）")
+        self.export_cfg_btn.clicked.connect(self._export_config_json)
         row2.addWidget(self.import_btn)
+        row2.addWidget(self.tpl_btn)
+        row2.addWidget(self.export_cfg_btn)
         row2.addStretch(1)
-        add_lay.addLayout(row2)
-        lay.addWidget(add)
+        a.addLayout(row2)
+        lay.addWidget(acc_card)
 
-        # 名单卡片（分学期）
-        ros = CardWidget()
-        ros_lay = QVBoxLayout(ros)
-        ros_lay.setContentsMargins(20, 16, 20, 16)
-        title_row = QHBoxLayout()
-        title_row.addWidget(StrongBodyLabel("预设团员名单"))
-        self.roster_status = note_label("未导入")
-        title_row.addSpacing(8)
-        title_row.addWidget(self.roster_status)
-        title_row.addStretch(1)
-        self.template_btn = PushButton(FIF.DOWNLOAD, "下载名单模板")
-        self.template_btn.clicked.connect(self._download_template)
-        title_row.addWidget(self.template_btn)
-        ros_lay.addLayout(title_row)
-        ros_lay.addWidget(note_label("xlsx 列：姓名 / 手机号码 / 班级（团支部编号，如 12407）；学期框可下拉选择，也可直接输入新学期名（如 2027春）建立，导入后按班级自动分流"))
-        ros_lay.addSpacing(4)
+        # ── 卡片二：名单导入（预设团员名单 + 团支书名单） ──
+        ros_card = CollapsibleCard("名单导入", expanded=True)
+        r = ros_card.body_lay
+        r.addWidget(sub_title("预设团员名单"))
+        r.addWidget(note_label("xlsx 列：姓名 / 手机号码 / 班级（团支部编号，如 12407）；学期可下拉选择、输入新名新建或直接导入，导入后按班级自动分流"))
         row3 = QHBoxLayout()
+        row3.addWidget(BodyLabel("学期"))
         self.semester_combo = EditableComboBox()
         self.semester_combo.addItems([guess_semester()])
         self.semester_combo.setCurrentText(guess_semester())
         self.semester_combo.setPlaceholderText("选择或输入学期（如 2027春）")
         self.semester_combo.currentTextChanged.connect(self._on_semester_changed)
+        self.new_sem_btn = PushButton(FIF.ADD, "新建学期")
+        self.new_sem_btn.setToolTip("按学期框里的名字新建一个空学期，之后再导入名单")
+        self.new_sem_btn.clicked.connect(self._create_semester)
         self.roster_edit = LineEdit()
         self.roster_edit.setPlaceholderText("选择名单文件")
-        self.roster_btn = PushButton("导入到该学期")
+        self.roster_btn = PrimaryPushButton("导入到该学期")
         self.roster_btn.clicked.connect(self._import_roster)
-        row3.addWidget(BodyLabel("学期"))
         row3.addWidget(self.semester_combo)
+        row3.addWidget(self.new_sem_btn)
         row3.addWidget(self.roster_edit, 1)
         row3.addWidget(self.roster_btn)
-        ros_lay.addLayout(row3)
-        lay.addWidget(ros)
+        r.addLayout(row3)
+        row_tpl = QHBoxLayout()
+        self.template_btn = PushButton(FIF.DOWNLOAD, "下载名单模板")
+        self.template_btn.clicked.connect(self._download_template)
+        row_tpl.addWidget(self.template_btn)
+        row_tpl.addStretch(1)
+        r.addLayout(row_tpl)
+        r.addWidget(sub_title("团支书名单"))
+        r.addWidget(note_label("xlsx 列：支部（编号或名称） / 团支书（姓名） / 手机号码（可选）；展示在「组织管理」的支部信息里"))
+        row_sec = QHBoxLayout()
+        self.sec_btn = PushButton(FIF.DOCUMENT, "导入团支书名单")
+        self.sec_btn.clicked.connect(self._import_secretaries)
+        self.sec_status = note_label("未导入")
+        row_sec.addWidget(self.sec_btn)
+        row_sec.addSpacing(8)
+        row_sec.addWidget(self.sec_status)
+        row_sec.addStretch(1)
+        r.addLayout(row_sec)
+        lay.addWidget(ros_card)
 
-        # 团支部编号规则卡（备注预填 + 筛选树共用）
-        rule_card = CardWidget()
-        rule_lay = QVBoxLayout(rule_card)
-        rule_lay.setContentsMargins(20, 16, 20, 16)
-        rule_lay.addWidget(StrongBodyLabel("团支部编号规则"))
-        rule_lay.addWidget(note_label(
+        # ── 卡片三：检查与编号规则（默认收起） ──
+        rule_card = CollapsibleCard("检查与编号规则", expanded=False)
+        r2 = rule_card.body_lay
+        r2.addWidget(sub_title("团支部编号规则"))
+        r2.addWidget(note_label(
             "编号 = 学部前缀（1 位）+ 入学年份后两位（2 位）+ 班号（2 位）；无前缀的 4 位编号归「无前缀学部」。"
             "年级按当前学年自动推算（如 24 级今年是高三/初三）。用于导入账号时预填备注和账号筛选"))
-        rule_lay.addSpacing(4)
         row_rule = QHBoxLayout()
         row_rule.addWidget(BodyLabel("学部前缀"))
         self.rule_prefix_edit = LineEdit()
@@ -334,20 +338,13 @@ class SettingsPage(FluentPage):
         self.rule_noprefix_edit.setPlaceholderText("初中部")
         self.rule_noprefix_edit.setFixedWidth(120)
         row_rule.addWidget(self.rule_noprefix_edit)
-        rule_lay.addLayout(row_rule)
+        r2.addLayout(row_rule)
         self.rule_preview = note_label("")
-        rule_lay.addWidget(self.rule_preview)
+        r2.addWidget(self.rule_preview)
         self.rule_prefix_edit.editingFinished.connect(self._on_rule_changed)
         self.rule_noprefix_edit.editingFinished.connect(self._on_rule_changed)
-        lay.addWidget(rule_card)
-
-        # 文档检查配置（命名 + 总页数）
-        doc = CardWidget()
-        doc_lay = QVBoxLayout(doc)
-        doc_lay.setContentsMargins(20, 16, 20, 16)
-        doc_lay.addWidget(StrongBodyLabel("文档检查（入团志愿书 PDF）"))
-        doc_lay.addWidget(note_label("「文档检查」页除命名外，还核对 PDF 总页数是否等于预期页数；留空则不核对页数"))
-        doc_lay.addSpacing(4)
+        r2.addWidget(sub_title("文档检查（入团志愿书 PDF）"))
+        r2.addWidget(note_label("「文档检查」页除命名外，还核对 PDF 总页数是否等于预期页数；留空则不核对页数"))
         row6 = QHBoxLayout()
         row6.addWidget(BodyLabel("预期页数"))
         self.expected_pages_edit = LineEdit()
@@ -356,16 +353,28 @@ class SettingsPage(FluentPage):
         self.expected_pages_edit.editingFinished.connect(self._save_config)
         row6.addWidget(self.expected_pages_edit)
         row6.addStretch(1)
-        doc_lay.addLayout(row6)
-        lay.addWidget(doc)
+        r2.addLayout(row6)
+        lay.addWidget(rule_card)
 
-        # 首页头图
-        header = CardWidget()
-        header_lay = QVBoxLayout(header)
-        header_lay.setContentsMargins(20, 16, 20, 16)
-        header_lay.addWidget(StrongBodyLabel("首页头图"))
-        header_lay.addWidget(note_label("图片会铺满工具首页顶部并自然过渡到背景；清除后显示占位渐变"))
-        header_lay.addSpacing(4)
+        # ── 卡片四：外观（明暗模式 / 毛玻璃 / 首页头图，默认收起） ──
+        look_card = CollapsibleCard("外观", expanded=False)
+        r3 = look_card.body_lay
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(BodyLabel("明暗模式"))
+        theme_row.addStretch(1)
+        self.theme_combo = ComboBox()
+        for label in ("跟随系统", "浅色模式", "暗色模式"):
+            self.theme_combo.addItem(label)
+        self.theme_combo.setCurrentIndex(THEME_INDEX.get(store.load().get("themeMode", "auto"), 0))
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        theme_row.addWidget(self.theme_combo)
+        r3.addLayout(theme_row)
+        self.translucent_switch = SwitchButton("毛玻璃混合背景")
+        self.translucent_switch.setChecked(bool(store.load().get("translucent")))
+        self.translucent_switch.checkedChanged.connect(self._on_translucent_changed)
+        r3.addWidget(self.translucent_switch)
+        r3.addWidget(sub_title("首页头图"))
+        r3.addWidget(note_label("图片会铺满工具首页顶部并自然过渡到背景；清除后显示占位渐变"))
         row7 = QHBoxLayout()
         self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
         self.header_pick_btn.clicked.connect(self._pick_header_image)
@@ -374,50 +383,14 @@ class SettingsPage(FluentPage):
         row7.addWidget(self.header_pick_btn)
         row7.addWidget(self.header_clear_btn)
         row7.addStretch(1)
-        header_lay.addLayout(row7)
-        lay.addWidget(header)
+        r3.addLayout(row7)
+        lay.addWidget(look_card)
 
-        # 外观：毛玻璃混合背景
-        look = CardWidget()
-        look_lay = QVBoxLayout(look)
-        look_lay.setContentsMargins(20, 16, 20, 16)
-        look_lay.addWidget(StrongBodyLabel("外观"))
-        look_lay.addWidget(note_label("开启后窗口背景使用系统毛玻璃混合（Mica 式），关闭恢复纯色"))
-        look_lay.addSpacing(4)
-        self.translucent_switch = SwitchButton("毛玻璃混合背景")
-        self.translucent_switch.setChecked(bool(store.load().get("translucent")))
-        self.translucent_switch.checkedChanged.connect(self._on_translucent_changed)
-        look_lay.addWidget(self.translucent_switch)
-        lay.addWidget(look)
-
-        # 团支书名单（组织管理页支部信息展示）
-        sec = CardWidget()
-        sec_lay = QVBoxLayout(sec)
-        sec_lay.setContentsMargins(20, 16, 20, 16)
-        title_sec = QHBoxLayout()
-        title_sec.addWidget(StrongBodyLabel("团支书名单"))
-        self.sec_status = note_label("未导入")
-        title_sec.addSpacing(8)
-        title_sec.addWidget(self.sec_status)
-        title_sec.addStretch(1)
-        sec_lay.addLayout(title_sec)
-        sec_lay.addWidget(note_label("xlsx 列：支部（编号或名称） / 团支书（姓名） / 手机号码（可选）；展示在「组织管理」的支部信息里"))
-        sec_lay.addSpacing(4)
-        row_sec = QHBoxLayout()
-        self.sec_btn = PushButton(FIF.DOCUMENT, "导入团支书名单")
-        self.sec_btn.clicked.connect(self._import_secretaries)
-        row_sec.addWidget(self.sec_btn)
-        row_sec.addStretch(1)
-        sec_lay.addLayout(row_sec)
-        lay.addWidget(sec)
-
-        # 工作区卡片
-        ws = CardWidget()
-        ws_lay = QVBoxLayout(ws)
-        ws_lay.setContentsMargins(20, 16, 20, 16)
-        ws_lay.addWidget(StrongBodyLabel("工作区（自动检测新 PDF）"))
-        ws_lay.addWidget(note_label("目录里出现新 PDF 时自动：命名检查并改名 → 超过 9.5MB 自动压缩 → 加入批量上传列表"))
-        ws_lay.addSpacing(4)
+        # ── 卡片五：工作区与通知（默认收起） ──
+        ws_card = CollapsibleCard("工作区与通知", expanded=False)
+        r4 = ws_card.body_lay
+        r4.addWidget(sub_title("工作区（自动检测新 PDF）"))
+        r4.addWidget(note_label("目录里出现新 PDF 时自动：命名检查并改名 → 超过 9.5MB 自动压缩 → 加入批量上传列表"))
         row5 = QHBoxLayout()
         self.ws_edit = LineEdit()
         self.ws_edit.setPlaceholderText("选择工作区目录（自动监听新文件）")
@@ -427,16 +400,9 @@ class SettingsPage(FluentPage):
         row5.addWidget(self.ws_edit, 1)
         row5.addWidget(self.ws_btn)
         row5.addWidget(self.ws_status)
-        ws_lay.addLayout(row5)
-        lay.addWidget(ws)
-
-        # 每日通知 + 自启动卡片
-        daily = CardWidget()
-        daily_lay = QVBoxLayout(daily)
-        daily_lay.setContentsMargins(20, 16, 20, 16)
-        daily_lay.addWidget(StrongBodyLabel("每日通知与后台自启动"))
-        daily_lay.addWidget(note_label("到点通过系统通知推送团员情况；开启自启动后开机即在后台运行"))
-        daily_lay.addSpacing(4)
+        r4.addLayout(row5)
+        r4.addWidget(sub_title("每日通知与后台自启动"))
+        r4.addWidget(note_label("到点通过系统通知推送团员情况；开启自启动后开机即在后台运行"))
         row4 = QHBoxLayout()
         row4.addWidget(BodyLabel("每天"))
         self.notify_time_edit = LineEdit()
@@ -444,13 +410,12 @@ class SettingsPage(FluentPage):
         self.notify_time_edit.setPlaceholderText("08:00")
         self.notify_time_edit.setClearButtonEnabled(False)
         row4.addWidget(self.notify_time_edit)
-        row4.addSpacing(6)
         row4.addStretch(1)
         self.autostart_btn = PushButton()
         self.autostart_btn.clicked.connect(self._toggle_autostart)
         row4.addWidget(self.autostart_btn)
-        daily_lay.addLayout(row4)
-        lay.addWidget(daily)
+        r4.addLayout(row4)
+        lay.addWidget(ws_card)
 
         self._watcher = None
         self._scan_timer = QTimer(self)
@@ -471,14 +436,37 @@ class SettingsPage(FluentPage):
 
     # ---------- 配置持久化 ----------
 
+    def _repair_remarks(self, cfg: dict) -> int:
+        """历史遗留修复：备注为空或误填成账号号的账号，按编号规则重新生成备注
+        （如 ssfz12601 → 普通高中高一一班）。规则解析不出（编号无效）保持原样。"""
+        o = cfg.get("orgRule") or {}
+        rule = OrgRule(
+            prefixes=o.get("prefixes") or {"1": "普通高中", "2": "国际高中"},
+            no_prefix=o.get("noPrefix") or "初中部",
+        )
+        fixed = 0
+        for acc in self.accounts:
+            user = acc.get("userName", "")
+            remark = (acc.get("remark") or "").strip()
+            if remark and remark != user:
+                continue
+            label = describe_code(user, rule)
+            if label and label != remark:
+                acc["remark"] = label
+                fixed += 1
+        if fixed:
+            store.update(lambda c, accs=self.accounts: c.__setitem__("accounts", accs))
+        return fixed
+
     def _load_config(self):
         cfg = store.load()
         self.accounts = list(cfg.get("accounts") or [])
+        self._repair_remarks(cfg)
         self.active_user = cfg.get("activeUser") or (self.accounts[0]["userName"] if self.accounts else "")
         self.notify_time_edit.setText(store.notify_time(cfg))
         self._refresh_autostart_btn()
 
-        # 名单：分学期
+        # 名单：分学期（只新建未导入的学期没有文件路径，也要保留）
         self.rosters = {}
         self._roster_paths = {}
         semesters = dict(cfg.get("rosters") or {})
@@ -490,7 +478,12 @@ class SettingsPage(FluentPage):
                     self.rosters[sem] = self._parse_roster(path)
                     self._roster_paths[sem] = path
                 except ValueError as e:
-                    self.roster_status.setText(f"{sem} 名单加载失败：{e}")
+                    InfoBar.warning(f"{sem} 名单加载失败", str(e), duration=5000, parent=self)
+            else:
+                # 无路径（新建未导入）或文件已不在：保留学期，内容为空
+                self.rosters.setdefault(sem, Roster(sem))
+                if path:
+                    self._roster_paths[sem] = path
         self.semester_combo.blockSignals(True)
         self.semester_combo.clear()
         self.semester_combo.addItems(sorted(self.rosters) or [guess_semester()])
@@ -625,30 +618,27 @@ class SettingsPage(FluentPage):
             return 0
 
     def _save_config(self):
-        cfg = store.load()
-        cfg.update({
-            "activeUser": self.active_user,
-            "accounts": self.accounts,
-            "rosters": dict(self._roster_paths),
-            "workspaceDir": self.ws_edit.text().strip(),
-            "notifyTime": self.notify_time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME,
-            "expectedPages": self.expected_pages(),
-            "orgRule": {"prefixes": self.org_rule().prefixes, "noPrefix": self.org_rule().no_prefix},
-        })
-        store.save(cfg)
+        def _write(cfg: dict):
+            cfg.update({
+                "activeUser": self.active_user,
+                "accounts": self.accounts,
+                "rosters": dict(self._roster_paths),
+                "workspaceDir": self.ws_edit.text().strip(),
+                "notifyTime": self.notify_time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME,
+                "expectedPages": self.expected_pages(),
+                "orgRule": {"prefixes": self.org_rule().prefixes, "noPrefix": self.org_rule().no_prefix},
+            })
+
+        # 拿最新配置再改：工作线程刚写入的 memberCache/messagesCache 不会被旧快照覆盖
+        store.update(_write)
         self._client = None
 
     def _refresh_roster(self):
-        """合并各学期名单为总表（供检查/上传使用），刷新标题旁状态小字。"""
+        """合并各学期名单为总表（供检查/上传使用）。"""
         merged = Roster("combined")
         for sem in sorted(self.rosters):
             merged.rows.extend(self.rosters[sem].rows)
         self.roster = merged if merged.rows else None
-        if self.rosters:
-            parts = [f"{sem} {len(r.rows)} 人" for sem, r in sorted(self.rosters.items())]
-            self.roster_status.setText(f"已导入 {len(merged.rows)} 人（{' / '.join(parts)}）")
-        else:
-            self.roster_status.setText("未导入")
         self.roster_changed.emit(self.roster)
 
     # ---------- 自启动 / 每日通知 ----------
@@ -705,10 +695,18 @@ class SettingsPage(FluentPage):
         })
         return "added"
 
+    def _refresh_all_clicked(self):
+        if self.window_ref is None:
+            return
+        self.window_ref.refresh_all(silent=False)
+
     def _after_accounts_changed(self):
         self._save_config()
         self._refresh_table()
         self.start_health_check()
+        # 新账号进入后自动刷新所有数据（成员缓存、站内信、组织状况）
+        if self.window_ref is not None:
+            self.window_ref.refresh_all(silent=True)
 
     def _add_manual(self):
         user, pwd = self.new_user.text().strip(), self.new_pwd.text()
@@ -753,8 +751,9 @@ class SettingsPage(FluentPage):
         prefilled = 0
         bad_years: list[str] = []
         for account, pwd, remark, year in rows:
-            if not remark:
-                remark = describe_code(account, rule)  # 备注留空 → 按编号规则预填
+            if not remark or remark.strip() == account:
+                # 备注留空或误填成账号号 → 按编号规则预填（如 ssfz12601 → 普通高中高一一班）
+                remark = describe_code(account, rule)
                 prefilled += 1 if remark else 0
             stat[self._upsert_account(account, pwd, remark)] += 1
             if year:
@@ -835,6 +834,31 @@ class SettingsPage(FluentPage):
 
         n = save_account_template(path)
         InfoBar.success("模板已保存", f"{path}（{n} 行示例，可直接改后批量导入）", duration=5000, parent=self)
+
+    def _export_config_json(self):
+        """导出当前系统配置为 JSON 文件（config.json 的完整快照，含账号密码）。"""
+        from datetime import datetime
+
+        from PySide6.QtWidgets import QFileDialog
+
+        import json
+
+        default_name = f"智慧团建配置-{datetime.now().strftime('%Y%m%d')}.json"
+        path, _ = QFileDialog.getSaveFileName(self, "导出系统配置", default_name, "JSON (*.json)")
+        if not path:
+            return
+        cfg = store.load()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            InfoBar.error("导出失败", str(e), duration=5000, parent=self)
+            return
+        n = len(cfg.get("accounts", []))
+        InfoBar.success(
+            "配置已导出",
+            f"{path}（{n} 个账号等全部配置；文件含密码，请妥善保管）",
+            duration=6000, parent=self)
 
     def _remove_accounts(self, rows: list[int]):
         users = [self.accounts[r]["userName"] for r in rows if 0 <= r < len(self.accounts)]
@@ -1070,6 +1094,26 @@ class SettingsPage(FluentPage):
         """切换学期时回显该学期已导入的名单文件。"""
         self.roster_edit.setText(self._roster_paths.get(sem.strip(), ""))
 
+    def _create_semester(self):
+        """按学期框里的名字新建空学期（不用先导入名单）。"""
+        sem = self.semester_combo.currentText().strip()
+        if not sem:
+            InfoBar.warning("学期为空", "在学期框输入学期名（如 2027春）再点新建", duration=3000, parent=self)
+            return
+        if sem in self.rosters:
+            InfoBar.info("学期已存在", f"{sem} 已在列表中，可直接导入名单", duration=3000, parent=self)
+            return
+        self.rosters[sem] = Roster(sem)
+        self._roster_paths[sem] = ""
+        items = [self.semester_combo.itemText(i) for i in range(self.semester_combo.count())]
+        if sem not in items:
+            self.semester_combo.addItem(sem)
+        self.semester_combo.setCurrentText(sem)
+        self.roster_edit.setText("")
+        self._refresh_roster()
+        self._save_config()
+        InfoBar.success("学期已新建", f"{sem}：选择名单文件后导入到该学期", duration=3000, parent=self)
+
     def _download_template(self):
         path, _ = QFileDialog.getSaveFileName(
             self, "保存名单模板", "团员名单模板.xlsx", "Excel (*.xlsx)")
@@ -1139,27 +1183,34 @@ class SettingsPage(FluentPage):
             self, "选择头图", "", "图片 (*.png *.jpg *.jpeg *.webp *.bmp)")
         if not path:
             return
-        cfg = store.load()
-        cfg["headerImage"] = path
-        store.save(cfg)
+        store.update(lambda cfg: cfg.__setitem__("headerImage", path))
         if self.home_page:
             self.home_page.banner.set_image_path(path)
         InfoBar.success("头图已设置", os.path.basename(path), duration=2500, parent=self)
 
     def _clear_header_image(self):
-        cfg = store.load()
-        cfg["headerImage"] = ""
-        store.save(cfg)
+        store.update(lambda cfg: cfg.__setitem__("headerImage", ""))
         if self.home_page:
             self.home_page.banner.set_image_path("")
         InfoBar.info("头图已清除", "工具首页恢复占位渐变", duration=2500, parent=self)
 
-    # ---------- 外观（毛玻璃） ----------
+    # ---------- 外观（明暗模式 + 毛玻璃） ----------
+
+    def _on_theme_changed(self, index: int):
+        from qfluentwidgets import InfoBar
+
+        from app.setup import apply_theme_mode
+
+        mode = ("auto", "light", "dark")[index]
+        apply_theme_mode(mode)
+        store.update(lambda cfg: cfg.__setitem__("themeMode", mode))
+        if self.window_ref is not None:
+            self.window_ref.on_theme_changed()
+        InfoBar.success("明暗模式已切换", ("跟随系统" if index == 0 else "已切换，界面即时生效"),
+                        duration=2500, parent=self)
 
     def _on_translucent_changed(self, checked: bool):
-        cfg = store.load()
-        cfg["translucent"] = bool(checked)
-        store.save(cfg)
+        store.update(lambda cfg: cfg.__setitem__("translucent", bool(checked)))
         if self.window_ref is not None:
             self.window_ref.set_translucent(checked)
 
@@ -1176,9 +1227,7 @@ class SettingsPage(FluentPage):
         except Exception as e:
             InfoBar.error("团支书名单导入失败", str(e), duration=5000, parent=self)
             return
-        cfg = store.load()
-        cfg["secretaries"] = rows
-        store.save(cfg)
+        store.update(lambda cfg: cfg.__setitem__("secretaries", rows))
         self._refresh_secretary_status(rows)
         InfoBar.success("团支书名单已导入", f"{len(rows)} 个支部（在「组织管理」展示）", duration=4000, parent=self)
         if self.window_ref is not None:

@@ -6,7 +6,9 @@
 2) 分片（POST multipart） /file/breakpoint-upload，顺序上传，成功一片再下一片
      file | id | chunks | chunk(0-based) | size | name | md5(可空)，分片 10MB
 3) 入库（POST JSON） /file/add  body { fileName, suffix } → { status:'OK', msg:{ mid, retpath, token } }
-4) 「审核」是网页端人工点击的业务动作，本应用不自动化，上传完成后明确提示管理员去网页完成。
+4) 审核（POST JSON） /members/bg/auditVoluntaryBook?mid=<团员id>&status=2（通过）/ 1+refuse（拒绝），
+   响应 { status:'OK' } 即成功；与网页端「审核」按钮同一接口（league_member.js auditVoluntaryBook），
+   上传入库成功后由应用自动调用。
 """
 
 from __future__ import annotations
@@ -109,11 +111,22 @@ def parse_file_add_response(raw) -> FileAddResult:
     o = msg if isinstance(msg, dict) else {}
     return FileAddResult(
         True,
-        text or "已入库，需在智慧团建网页点击「审核」完成认证",
+        text or "已入库，随后自动提交审核",
         str(o.get("mid") or ""),
         str(o.get("retpath") or ""),
         str(o.get("token") or ""),
     )
+
+
+def parse_audit_response(raw) -> tuple[bool, str]:
+    """审核接口响应：status=='OK' 即成功（对照网页端 auditVoluntaryBook 的判定）。"""
+    if not isinstance(raw, dict):
+        return False, "审核接口返回空"
+    status = str(raw.get("status") or "")
+    msg = raw.get("msg") if isinstance(raw.get("msg"), str) else ""
+    if status == "OK":
+        return True, msg or "审核通过"
+    return False, msg or f"审核未通过（status={status or '空'}）"
 
 
 def parse_chunk_response(raw) -> tuple[bool, str]:

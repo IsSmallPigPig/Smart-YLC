@@ -20,6 +20,7 @@ from app.domain.chunk_protocol import (
     build_validation_body,
     chunk_count,
     chunk_range,
+    parse_audit_response,
     parse_chunk_response,
     parse_file_add_response,
     parse_validation_response,
@@ -282,3 +283,23 @@ class SiteClient:
             return ApiResult(False, f"分片已传完，但入库请求失败：{e}")
         result = parse_file_add_response(raw)
         return ApiResult(result.ok, result.reason, {"mid": result.mid, "retpath": result.retpath})
+
+    def audit_voluntary_book(self, mid: str, status: int = 2, refuse: str = "") -> ApiResult:
+        """POST /members/bg/auditVoluntaryBook?mid=&status= —— 网页端「审核」按钮同一接口。
+
+        status=2 通过；status=1 拒绝（需 refuse 原因）。mid 来自团员列表的 mid 字段。
+        与站点一致：legacy ApiProxy 默认 form-urlencoded（query + 表单双带参数）。"""
+        form = {"mid": mid, "status": str(status)}
+        if refuse:
+            form["refuse"] = refuse
+        try:
+            resp = self.http.post(
+                API_BASE_URL + "/members/bg/auditVoluntaryBook",
+                params=form, data=form, timeout=DEFAULT_TIMEOUT,
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            return ApiResult(False, f"审核请求失败：{e}")
+        ok, msg = parse_audit_response(raw)
+        return ApiResult(ok, msg, raw)

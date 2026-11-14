@@ -1,8 +1,10 @@
 """系统消息页：自动拉取全部账号的站内信，按 报到申请 / 转接申请 / 其他消息 分组展示。
 
+默认展示未读，可切「已读 / 全部」；已读消息整卡变暗（不改字体颜色）；点开一条
+即在本地标记已读（持久化到 messagesRead），支持一键全部标为已读。
 分组大标题；卡片主标题是团员姓名（手机号在系统名单/本地名单里能查到时），
-原站内信标题（去掉【系统通知】中括号）作为标签放在大标题右侧；未读消息
-用卡片底色强调，不用彩色文字。点击消息按团员所在支部登录对应账号的网页端。
+原站内信标题（去掉【系统通知】中括号）作为彩色底白字小标签放在大标题右侧；
+未读消息另加「未读」标签和淡色卡片底。
 
 消息缓存持久化到配置 messagesCache（只写不删）；拉取走并发线程（≤4），
 失败账号弹 InfoBar 不影响其他账号；缓存为空或超过 4 小时进入页面时自动拉取。
@@ -14,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -23,6 +26,7 @@ from qfluentwidgets import (
     ComboBox,
     FluentIcon as FIF,
     InfoBar,
+    isDarkTheme,
     PrimaryPushButton,
     PushButton,
     StrongBodyLabel,
@@ -31,20 +35,16 @@ from qfluentwidgets import (
 from app.domain.messages import (
     KIND_LABEL,
     MessageView,
-    build_member_index,
     build_member_name_index,
     clean_title,
     fetch_all_messages,
-    locate_account,
 )
-from app.services import store
+from app.services import login_gate, store
 from app.services.api import SiteClient
-from app.ui.page import FluentPage, note_label
+from app.ui.page import FluentPage, note_label, section_title, theme_font
 
 FILTER_LABELS = ["全部", *KIND_LABEL.values()]  # 全部 / 报到申请 / 转接申请 / 其他消息
 AUTO_FETCH_INTERVAL = 4 * 3600  # 自动拉取的最小间隔（秒）
-UNREAD_BG_LIGHT = "rgba(0, 103, 244, 30)"  # 未读卡片底色（fluent 主色淡染）
-UNREAD_BG_DARK = "rgba(0, 103, 244, 55)"
 SECTION_PAGE = 60  # 每个分组一次渲染的卡片数，其余走「显示更多」
 
 
@@ -68,24 +68,36 @@ class MessageFetchWorker(QThread):
         user, pwd = acc.get("userName", ""), acc.get("password", "")
         if not user or not pwd:
             return user, 0, "empty", "账号或密码为空"
+        # 状态正常且 4 小时内拉取过 → 无需刷新；验证码/风控冷却中 → 跳过
+        skip = login_gate.fresh_skip(acc, "messagesCache")
+        if skip:
+            return user, 0, "fresh", skip
         try:
             client = SiteClient(user, pwd)
-            probe = client.session_account()
-            if not probe.ok:
-                verdict = client.login()
-                kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
-                if kind != "ok":
-                    return user, 0, kind, verdict.message
+            kind, msg = login_gate.ensure_logged_in(client)
+            if kind != "ok":
+                return user, 0, kind, msg
             views = fetch_all_messages(client, user)
-            # 逐账号落盘，中途停掉不丢已拉取的消息
-            cfg = store.load()
-            cache = cfg.get("messagesCache", {})
-            cache[user] = {
-                "fetchedAt": datetime.now(timezone.utc).isoformat(),
-                "messages": [v.__dict__ | {"kind": v.kind} for v in views],
-            }
-            cfg["messagesCache"] = cache
-            store.save(cfg)
+
+            def _write_cache(cfg: dict, user=user, views=views):
+                # 合并而非整段覆盖：线上通知始终是「未读」，重复拉取按 receive_id
+                # 去重，已读标记（messagesRead）也在本地，旧消息不会反复涌入列表
+                cache = cfg.get("messagesCache", {})
+                merged = {
+                    m.get("receive_id"): m
+                    for m in cache.get(user, {}).get("messages", [])
+                    if m.get("receive_id")
+                }
+                for v in views:
+                    merged[v.receive_id] = v.__dict__ | {"kind": v.kind}
+                cache[user] = {
+                    "fetchedAt": datetime.now(timezone.utc).isoformat(),
+                    "messages": list(merged.values()),
+                }
+                cfg["messagesCache"] = cache
+
+            # 逐账号落盘（store.update 持锁整段读写），中途停掉不丢已拉取的消息
+            store.update(_write_cache)
             return user, len(views), "ok", ""
         except Exception as e:
             return user, 0, "network", str(e)
@@ -105,7 +117,7 @@ class MessageFetchWorker(QThread):
 
 
 class MessageOpenWorker(QThread):
-    """点击消息：定位支部账号 → 登录 → 携带 cookie 打开网页端。"""
+    """点击消息：按消息所属支部账号登录 → 携带 cookie 打开网页端。"""
 
     done = Signal(bool, str)
 
@@ -131,7 +143,6 @@ class MessagesPage(FluentPage):
         self.worker: MessageFetchWorker | None = None
         self.open_worker: MessageOpenWorker | None = None
         self._views: list[MessageView] = []
-        self._member_index: dict[str, tuple[str, str]] = {}
         self._name_index: dict[str, str] = {}
         self._shown: dict[str, int] = {}  # 每个分组已渲染条数（防一次建上千卡片卡死 UI）
         self._silent = False  # 自动拉取时不弹成功提示
@@ -147,14 +158,23 @@ class MessagesPage(FluentPage):
             self.filter_combo.addItem(label)
         self.filter_combo.setCurrentIndex(0)
         self.filter_combo.currentIndexChanged.connect(lambda *_: self._rebuild())
+        self.read_combo = ComboBox()
+        self.read_combo.addItems(["未读", "已读", "全部"])
+        self.read_combo.setCurrentIndex(0)  # 默认只看未读
+        self.read_combo.currentIndexChanged.connect(lambda *_: self._rebuild())
         self.fetch_btn = PrimaryPushButton(FIF.SYNC, "拉取站内信")
         self.fetch_btn.clicked.connect(lambda: self._fetch(silent=False))
+        self.mark_read_btn = PushButton(FIF.CHECKBOX, "全部标为已读")
+        self.mark_read_btn.clicked.connect(self._mark_all_read)
         row.addWidget(self.filter_combo, 0)
+        row.addSpacing(12)
+        row.addWidget(self.read_combo, 0)
         row.addSpacing(16)
         row.addWidget(self.fetch_btn, 0)
+        row.addWidget(self.mark_read_btn, 0)
         row.addStretch(1)
         bar_lay.addLayout(row)
-        self.stat_label = note_label("共 — 条 · 报到 — · 转接 — · 其他 —（点击消息卡按团员所在支部打开对应网页端）")
+        self.stat_label = note_label("共 — 条 · 未读 —（点击消息卡打开所属支部账号的网页端）")
         bar_lay.addWidget(self.stat_label)
         lay.addWidget(bar)
 
@@ -198,26 +218,15 @@ class MessagesPage(FluentPage):
                 }))
         views.sort(key=lambda v: v.time_str, reverse=True)
         self._views = views
-        self._member_index = build_member_index(
-            cfg.get("accounts", []), cfg.get("memberCache", {}),
-            self._local_rows(cfg))
         self._name_index = build_member_name_index(
-            cfg.get("memberCache", {}), self._local_rows(cfg))
+            cfg.get("memberCache", {}), self._local_rows())
         self._rebuild()
 
-    def _local_rows(self, cfg) -> list:
-        import os
-
-        from app.services.excel import import_roster
-
+    def _local_rows(self) -> list:
+        """本地名单直接复用「系统配置」已解析的各学期名单（不在 GUI 线程重复读 xlsx）。"""
         rows = []
-        for path in cfg.get("rosters", {}):
-            if not os.path.isfile(path):
-                continue
-            try:
-                rows.extend(import_roster(path, os.path.basename(path)).rows)
-            except ValueError:
-                continue
+        for roster in self.window_ref.settings_page.rosters.values():
+            rows.extend(roster.rows)
         return rows
 
     def auto_fetch(self):
@@ -237,29 +246,73 @@ class MessagesPage(FluentPage):
             return
         self._fetch(silent=True)
 
+    # ---------- 已读 / 未读 ----------
+
+    @staticmethod
+    def _read_key(v: MessageView) -> str:
+        return f"{v.account}:{v.receive_id}"
+
+    def _read_marks(self) -> dict:
+        return store.load().get("messagesRead") or {}
+
+    def _is_unread(self, v: MessageView) -> bool:
+        """站点状态未读，且没有被本地标记为已读。"""
+        return v.status == 0 and self._read_key(v) not in self._read_marks()
+
+    def _set_read(self, v: MessageView):
+        store.update(lambda cfg: (cfg.setdefault("messagesRead", {})
+                                  ).__setitem__(self._read_key(v), 1))
+
+    def _mark_all_read(self):
+        unread = [v for v in self._views if self._is_unread(v)]
+        if not unread:
+            InfoBar.info("没有未读消息", "全部消息都已读过", duration=3000, parent=self)
+            return
+
+        def _write(cfg: dict):
+            marks = cfg.setdefault("messagesRead", {})
+            for v in unread:
+                marks[self._read_key(v)] = 1
+
+        store.update(_write)
+        self._rebuild()
+        InfoBar.success("已全部标为已读", f"共 {len(unread)} 条", duration=3000, parent=self)
+
     def _rebuild(self):
         while self.list_lay.count():
             item = self.list_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         idx = self.filter_combo.currentIndex()
-        counts = {k: sum(1 for v in self._views if v.kind == k) for k in KIND_LABEL}
+        read_idx = self.read_combo.currentIndex()  # 0 未读 1 已读 2 全部
+        if read_idx == 0:
+            base = [v for v in self._views if self._is_unread(v)]
+        elif read_idx == 1:
+            base = [v for v in self._views if not self._is_unread(v)]
+        else:
+            base = self._views
+        unread_total = sum(1 for v in self._views if self._is_unread(v))
+        counts = {k: sum(1 for v in base if v.kind == k) for k in KIND_LABEL}
         self.stat_label.setText(
-            f"共 {len(self._views)} 条 · 报到 {counts['report']} · 转接 {counts['transfer']} · 其他 {counts['other']}")
-        if not self._views:
+            f"共 {len(self._views)} 条 · 未读 {unread_total} · "
+            f"报到 {counts['report']} · 转接 {counts['transfer']} · 其他 {counts['other']}")
+        if not base:
+            hint = ("没有未读消息。" if read_idx == 0 else
+                    "已读里还没有消息。" if read_idx == 1 else
+                    "没有消息。")
             self.list_lay.addWidget(note_label(
-                "没有消息。配置账号后会自动拉取站内信，也可以点「拉取站内信」立即获取；拉取结果保留在本地。"))
+                hint + " 配置账号后会自动拉取站内信，也可以点「拉取站内信」立即获取；拉取结果保留在本地。"))
             return
         kinds = list(KIND_LABEL) if idx == 0 else [list(KIND_LABEL)[idx - 1]]
         for k in kinds:
-            group = [v for v in self._views if v.kind == k]
+            group = [v for v in base if v.kind == k]
             if not group and idx != 0:
                 self.list_lay.addWidget(note_label("这一类暂时没有消息。"))
                 continue
             self.list_lay.addWidget(self._section_header(k, len(group)))
             shown = self._shown.setdefault(k, SECTION_PAGE)
             for v in group[:shown]:
-                self.list_lay.addWidget(self._message_card(v))
+                self.list_lay.addWidget(self._message_card(v, unread=self._is_unread(v)))
             if len(group) > shown:
                 more = PushButton(f"显示更多（还有 {len(group) - shown} 条）")
                 more.clicked.connect(lambda *_: self._show_more(k))
@@ -272,19 +325,21 @@ class MessagesPage(FluentPage):
     # ---------- UI ----------
 
     def _section_header(self, kind: str, count: int) -> QWidget:
-        head = StrongBodyLabel(f"{KIND_LABEL[kind]}　{count} 条")
-        head.setStyleSheet("font-size: 16px; font-weight: 600;")
-        return head
+        return section_title(f"{KIND_LABEL[kind]}　{count} 条")
 
-    def _message_card(self, v: MessageView) -> QWidget:
+    def _message_card(self, v: MessageView, unread: bool) -> QWidget:
         card = CardWidget()
         card.setCursor(Qt.CursorShape.PointingHandCursor)
-        if v.status == 0:
-            # 未读用主色淡染卡片底色强调（跟随主题）
-            from qfluentwidgets import isDarkTheme
+        if unread:
+            # 未读：主色半透明淡染（setBackgroundColor 走 fluent 自绘，圆角保留）
+            card.setBackgroundColor(QColor(0, 103, 244, 64 if isDarkTheme() else 32))
+        else:
+            # 已读：整卡变暗，不改字体颜色
+            from PySide6.QtWidgets import QGraphicsOpacityEffect
 
-            card.setStyleSheet(
-                f"CardWidget{{background-color: {UNREAD_BG_DARK if isDarkTheme() else UNREAD_BG_LIGHT}}}")
+            effect = QGraphicsOpacityEffect(card)
+            effect.setOpacity(0.45)
+            card.setGraphicsEffect(effect)
 
         v_out = QVBoxLayout(card)
         v_out.setContentsMargins(18, 12, 18, 12)
@@ -293,22 +348,25 @@ class MessagesPage(FluentPage):
         head = QHBoxLayout()
         name = self._name_index.get(v.mobile, "")
         tag_title = clean_title(v.title)
-        # 主标题：能定位到团员用姓名；否则退回原标题（此时右侧标签不再重复标题）
-        title_text = name or tag_title or "（无标题）"
-        title = StrongBodyLabel(title_text)
-        title.setStyleSheet("font-size: 15px;")
+        # 主标题：团员姓名 → 原标题（去【系统通知】括号）→ 类别名；
+        # 站内信标题可能整串都是中括号（剥完为空），此时按类别展示
+        title_text = name or tag_title or KIND_LABEL[v.kind]
+        title = theme_font(StrongBodyLabel(title_text), 15, int(QFont.Weight.DemiBold))
         head.addWidget(title)
-        tag_bits = []
+        # 右侧小标签：彩色底 + 白字（不改字体颜色）
         if name and tag_title:
-            tag_bits.append(tag_title)
-        if v.status == 0:
-            tag_bits.append("未读")
-        if tag_bits:
             head.addSpacing(8)
-            tag = CaptionLabel(" · ".join(tag_bits))
+            tag = CaptionLabel(tag_title)
             tag.setStyleSheet(
-                "background-color: rgba(128, 128, 128, 40); border-radius: 4px; padding: 1px 8px;")
+                f"background-color: {'#4b5563' if isDarkTheme() else '#6b7280'};"
+                "color: white; border-radius: 4px; padding: 1px 8px;")
             head.addWidget(tag)
+        if unread:
+            head.addSpacing(6)
+            unread_tag = CaptionLabel("未读")
+            unread_tag.setStyleSheet(
+                "background-color: #0067f4; color: white; border-radius: 4px; padding: 1px 8px;")
+            head.addWidget(unread_tag)
         head.addStretch(1)
         head.addWidget(CaptionLabel(v.time_str))
         head.addSpacing(12)
@@ -338,7 +396,9 @@ class MessagesPage(FluentPage):
         self.worker.start()
 
     def _on_fetch_one(self, user, count, status, message):
-        if status != "ok":
+        if status in login_gate.SKIP_KINDS:
+            InfoBar.info(f"账号 {user} 跳过拉取", message, duration=4000, parent=self)
+        elif status != "ok":
             InfoBar.warning(
                 f"账号 {user or '（空）'} 拉取失败",
                 f"{message}（其他账号不受影响）", duration=4000, parent=self)
@@ -350,20 +410,17 @@ class MessagesPage(FluentPage):
             InfoBar.success("拉取完成", "站内信已更新并保留在本地", duration=3000, parent=self)
 
     def _open_message(self, v: MessageView):
+        self._set_read(v)  # 点开即在本地标记已读，卡片移出未读
+        self._rebuild()
         if self.open_worker is not None and self.open_worker.isRunning():
             return
+        # 消息从哪个账号的收件箱拉来，就打开哪个账号（支部即账号，无需再定位团员）
+        user = v.account
         accounts = self.window_ref.settings_page.accounts
-        user = locate_account(v, accounts, self._member_index)
-        if not user:
-            InfoBar.warning(
-                "无法定位支部账号",
-                f"消息里没有可识别的团员（手机号 {v.mobile or '无'}），"
-                "或该团员不在任何已配置支部的名单里。请先「同步系统数据」或导入团员名单。",
-                duration=6000, parent=self)
-            return
         acc = next((a for a in accounts if a.get("userName") == user), None)
         if not acc or not acc.get("password"):
-            InfoBar.warning("账号不可用", f"团员所在支部账号 {user} 缺少密码", duration=4000, parent=self)
+            InfoBar.warning("账号不可用", f"该消息所属支部账号 {user or '（空）'} 不在系统配置或缺少密码",
+                            duration=4000, parent=self)
             return
         self.open_worker = MessageOpenWorker(user, acc["password"], self)
         self.open_worker.done.connect(self._on_opened)
