@@ -14,9 +14,10 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtCore import QRectF
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 
-from app.ui.hidpi import canvas_pixmap
+from app.ui.hidpi import hidpi_canvas
 
 
 def icons_dir() -> Path:
@@ -48,12 +49,10 @@ def native_pixmap(name: str, size: int = 32) -> QPixmap:
     if not renderer.isValid():
         return QPixmap()
 
-    pm = canvas_pixmap(size)
-    painter = QPainter(pm)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    renderer.render(painter)
-    painter.end()
-    return pm
+    def _paint(painter: QPainter) -> None:
+        renderer.render(painter, QRectF(0, 0, size, size))
+
+    return hidpi_canvas(size, _paint)
 
 
 def native_icon(name: str, size: int = 32) -> QIcon:

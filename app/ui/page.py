@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QTransform
 from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
-from app.ui.hidpi import canvas_pixmap, ui_dpr
+from app.ui.hidpi import hidpi_canvas, ui_dpr
 from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, ScrollArea, StrongBodyLabel, TransparentToolButton, isDarkTheme, qconfig
 
 PAGE_MARGINS = (32, 24, 32, 24)
@@ -42,12 +42,11 @@ def chevron_left_icon(size: int = 16, enabled: bool = True) -> QIcon:
     normal.setDevicePixelRatio(dpr)
     if enabled:
         return QIcon(normal)
-    faded = canvas_pixmap(size)
-    painter = QPainter(faded)
-    painter.setOpacity(0.4)
-    painter.drawPixmap(0, 0, normal)
-    painter.end()
-    return QIcon(faded)
+    def _faded(painter: QPainter) -> None:
+        painter.setOpacity(0.4)
+        painter.drawPixmap(0, 0, normal)
+
+    return QIcon(hidpi_canvas(size, _faded))
 
 
 def chevron_icon(expanded: bool) -> QIcon:
@@ -76,23 +75,22 @@ def triangle_icon(direction: str = "right", size: int = 16) -> QIcon:
     from PySide6.QtGui import QPolygonF
 
     color = QColor("#d6d6d6") if isDarkTheme() else QColor("#3a3a3a")
-    pm = canvas_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(color)
-    w = size * 0.42
-    h = size * 0.72
-    cx, cy = size / 2, size / 2
-    if direction == "left":
-        pts = [QPointF(cx + w / 2, cy - h / 2), QPointF(cx - w / 2, cy),
-               QPointF(cx + w / 2, cy + h / 2)]
-    else:
-        pts = [QPointF(cx - w / 2, cy - h / 2), QPointF(cx + w / 2, cy),
-               QPointF(cx - w / 2, cy + h / 2)]
-    p.drawPolygon(QPolygonF(pts))
-    p.end()
-    return QIcon(pm)
+
+    def _paint(p: QPainter) -> None:
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(color)
+        w = size * 0.42
+        h = size * 0.72
+        cx, cy = size / 2, size / 2
+        if direction == "left":
+            pts = [QPointF(cx + w / 2, cy - h / 2), QPointF(cx - w / 2, cy),
+                   QPointF(cx + w / 2, cy + h / 2)]
+        else:
+            pts = [QPointF(cx - w / 2, cy - h / 2), QPointF(cx + w / 2, cy),
+                   QPointF(cx - w / 2, cy + h / 2)]
+        p.drawPolygon(QPolygonF(pts))
+
+    return QIcon(hidpi_canvas(size, _paint))
 
 
 def set_tip(widget, text: str, delay: int = 300):

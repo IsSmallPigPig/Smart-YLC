@@ -18,19 +18,9 @@ env:
 
 jobs:
   build-macos:
-    strategy:
-      # 一个架构失败不连坐另一个，Intel 和 arm64 各自出包
-      fail-fast: false
-      matrix:
-        include:
-          # macos-15：Apple Silicon（M 系列）
-          # macos-15-intel：x86_64。原来的 macos-13 已于 2025-12-04 退役，
-          # macos-15-intel 是 GitHub 目前唯一还在的 Intel 镜像（可用到 2027-08）
-          - os: macos-15
-            arch: arm64
-          - os: macos-15-intel
-            arch: x86_64
-    runs-on: ${{ matrix.os }}
+    # 只出 Apple Silicon：PySide6 6.12 的 macOS 轮子是 universal2，但 Intel 机器
+    # 已停售、构建时间翻倍，不再单独出 x86_64 包
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
 
@@ -120,13 +110,13 @@ jobs:
           fi
           hdiutil detach "$MOUNT" > /dev/null
           hdiutil convert "$RW" -format UDZO \
-            -o "dist/$APP_DISPLAY_NAME-macOS-${{ matrix.arch }}.dmg" > /dev/null
+            -o "dist/$APP_DISPLAY_NAME-macOS-arm64.dmg" > /dev/null
           rm -rf "$RW" "$DMGROOT"
 
       - uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.APP_NAME }}-macOS-${{ matrix.arch }}
-          path: dist/${{ env.APP_DISPLAY_NAME }}-macOS-${{ matrix.arch }}.dmg
+          name: ${{ env.APP_NAME }}-macOS-arm64
+          path: dist/${{ env.APP_DISPLAY_NAME }}-macOS-arm64.dmg
           if-no-files-found: error
 
   build-windows:
@@ -185,11 +175,9 @@ jobs:
           body: |
             ## 下载
             - **macOS（Apple Silicon / M 系列）**：`智慧团委-macOS-arm64.dmg`
-            - **macOS（Intel）**：`智慧团委-macOS-x86_64.dmg`
             - **Windows（64 位）**：`智慧团委-Windows-x64.exe`（单文件版，双击运行）
 
-            拿不准 Mac 的芯片型号时，点左上角苹果菜单 →「关于本机」：
-            「芯片」显示 Apple M 系列选 arm64，显示处理器（Intel）选 x86_64。
+            仅支持 Apple Silicon（M 系列）。Intel Mac 不再提供安装包。
                         Windows 不提供 32 位版本：PySide6 6.x 只发布 x64 与 arm64 轮子，
             无法编译 32 位程序。
 
@@ -203,5 +191,4 @@ jobs:
             完整变更列表见下方自动生成的更新日志（由 GitHub bot 生成）。
           files: |
             artifacts/SmartYouth-macOS-arm64/智慧团委-macOS-arm64.dmg
-            artifacts/SmartYouth-macOS-x86_64/智慧团委-macOS-x86_64.dmg
             artifacts/SmartYouth-Windows/智慧团委-Windows-x64.exe
