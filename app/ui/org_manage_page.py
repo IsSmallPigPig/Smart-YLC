@@ -1,17 +1,18 @@
-"""组织管理页：年级-支部-团员 树状卡片（非表格）。
+"""组织管理页：信息流式支部卡片。
 
-默认显示本地名单（系统配置导入的团员名单 xlsx）；「仅显示系统名单」开关过滤出
-智慧团建上已有的团员；「同步系统数据」登录各支部账号拉取成员并缓存到配置。
-支部卡片展示团支书（系统配置上传的团支书名单）；系统成员展开展示全部信息。
+默认每张卡片 = 一个支部（名称 + 团支书 + 团员/异常/欠缴统计），点开卡片进入
+支部详情：大标题支部名、小标题团支书、统计图表（异常分类条形图 + 欠缴团费），
+下方是团员列表（系统成员可展开全部字段）。统计从成员缓存的系统记录用检查
+规则离线计算，不发生网络请求。
 """
 
 from __future__ import annotations
 
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -22,11 +23,17 @@ from qfluentwidgets import (
     PrimaryPushButton,
     SearchLineEdit,
     StrongBodyLabel,
+    SubtitleLabel,
     SwitchButton,
     TransparentToolButton,
 )
 
-from app.domain.check_rules import MemberRecord
+from app.domain.check_rules import (
+    MemberRecord,
+    build_fee_results,
+    build_identity_results,
+    build_report_results,
+)
 from app.domain.org_manage import (
     SOURCE_LABEL,
     SYSTEM_FIELDS,
@@ -35,12 +42,15 @@ from app.domain.org_manage import (
     build_branches,
     filter_members,
 )
-from app.services import store
-from app.services.excel import import_roster
+from app.services import login_gate, store
 from app.services.api import SiteClient
-from app.ui.page import FluentPage, note_label
+from app.ui.charts import BarRowWidget
+from app.ui.check_page import default_identity_template, default_report_template
+from app.ui.page import FluentPage, note_label, section_title, theme_font
 
 SOURCE_COLOR = {"local": "#6b7280", "system": "#1565c0", "both": "#2e7d32"}
+KIND_COLOR = {"identity": "#ef6c00", "report": "#c62828", "fees": "#8e24aa"}
+KIND_TEXT = {"identity": "信息错误", "report": "没有报道", "fees": "欠缴团费"}
 
 
 def _rec_from_dict(d: dict) -> MemberRecord:
@@ -76,25 +86,28 @@ class MemberSyncWorker(QThread):
         branch = acc.get("remark") or user
         if not user or not pwd:
             return user, branch, 0, "empty", "账号或密码为空"
+        # 状态正常且 4 小时内刷新过 → 无需刷新（不发探测也不登录）
+        skip = login_gate.fresh_skip(acc, "memberCache")
+        if skip:
+            return user, branch, 0, "fresh", skip
         try:
             client = SiteClient(user, pwd)
-            probe = client.session_account()
-            if not probe.ok:
-                verdict = client.login()
-                kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
-                if kind != "ok":
-                    return user, branch, 0, kind, verdict.message
+            kind, msg = login_gate.ensure_logged_in(client)
+            if kind != "ok":
+                return user, branch, 0, kind, msg
             members, _ = client.get_all_members()
-            # 逐账号落盘，中途停掉也不丢已拉取的数据
-            cfg = store.load()
-            cache = cfg.get("memberCache", {})
-            cache[user] = {
-                "branch": branch,
-                "fetchedAt": datetime.now(timezone.utc).isoformat(),
-                "members": [asdict(m) for m in members],
-            }
-            cfg["memberCache"] = cache
-            store.save(cfg)
+
+            def _write_cache(cfg: dict, user=user, branch=branch, members=members):
+                cache = cfg.get("memberCache", {})
+                cache[user] = {
+                    "branch": branch,
+                    "fetchedAt": datetime.now(timezone.utc).isoformat(),
+                    "members": [asdict(m) for m in members],
+                }
+                cfg["memberCache"] = cache
+
+            # 逐账号落盘（store.update 持锁整段读写），中途停掉也不丢已拉取的数据
+            store.update(_write_cache)
             return user, branch, len(members), "ok", ""
         except Exception as e:
             return user, branch, 0, "network", str(e)
@@ -137,8 +150,8 @@ class OrgManagePage(FluentPage):
         lay = self.vBoxLayout
 
         # 顶部工具卡片
-        bar = CardWidget()
-        bar_lay = QVBoxLayout(bar)
+        self.bar = CardWidget()
+        bar_lay = QVBoxLayout(self.bar)
         bar_lay.setContentsMargins(20, 16, 20, 16)
         row = QHBoxLayout()
         self.search_edit = SearchLineEdit()
@@ -160,16 +173,25 @@ class OrgManagePage(FluentPage):
         bar_lay.addLayout(row)
         self.stat_label = note_label("本地 — 人 · 系统 — 人 · 双方 — 人（默认显示本地名单，同步后可交叉查看）")
         bar_lay.addWidget(self.stat_label)
-        lay.addWidget(bar)
+        lay.addWidget(self.bar)
 
-        # 树状容器
-        self.tree_box = QWidget()
-        self.tree_lay = QVBoxLayout(self.tree_box)
-        self.tree_lay.setContentsMargins(0, 0, 0, 0)
-        self.tree_lay.setSpacing(10)
-        self.tree_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.vBoxLayout.addWidget(self.tree_box, 1)
+        # 信息流容器（支部卡片列表）与支部详情视图，二选一显示
+        self.feed_box = QWidget()
+        self.feed_lay = QVBoxLayout(self.feed_box)
+        self.feed_lay.setContentsMargins(0, 0, 0, 0)
+        self.feed_lay.setSpacing(12)
+        self.feed_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.vBoxLayout.addWidget(self.feed_box, 1)
+
+        self.detail_box = QWidget()
+        self.detail_lay = QVBoxLayout(self.detail_box)
+        self.detail_lay.setContentsMargins(0, 0, 0, 0)
+        self.detail_lay.setSpacing(12)
+        self.detail_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.detail_box.setVisible(False)
+        self.vBoxLayout.addWidget(self.detail_box, 1)
         self.vBoxLayout.addStretch(1)
+        self._detail_code = ""  # 当前打开的支部编号（同步完成后刷新详情用）
 
     def showEvent(self, e):  # 每次进入页面重新读名单/缓存
         super().showEvent(e)
@@ -178,16 +200,10 @@ class OrgManagePage(FluentPage):
     # ---------- 数据组装 ----------
 
     def _load_local_rows(self) -> list[MemberView]:
-        cfg = store.load()
+        """本地名单直接复用「系统配置」已解析的各学期名单（不在 GUI 线程重复读 xlsx）。"""
         rows: list[MemberView] = []
         seen: set[str] = set()
-        for path in cfg.get("rosters", {}):
-            if not os.path.isfile(path):
-                continue
-            try:
-                roster = import_roster(path, os.path.basename(path))
-            except ValueError:
-                continue  # 名单文件本身的问题在系统配置导入时报过，这里不重复弹
+        for roster in self.window_ref.settings_page.rosters.values():
             for r in roster.rows:
                 k = f"{r.name}::{r.mobile}"
                 if k in seen:
@@ -216,9 +232,39 @@ class OrgManagePage(FluentPage):
         }
         self._rebuild()
 
+    def _branch_stats(self, b: BranchNode) -> dict:
+        """支部统计：从成员缓存的系统记录离线计算，无网络请求。
+
+        异常只计错误级（职业未填等警告不算）；欠缴 = 未交总额>0 或未交月份>0。"""
+        recs = [m.system for m in b.members if m.system is not None]
+        by_kind = {"identity": 0, "report": 0, "fees": 0}
+        unpaid_amount = 0.0
+        abnormal_ids: set[str] = set()
+        if recs:
+            results = (
+                build_identity_results(recs, default_identity_template())
+                + build_report_results(recs, default_report_template())
+                + build_fee_results(recs)
+            )
+            for r in results:
+                if r.kind == "fees":
+                    by_kind["fees"] += 1
+                    unpaid_amount += r.amount
+                    abnormal_ids.add(r.member.member_id)
+                elif r.is_error:
+                    by_kind[r.kind] += 1
+                    abnormal_ids.add(r.member.member_id)
+        return {
+            "total": len(b.members),
+            "system": len(recs),
+            "abnormal": len(abnormal_ids),
+            "by_kind": by_kind,
+            "unpaid_amount": unpaid_amount,
+        }
+
     def _rebuild(self):
-        while self.tree_lay.count():
-            item = self.tree_lay.takeAt(0)
+        while self.feed_lay.count():
+            item = self.feed_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         shown = filter_members(self._branches, self.search_edit.text(), self.sys_only.isChecked())
@@ -227,75 +273,181 @@ class OrgManagePage(FluentPage):
             f"本地 {self._stats['local']} 人 · 系统 {self._stats['system']} 人 · 双方 {self._stats['both']} 人"
             f" · 当前展示 {shown_count} 人")
         if not shown:
-            empty = note_label("没有匹配的团员。先在「系统配置」导入团员名单；要看系统数据请点「同步系统数据」。")
-            self.tree_lay.addWidget(empty)
+            self.feed_lay.addWidget(note_label(
+                "没有匹配的支部。先在「系统配置」导入团员名单；要看系统数据请点「同步系统数据」。"))
             return
-        # 年级分组展示
-        grades: dict[str, list[BranchNode]] = {}
         for b in shown:
-            key = f"{b.dept}·{b.grade}" if b.grade else b.dept
-            grades.setdefault(key, []).append(b)
-        for grade_key, branch_list in grades.items():
-            self.tree_lay.addWidget(self._grade_section(grade_key, branch_list))
+            self.feed_lay.addWidget(self._feed_card(b))
+        # 详情开着时同步完成 → 原地刷新当前支部详情
+        if self.detail_box.isVisible() and self._detail_code:
+            self._open_branch(self._detail_code)
 
-    def _grade_section(self, grade_key: str, branch_list: list[BranchNode]) -> QWidget:
-        total = sum(len(b.members) for b in branch_list)
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(0, 6, 0, 0)
-        v.setSpacing(8)
-        head = StrongBodyLabel(f"{grade_key}　{len(branch_list)} 个支部 · {total} 名团员")
-        head.setStyleSheet("font-size: 16px; font-weight: 600;")
-        v.addWidget(head)
-        for b in branch_list:
-            v.addWidget(self._branch_card(b))
-        return w
+    # ---------- 信息流支部卡片 ----------
 
-    def _branch_card(self, b: BranchNode) -> QWidget:
+    def _feed_card(self, b: BranchNode) -> QWidget:
+        st = self._branch_stats(b)
         card = CardWidget()
+        card.setCursor(Qt.CursorShape.PointingHandCursor)
         v = QVBoxLayout(card)
         v.setContentsMargins(18, 14, 18, 14)
-        v.setSpacing(8)
+        v.setSpacing(6)
 
         head = QHBoxLayout()
-        title = StrongBodyLabel(b.label)
-        title.setStyleSheet("font-size: 15px;")
+        title = theme_font(StrongBodyLabel(b.label), 16, int(QFont.Weight.DemiBold))
         head.addWidget(title)
         if b.code != b.label:
+            head.addSpacing(8)
             head.addWidget(BodyLabel(f"（{b.code}）"))
         head.addStretch(1)
-        head.addWidget(BodyLabel(f"{len(b.members)} 人"))
+        total = StrongBodyLabel(f"{st['total']} 人")
+        head.addWidget(total)
         v.addLayout(head)
 
-        sec = note_label(b.secretary_text + ("　·　" + b.grade if b.grade else ""))
-        v.addWidget(sec)
+        meta = b.secretary_text + (f"　·　{b.grade}" if b.grade else "")
+        if st["system"] < st["total"]:
+            meta += f"　·　系统在册 {st['system']}"
+        meta_lbl = note_label(meta)
+        v.addWidget(meta_lbl)
 
-        for m in b.members:
-            v.addWidget(self._member_row(m))
+        chips = QHBoxLayout()
+        chips.setSpacing(8)
+        if st["abnormal"]:
+            chips.addWidget(self._chip(f"异常 {st['abnormal']}", "#c62828"))
+        if st["by_kind"]["fees"]:
+            chips.addWidget(self._chip(f"欠缴 {st['by_kind']['fees']}", "#8e24aa"))
+        if not st["abnormal"] and st["system"]:
+            chips.addWidget(self._chip("无异常", "#2e7d32"))
+        if st["system"] == 0:
+            chips.addWidget(self._chip("未同步系统数据", "#6b7280"))
+        chips.addStretch(1)
+        chevron = BodyLabel("›")
+        theme_font(chevron, 20)
+        chevron.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        chips.addWidget(chevron)
+        v.addLayout(chips)
+
+        # 点击卡片任意位置进入详情
+        for w in card.findChildren(QWidget):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        card.clicked.connect(lambda *_: self._open_branch(b.code))
         return card
 
+    @staticmethod
+    def _chip(text: str, color: str) -> BodyLabel:
+        chip = BodyLabel(text)
+        chip.setStyleSheet(
+            f"background-color: {color}; color: white; border-radius: 4px; padding: 1px 10px;")
+        return chip
+
+    # ---------- 支部详情 ----------
+
+    def _open_branch(self, code: str):
+        b = next((n for n in self._branches if n.code == code), None)
+        if b is None:
+            return
+        self._detail_code = code
+        while self.detail_lay.count():
+            item = self.detail_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        st = self._branch_stats(b)
+
+        back_row = QHBoxLayout()
+        back = TransparentToolButton(FIF.LEFT_ARROW)
+        back.setToolTip("返回支部列表")
+        back.clicked.connect(self._back_to_feed)
+        back_row.addWidget(back)
+        back_row.addStretch(1)
+        self.detail_lay.addLayout(back_row)
+
+        self.detail_lay.addWidget(SubtitleLabel(b.label))
+        self.detail_lay.addWidget(note_label(
+            b.secretary_text + (f"　·　{b.grade}" if b.grade else "") + f"　·　{b.code}"))
+
+        # 统计卡：三个大数字 + 异常分类条形图
+        stat_card = CardWidget()
+        sv = QVBoxLayout(stat_card)
+        sv.setContentsMargins(20, 16, 20, 16)
+        sv.setSpacing(8)
+        nums = QHBoxLayout()
+        nums.setSpacing(12)
+        for num, label, color in (
+            (st["total"], "团员总数", "#0078d4"),
+            (st["abnormal"], "异常团员", "#c62828"),
+            (st["by_kind"]["fees"], "欠缴团费（人）", "#8e24aa"),
+        ):
+            block = QVBoxLayout()
+            block.setSpacing(2)
+            n_lbl = theme_font(BodyLabel(str(num)), 26, int(QFont.Weight.DemiBold))
+            n_lbl.setTextColor(QColor(color), QColor(color))
+            block.addWidget(n_lbl)
+            block.addWidget(note_label(label))
+            nums.addLayout(block, 1)
+        sv.addLayout(nums)
+        sv.addSpacing(6)
+        max_n = max(st["total"], 1)
+        for kind in ("identity", "report", "fees"):
+            bar = BarRowWidget(KIND_TEXT[kind], KIND_COLOR[kind])
+            bar.set_value(st["by_kind"][kind], max_n)
+            sv.addWidget(bar)
+        if st["unpaid_amount"]:
+            sv.addWidget(note_label(f"未交团费总额 {st['unpaid_amount']:g} 元"))
+        self.detail_lay.addWidget(stat_card)
+
+        members = section_title(f"团员（{st['total']} 人）")
+        self.detail_lay.addWidget(members)
+        if not b.members:
+            self.detail_lay.addWidget(note_label("这个支部暂时没有团员。"))
+        for m in b.members:
+            self.detail_lay.addWidget(self._member_row(m))
+
+        self.feed_box.setVisible(False)
+        self.bar.setVisible(False)
+        self.detail_box.setVisible(True)
+        self._scroll_top()
+
+    def _back_to_feed(self, *_):
+        if not self.detail_box.isVisible():
+            return
+        self._detail_code = ""
+        self.detail_box.setVisible(False)
+        self.feed_box.setVisible(True)
+        self.bar.setVisible(True)
+        self._scroll_top()
+
+    def _scroll_top(self):
+        self.verticalScrollBar().setValue(0)
+
     def _member_row(self, m: MemberView) -> QWidget:
-        """成员行：姓名 + 手机号 + 来源；系统成员点击卡片任意位置展开/收起全部字段。"""
+        """成员行：姓名 + 手机号 + 来源；点击行内任意位置展开/收起全部字段。"""
         card = CardWidget()
         h = QHBoxLayout(card)
         h.setContentsMargins(14, 8, 14, 8)
         h.setSpacing(10)
 
-        name = BodyLabel(m.name)
-        name.setStyleSheet("font-weight: 600;")
+        name = theme_font(BodyLabel(m.name), 13, int(QFont.Weight.DemiBold))
         h.addWidget(name)
-        h.addWidget(BodyLabel(m.mobile))
+        mob = BodyLabel(m.mobile)
+        h.addWidget(mob)
+        cls_lbl = None
         if m.cls:
-            h.addWidget(note_label(m.cls))
+            cls_lbl = note_label(m.cls)
+            h.addWidget(cls_lbl)
         h.addStretch(1)
         chip = BodyLabel(SOURCE_LABEL[m.source])
         chip.setTextColor(SOURCE_COLOR[m.source], SOURCE_COLOR[m.source])
         h.addWidget(chip)
         detail = None
+        toggle = None
         if m.system is not None:
-            toggle = TransparentToolButton(FIF.CHEVRON_DOWN_MED)
+            toggle = TransparentToolButton(FIF.DOWN)
             toggle.setToolTip("展开/收起系统信息")
             h.addWidget(toggle)
+
+        # 子控件默认会吃掉鼠标事件，导致点姓名/手机号不触发展开 → 全部设为鼠标穿透
+        for w in (name, mob, chip, cls_lbl):
+            if w is not None:
+                w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         wrap = QWidget()
         v = QVBoxLayout(wrap)
@@ -309,7 +461,7 @@ class OrgManagePage(FluentPage):
 
             def _toggle(checked=False, d=detail, t=toggle):
                 d.setVisible(not d.isVisible())
-                t.setIcon(FIF.CHEVRON_UP_MED if d.isVisible() else FIF.CHEVRON_DOWN_MED)
+                t.setIcon(FIF.UP if d.isVisible() else FIF.DOWN)
 
             toggle.clicked.connect(_toggle)
             card.clicked.connect(_toggle)
@@ -346,7 +498,9 @@ class OrgManagePage(FluentPage):
         self.worker.start()
 
     def _on_sync_one(self, user, branch, count, status, message):
-        if status != "ok":
+        if status in login_gate.SKIP_KINDS:
+            InfoBar.info(f"账号 {user} 跳过刷新", message, duration=4000, parent=self)
+        elif status != "ok":
             InfoBar.warning(
                 f"账号 {user or '（空）'} 同步失败",
                 f"{message}（其他账号不受影响）", duration=4000, parent=self)
@@ -362,6 +516,5 @@ def mark_synced():
     """记录最后一次刷新时间（手动/后台都算），后台定时刷新据此判断是否到期。"""
     from datetime import datetime, timezone
 
-    cfg = store.load()
-    cfg["lastSyncAt"] = datetime.now(timezone.utc).isoformat()
-    store.save(cfg)
+    store.update(
+        lambda cfg: cfg.__setitem__("lastSyncAt", datetime.now(timezone.utc).isoformat()))

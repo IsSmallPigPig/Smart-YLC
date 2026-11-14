@@ -9,7 +9,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -33,7 +33,7 @@ from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services.api import SiteClient
 from app.ui.charts import BarRowWidget, ProgressDonut
 from app.ui.check_page import default_identity_template, default_report_template
-from app.ui.page import FluentPage, note_label
+from app.ui.page import FluentPage, note_label, theme_font, section_title
 
 STATUS_LABEL = {
     "ok": "正常",
@@ -69,18 +69,17 @@ class OrgWorker(QThread):
         self._stop = True
 
     def _check_one(self, acc: dict):
+        from app.services import login_gate
+
         user, pwd = acc.get("userName", ""), acc.get("password", "")
         branch = acc.get("remark") or user
         if not user or not pwd:
             return user, branch, 0, 0, 0, {}, "empty", "账号或密码为空", None, []
         try:
             client = SiteClient(user, pwd)
-            probe = client.session_account()
-            if not probe.ok:
-                verdict = client.login()
-                kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
-                if kind != "ok":
-                    return user, branch, 0, 0, 0, {}, kind, verdict.message, None, []
+            kind, msg = login_gate.ensure_logged_in(client)
+            if kind != "ok":
+                return user, branch, 0, 0, 0, {}, kind, msg, None, []
             members, _ = client.get_all_members()
             id_tpl, rep_tpl = default_identity_template(), default_report_template()
             results = (
@@ -132,7 +131,7 @@ class OrgPage(FluentPage):
         card = CardWidget()
         card_lay = QVBoxLayout(card)
         card_lay.setContentsMargins(20, 16, 20, 16)
-        card_lay.addWidget(StrongBodyLabel("组织状况总览"))
+        card_lay.addWidget(section_title("组织状况总览"))
         card_lay.addWidget(note_label(
             "已上传依据「电子志愿书状态」；异常只统计错误级（职业未填等仅警告不计入）；"
             "转接申请 = 已发起组织关系转接的团员 / 在册总数，按人去重"))
@@ -176,7 +175,7 @@ class OrgPage(FluentPage):
         self.error_lay.setContentsMargins(0, 0, 0, 0)
         self.error_lay.setSpacing(8)
         self.error_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.error_title = StrongBodyLabel("错误团员（0）")
+        self.error_title = section_title("错误团员（0）")
         self.add_table(self.error_box, 1)
         self.error_lay.addWidget(self.error_title)
 
@@ -252,8 +251,7 @@ class OrgPage(FluentPage):
         v.setSpacing(6)
 
         head = QHBoxLayout()
-        title = StrongBodyLabel(name or "—")
-        title.setStyleSheet("font-size: 15px;")
+        title = theme_font(StrongBodyLabel(name or "—"), 15, int(QFont.Weight.DemiBold))
         head.addWidget(title)
         if mobile and mobile != "—":
             head.addSpacing(8)
@@ -262,7 +260,10 @@ class OrgPage(FluentPage):
         if kinds:
             for k in kinds:
                 chip = BodyLabel(KIND_LABEL[k])
-                chip.setTextColor(QColor(KIND_COLOR[k]), QColor(KIND_COLOR[k]))
+                # 小底色圆角标签承载白字，不改字体颜色本身
+                chip.setStyleSheet(
+                    f"background-color: {KIND_COLOR[k]}; color: white;"
+                    "border-radius: 4px; padding: 1px 8px;")
                 head.addWidget(chip)
         head.addSpacing(12)
         branch_lbl = CaptionLabel(branch or "—")

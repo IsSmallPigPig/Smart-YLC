@@ -52,7 +52,7 @@ class UploadWorker(QThread):
 
     row_ready = Signal(int, str, str, str, str)  # row, account, name, result(成功/失败/跳过), reason
     stage = Signal(str)
-    all_done = Signal(int, int, int)  # ok, skipped, total
+    all_done = Signal(int, int, int, int, int)  # ok, skipped, total, audit_ok, audit_manual
 
     def __init__(self, creds: dict[str, str], jobs: list[dict]):
         super().__init__()
@@ -64,31 +64,32 @@ class UploadWorker(QThread):
         self._stop = True
 
     def _login(self, account: str):
-        """登录指定账号：先探测会话，失效才登录。返回 (client, 错误消息)。"""
+        """登录指定账号：复用已保存会话探测，失效才登录（带验证码/风控冷却）。
+        返回 (client, 错误消息)。"""
+        from app.services import login_gate
         from app.services.api import SiteClient
 
         client = SiteClient(account, self.creds[account])
-        probe = client.session_account()
-        if probe.ok:
+        kind, msg = login_gate.ensure_logged_in(client)
+        if kind == "ok":
             return client, ""
-        verdict = client.login()
-        kind = str((verdict.data or {}).get("kind", "failed")) if isinstance(verdict.data, dict) else "failed"
+        if kind == "cooldown":
+            return None, msg
         if kind == "captcha":
             return None, "需要验证码（密码失败过多），请先在网页端登录一次"
-        if kind != "ok":
-            return None, verdict.message or "登录失败"
-        return client, ""
+        return None, msg or "登录失败"
 
-    def _report_status_map(self, client) -> dict[tuple[str, str], str]:
-        """该团支部的 (姓名, 手机号) → 报到资料状态（翻译后）。"""
+    def _member_map(self, client) -> dict[tuple[str, str], object]:
+        """该团支部的 (姓名, 手机号) → 团员记录（含报到状态与 mid）。"""
         try:
             members, _ = client.get_all_members()
         except Exception:
             return {}  # 拉不到名单就不预检，交给站点返回的错误
-        return {(m.name, m.mobile): m.report_data_status for m in members}
+        return {(m.name, m.mobile): m for m in members}
 
     def run(self):
         ok = skipped = 0
+        audit_ok = audit_manual = 0
         tmpdir = tempfile.mkdtemp(prefix="gd12355-upload-")
         try:
             groups: dict[str, list[dict]] = {}
@@ -110,7 +111,7 @@ class UploadWorker(QThread):
                         self.row_ready.emit(j["row"], account, os.path.basename(j["path"]), "失败", f"登录失败：{err}")
                     continue
                 self.stage.emit(f"核对 {account} 团员报到情况…")
-                status_map = self._report_status_map(client)
+                member_map = self._member_map(client)
 
                 for j in acc_jobs:
                     if self._stop:
@@ -118,8 +119,9 @@ class UploadWorker(QThread):
                     path, name = j["path"], os.path.basename(j["path"])
                     # 预检：未完成报到的团员直接跳过
                     a = analyze_file_name(name)
-                    if a.parsed:
-                        reason = upload_block_reason(status_map.get(a.parsed, ""))
+                    member = member_map.get(a.parsed) if a.parsed else None
+                    if member is not None:
+                        reason = upload_block_reason(member.report_data_status)
                         if reason:
                             self.row_ready.emit(j["row"], account, name, "跳过", reason)
                             skipped += 1
@@ -143,11 +145,28 @@ class UploadWorker(QThread):
                             continue
                     self.stage.emit(f"上传 {name} → {account}…")
                     result = client.upload_file(upload_path)
-                    self.row_ready.emit(j["row"], account, name, "成功" if result.ok else "失败", result.message)
-                    ok += 1 if result.ok else 0
+                    if not result.ok:
+                        self.row_ready.emit(j["row"], account, name, "失败", result.message)
+                        continue
+                    ok += 1
+                    # 上传入库成功 → 自动调用网页端同款「审核」接口（status=2 通过）
+                    if member is not None and str(member.member_id).isdigit():
+                        self.stage.emit(f"审核 {name}…")
+                        audit = client.audit_voluntary_book(member.member_id)
+                        if audit.ok:
+                            audit_ok += 1
+                            self.row_ready.emit(j["row"], account, name, "成功", "已上传，审核已自动通过")
+                        else:
+                            audit_manual += 1
+                            self.row_ready.emit(j["row"], account, name, "成功",
+                                                f"已上传，自动审核失败：{audit.message}（请到网页端手动审核）")
+                    else:
+                        audit_manual += 1
+                        self.row_ready.emit(j["row"], account, name, "成功",
+                                            "已上传，未匹配到团员记录，请到网页端手动审核")
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
-        self.all_done.emit(ok, skipped, len(self.jobs))
+        self.all_done.emit(ok, skipped, len(self.jobs), audit_ok, audit_manual)
 
 
 class UploadPage(FluentPage):
@@ -180,7 +199,7 @@ class UploadPage(FluentPage):
         row2.addStretch(1)
         lay.addLayout(row2)
 
-        self.stat = BodyLabel("点「开始上传」即一键执行：命名检查 → 按班级分流 → 压缩 → 预检报到 → 上传")
+        self.stat = BodyLabel("点「开始上传」即一键执行：命名检查 → 按班级分流 → 压缩 → 预检报到 → 上传 → 自动审核")
         lay.addWidget(self.stat)
         self.ws_note = note_label("")
         lay.addWidget(self.ws_note)
@@ -190,8 +209,6 @@ class UploadPage(FluentPage):
         self.table.setBorderRadius(8)
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["文件", "目标账号", "结果", "说明"])
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, header.ResizeMode.Stretch)
         self.add_table(self.table, 1)
 
     # ---------- 入口 ----------
@@ -314,12 +331,17 @@ class UploadPage(FluentPage):
         self._set_row(i, name, account, result, reason)
         self.stat.setText(f"已处理 {i + 1}/{self.table.rowCount()}：{name}")
 
-    def _on_done(self, ok: int, skipped: int, total: int):
+    def _on_done(self, ok: int, skipped: int, total: int, audit_ok: int, audit_manual: int):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._refresh_ws_note()
         failed = total - ok - skipped
-        parts = [f"成功 {ok}", f"跳过 {skipped}（未完成报到等，原因见表格）"] if skipped else [f"成功 {ok}"]
+        parts = [f"成功 {ok}"]
+        if audit_ok:
+            parts.append(f"审核自动通过 {audit_ok}")
+        if audit_manual:
+            parts.append(f"{audit_manual} 个需网页端手动审核（原因见表格说明）")
+        if skipped:
+            parts.append(f"跳过 {skipped}（未完成报到等，原因见表格）")
         parts.append(f"失败 {failed}")
-        InfoBar.success("上传批次结束", "、".join(parts) + "。上传通过后请到智慧团建网页端点击「审核」完成认证",
-                        duration=8000, parent=self)
+        InfoBar.success("上传批次结束", "、".join(parts), duration=8000, parent=self)

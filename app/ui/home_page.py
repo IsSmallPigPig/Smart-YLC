@@ -21,7 +21,7 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
-from app.ui.page import FluentPage, note_label
+from app.ui.page import FluentPage
 
 BANNER_RATIO = 0.40  # 头图占视口高度的比例，铺满上方页面
 
@@ -101,35 +101,29 @@ class HomePage(FluentPage):
         body_lay.setContentsMargins(36, 0, 36, 0)
         body_lay.setSpacing(8)
 
-        # 欢迎大字块 + 按钮在整页视口内垂直居中
+        # 欢迎大字块在整页视口内垂直居中
         body_lay.addStretch(1)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
         body_lay.addWidget(self.hello_label)
         body_lay.addWidget(self.title_label)
-        body_lay.addSpacing(18)
+        body_lay.addStretch(1)
 
-        # 两个入口按钮：居中
+        # 两个入口按钮：贴页面底部
         row = QHBoxLayout()
-        row.addStretch(1)
+        row.setContentsMargins(36, 0, 36, 28)
         upload_btn = PrimaryPushButton(FIF.CLOUD, "上传档案")
         upload_btn.setFixedWidth(150)
         upload_btn.clicked.connect(lambda: window.switchTo(window.upload_page))
         org_btn = PushButton(FIF.PIE_SINGLE, "组织状况")
         org_btn.setFixedWidth(150)
         org_btn.clicked.connect(lambda: window.switchTo(window.org_page))
+        row.addStretch(1)
         row.addWidget(upload_btn)
         row.addSpacing(16)
         row.addWidget(org_btn)
-        row.addStretch(1)
-        body_lay.addLayout(row)
-        body_lay.addStretch(1)
-
-        # 底部说明小字叠放在页面底部（不占布局），保证欢迎块在视口内精确垂直居中
-        self.note = note_label("上传后需在智慧团建网页端点击「审核」完成认证")
-        self.note.setWordWrap(False)
-        self.note.setParent(self.scrollWidget)
         lay.addWidget(body, 1)
+        lay.addLayout(row)
 
         self._apply_font()
         self._load_header()
@@ -164,7 +158,4 @@ class HomePage(FluentPage):
                                  max(200, int(self.viewport().height() * BANNER_RATIO)))
         self.banner.move(0, 0)
         self.banner.lower()
-        # 底部说明小字贴底
-        self.note.adjustSize()
-        self.note.move(36, self.scrollWidget.height() - self.note.height() - 24)
         self._apply_font()

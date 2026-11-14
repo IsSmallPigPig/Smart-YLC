@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
-from qfluentwidgets import CaptionLabel, ScrollArea
+from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, ScrollArea, StrongBodyLabel, ToolButton
 
 PAGE_MARGINS = (36, 28, 36, 28)
 
@@ -21,6 +21,66 @@ def note_label(text: str) -> CaptionLabel:
     lbl.setWordWrap(True)
     lbl.setTextColor(QColor("#6b7280"), QColor("#9ca3af"))
     return lbl
+
+
+def theme_font(lbl, pixel_size: int, weight: int = 0):
+    """按像素设置字号/字重，不覆盖 fluent 的主题样式表。
+
+    用 widget.setStyleSheet 写 font-* 会整体替换掉 fluent 的 qss，文字颜色
+    退回 Qt 调色板——系统外观是深色时调色板文字为白色，浅色页面里就变成
+    白字白底。QFont 只改字体属性，颜色仍由 fluent 按明暗模式联动。"""
+    f = lbl.font()
+    f.setPixelSize(pixel_size)
+    if weight:
+        f.setWeight(QFont.Weight(weight))
+    lbl.setFont(f)
+    return lbl
+
+
+def section_title(text: str) -> StrongBodyLabel:
+    """卡片区块标题：16px 加粗，比正文略大，与灰色说明文字拉开层级。"""
+    return theme_font(StrongBodyLabel(text), 16, int(QFont.Weight.DemiBold))
+
+
+def sub_title(text: str) -> StrongBodyLabel:
+    """卡片内分组小标题：13px 加粗，弱于卡片标题一级。"""
+    return theme_font(StrongBodyLabel(text), 13, int(QFont.Weight.DemiBold))
+
+
+class CollapsibleCard(CardWidget):
+    """折叠卡片：标题行 + 箭头按钮切换内容区显隐，收起后只留标题行。
+
+    用法：content = CollapsibleCard("标题", expanded=True)；往
+    content.body_lay 里加内容即可。"""
+
+    def __init__(self, title: str, expanded: bool = True, parent=None):
+        super().__init__(parent)
+        self._expanded = bool(expanded)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 14, 20, 14)
+        outer.setSpacing(8)
+        header = QHBoxLayout()
+        header.addWidget(section_title(title))
+        header.addStretch(1)
+        self.toggle_btn = ToolButton(FIF.DOWN)
+        self.toggle_btn.setToolTip("展开 / 收起")
+        self.toggle_btn.clicked.connect(self.toggle)
+        header.addWidget(self.toggle_btn)
+        outer.addLayout(header)
+        self.body = QWidget(self)
+        self.body_lay = QVBoxLayout(self.body)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setSpacing(6)
+        outer.addWidget(self.body)
+        self._sync()
+
+    def toggle(self):
+        self._expanded = not self._expanded
+        self._sync()
+
+    def _sync(self):
+        self.body.setVisible(self._expanded)
+        self.toggle_btn.setIcon(FIF.UP if self._expanded else FIF.DOWN)
 
 
 class FluentPage(ScrollArea):
@@ -44,7 +104,14 @@ class FluentPage(ScrollArea):
         )
 
     def add_table(self, table, stretch: int = 0, min_height: int = 180):
-        """表格在滚动容器里需要保底高度，窗口缩小时不会被压扁。"""
+        """表格在滚动容器里需要保底高度，窗口缩小时不会被压扁。
+
+        表格列宽按内容自适应：任何文字都完整展示，不因默认宽度截断；
+        内容总宽超出视口时出横向滚动条。普通容器（无表头）只做高度保底。"""
         table.setMinimumHeight(min_height)
+        if isinstance(table, QTableView):
+            header = table.horizontalHeader()
+            header.setStretchLastSection(False)
+            header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.vBoxLayout.addWidget(table, stretch)
         return table

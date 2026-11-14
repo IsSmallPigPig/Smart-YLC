@@ -115,10 +115,9 @@ class TrayDaemon(QObject):
         self.worker.start()
 
     def _on_done(self, ok: bool, message: str):
-        cfg = store.load()
         if ok:
-            cfg["lastDailyOkDate"] = datetime.now().strftime("%Y-%m-%d")
-            store.save(cfg)
+            store.update(lambda cfg: cfg.__setitem__(
+                "lastDailyOkDate", datetime.now().strftime("%Y-%m-%d")))
             send(f"智慧团建 · 团员情况", message, self.tray)
         else:
             send("智慧团建 · 每日检查失败", message, self.tray)
