@@ -42,6 +42,12 @@ def _key(name: str, mobile: str) -> str:
     return f"{name}::{mobile}"
 
 
+def record_from_dict(d: dict) -> "MemberRecord":
+    """memberCache 里的成员字典 → MemberRecord（未知键忽略）。"""
+    fields = {f for f in MemberRecord.__dataclass_fields__}
+    return MemberRecord(**{k: v for k, v in d.items() if k in fields})
+
+
 @dataclass
 class MemberView:
     name: str

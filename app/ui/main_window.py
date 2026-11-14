@@ -106,37 +106,33 @@ class MainWindow(MSFluentWindow):
         qconfig.themeChanged.connect(lambda *_: self.on_theme_changed())
 
         # 统一数据刷新：成员缓存 → 站内信 → 组织状况统计，三段都在工作线程串行执行。
-        # 后台静默轮：每 4 小时一轮，启动 1 分钟后先检查一次；手动入口在「系统配置」。
+        # 30 秒快刷（后台静默）：成员缓存按 4 小时新鲜度跳过，站内信每轮强制拉取
+        # 检测新消息（有新消息弹系统通知），组织状况从成员缓存离线重算；
+        # 手动入口在「系统配置」（在线重查全部数据）。
         self._refreshing = False
         self._refresh_silent = True
         self._refresh_worker: "QThread | None" = None
         self._sync_timer = QTimer(self)
-        self._sync_timer.setInterval(4 * 3600 * 1000)
+        self._sync_timer.setInterval(30 * 1000)
         self._sync_timer.timeout.connect(self._maybe_background_sync)
         self._sync_timer.start()
-        QTimer.singleShot(60 * 1000, self._maybe_background_sync)
+        QTimer.singleShot(15 * 1000, self._maybe_background_sync)
 
     def _maybe_background_sync(self):
-        """距上次刷新 ≥4 小时（或从没刷过）才静默刷新；刷新中不重复启动。"""
-        from datetime import datetime, timezone
-
+        """30 秒一次的静默快刷；刷新中不重复启动，没有账号就跳过。"""
         if not self.settings_page.accounts:
             return
-        last = store.load().get("lastSyncAt", "")
-        if last:
-            try:
-                elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds()
-            except ValueError:
-                elapsed = None
-            if elapsed is not None and elapsed < 4 * 3600:
-                return
-        self.refresh_all(silent=True)
+        self.refresh_all(silent=True, fast=True)
 
-    def refresh_all(self, silent: bool = True) -> bool:
+    def refresh_all(self, silent: bool = True, fast: bool = False) -> bool:
         """刷新所有数据：成员缓存 → 站内信 → 组织状况统计。
 
         全程工作线程（网络不进 GUI 线程）；进行中再次调用直接返回 False。
-        「系统配置」的按钮走 silent=False（有开始/完成提示），添加账号与后台定时走静默。"""
+        fast=False（手动/慢刷）：组织状况在线重查（OrgWorker）。
+        fast=True（30 秒快刷）：站内信绕开新鲜跳过强制拉取，拉到新消息弹系统
+        通知；成员缓存仍按 4 小时新鲜度跳过（不重复请求）；有账号真的同步到
+        新成员时组织状况从缓存离线重算，否则保留现有展示。
+        「系统配置」的按钮走 silent=False（有开始/完成提示），定时快刷走静默。"""
         from qfluentwidgets import InfoBar
 
         from app.ui.messages_page import MessageFetchWorker
@@ -157,22 +153,34 @@ class MainWindow(MSFluentWindow):
         if not silent:
             InfoBar.info("开始刷新", f"成员缓存 → 站内信 → 组织状况，共 {len(accounts)} 个账号", duration=4000, parent=self)
 
+        synced_any: list[str] = []
+
+        def _on_sync_one(user, branch, count, status, message):
+            if status == "ok":
+                synced_any.append(user)
+
         def _after_sync():
             self.org_manage_page.refresh()
             mark_synced()
-            msg_w = MessageFetchWorker(accounts)
+            msg_w = MessageFetchWorker(accounts, force=fast)
             self._refresh_worker = msg_w
+            msg_w.new_ready.connect(self._notify_new_messages)
             msg_w.all_done.connect(_after_messages)
             msg_w.start()
 
         def _after_messages():
             self.messages_page._load_cache()
-            self.org_page._start()  # 组织状况统计自己开线程，结束回调收尾
-            org_w = self.org_page.worker
-            if org_w is not None:
-                org_w.all_done.connect(_finish)
-            else:
+            if fast:
+                if synced_any:
+                    self.org_page.refresh_offline()  # 成员缓存有更新，离线重算组织状况
                 _finish()
+            else:
+                self.org_page._start()  # 组织状况统计自己开线程，结束回调收尾
+                org_w = self.org_page.worker
+                if org_w is not None:
+                    org_w.all_done.connect(_finish)
+                else:
+                    _finish()
 
         def _finish():
             self._refreshing = False
@@ -182,12 +190,23 @@ class MainWindow(MSFluentWindow):
 
         sync_w = MemberSyncWorker(accounts, sequential=True)
         self._refresh_worker = sync_w
+        sync_w.account_done.connect(_on_sync_one)
         sync_w.all_done.connect(_after_sync)
         sync_w.start()
         return True
 
+    def _notify_new_messages(self, items: list):
+        """线上来了新站内信 → 系统通知（macOS osascript）。"""
+        if not items:
+            return
+        from app.services.notify import send
+
+        first = items[0]
+        body = f"{first.get('account', '')}：{(first.get('content') or '').strip() or first.get('title', '')}"
+        send(f"收到 {len(items)} 条新站内信", body[:120])
+
     def on_theme_changed(self):
-        """明暗模式变化：窗口底色重绘；消息卡片的未读底色/chip 底色是按当前
+        """明暗模式变化：窗口底色重绘；消息卡片右侧小标签的底色是按当前
         主题烘焙的，需要重建列表。其余页面样式由 fluent 主题联动自动更新。"""
         self.update()
         if hasattr(self, "messages_page") and self.messages_page._views:

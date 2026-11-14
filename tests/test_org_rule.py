@@ -123,3 +123,18 @@ def test_upload_block_reason_unreported():
 def test_upload_block_reason_allows_uploaded_ready():
     for s in ("审核通过", "已报到,电子志愿书未上传", "电子志愿书待上传", "", None):
         assert upload_block_reason(s) == ""
+
+
+# ---------- 上传预检：线上已审核通过（志愿书已上传）跳过重复上传 ----------
+
+def test_upload_skip_reason_skips_uploaded_ebook():
+    from app.domain.upload_routing import upload_skip_reason
+
+    for e in ("通过", "已上传"):
+        reason = upload_skip_reason("审核通过", e)
+        assert reason and "审核通过" in reason
+    # 未上传/待上传/状态空 → 不拦
+    for e in ("未上传", "-", "", None):
+        assert upload_skip_reason("审核通过", e) == ""
+    # 未完成报到优先拦截
+    assert "报到" in upload_skip_reason("报到待审核", "已上传")
