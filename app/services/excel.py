@@ -77,6 +77,51 @@ def save_roster_template(path: str) -> int:
 
 ERROR_ROW_HEADERS = ["姓名", "手机号码", "类别", "问题", "支部"]
 
+SECRETARY_NAME_KEYS = {"团支书", "团支书姓名", "书记", "姓名", "name"}
+SECRETARY_BRANCH_KEYS = CLASS_KEYS | {"支部名称", "团支部", "班级名称"}
+
+
+def import_secretaries(path: str) -> list[dict]:
+    """从 xlsx 导入团支书名单 → [{"branch": 支部编号或名称, "name": 姓名, "mobile": 手机}]。
+
+    需要「支部/班级」与「团支书/姓名」两列；手机号列可选。跳过缺支部或缺姓名的行时抛 ValueError。"""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+    if not rows:
+        raise ValueError("表格为空")
+
+    header = [str(c or "").strip() for c in rows[0]]
+    branch_col = next((i for i, h in enumerate(header) if h in SECRETARY_BRANCH_KEYS), None)
+    name_col = next((i for i, h in enumerate(header) if h in SECRETARY_NAME_KEYS), None)
+    mobile_col = next((i for i, h in enumerate(header) if h in MOBILE_KEYS), None)
+    if branch_col is None or name_col is None:
+        raise ValueError(f"表头缺少「支部/班级」或「团支书/姓名」列，实际表头：{header}")
+
+    out: list[dict] = []
+    skipped: list[str] = []
+    for r in rows[1:]:
+        if r is None:
+            continue
+        branch = str(r[branch_col]).strip() if branch_col < len(r) and r[branch_col] else ""
+        name = str(r[name_col]).strip() if name_col < len(r) and r[name_col] else ""
+        if not branch or not name:
+            skipped.append(f"第{len(out) + 2}行")
+            continue
+        mobile = ""
+        if mobile_col is not None and mobile_col < len(r) and r[mobile_col] is not None:
+            m = MOBILE_RE.search(str(r[mobile_col]))
+            mobile = m.group(0) if m else ""
+        out.append({"branch": branch, "name": name, "mobile": mobile})
+    if skipped:
+        raise ValueError(f"以下行缺支部或团支书姓名被跳过：{'、'.join(skipped[:8])}{'…' if len(skipped) > 8 else ''}")
+    if not out:
+        raise ValueError("名单里没有有效数据行")
+    return out
+
 
 def save_error_rows(path: str, rows) -> int:
     """导出错误团员名单 xlsx（rows: ErrorMemberRow 可迭代），返回写入行数。"""

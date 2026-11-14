@@ -8,18 +8,19 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QHBoxLayout, QTableWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
+    BodyLabel,
     CardWidget,
     FluentIcon as FIF,
     InfoBar,
     PrimaryPushButton,
     PushButton,
     StrongBodyLabel,
-    TableWidget,
+    CaptionLabel,
 )
 
 from app.domain.check_rules import (
@@ -169,19 +170,15 @@ class OrgPage(FluentPage):
         card_lay.addLayout(row)
         lay.addWidget(card)
 
-        # 错误团员名单表：只读，末列为所属支部；账号级失败也占一行便于排查
-        self.table = TableWidget()
-        self.table.setBorderVisible(True)
-        self.table.setBorderRadius(8)
-        self.table.setWordWrap(False)
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["姓名", "手机号码", "类别", "问题", "支部"])
-        header = self.table.horizontalHeader()
-        header.setStretchLastSection(False)
-        for col in (0, 1, 2, 4):
-            header.setSectionResizeMode(col, header.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, header.ResizeMode.Stretch)
-        self.add_table(self.table, 1)
+        # 错误团员卡片列表：每张卡片 = 姓名/支部 + 类别 + 问题说明；账号级失败单独成卡
+        self.error_box = QWidget()
+        self.error_lay = QVBoxLayout(self.error_box)
+        self.error_lay.setContentsMargins(0, 0, 0, 0)
+        self.error_lay.setSpacing(8)
+        self.error_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.error_title = StrongBodyLabel("错误团员（0）")
+        self.add_table(self.error_box, 1)
+        self.error_lay.addWidget(self.error_title)
 
     def _set_ratio(self, total: int, uploaded: int):
         self.donut.set_value(uploaded, total)
@@ -203,7 +200,7 @@ class OrgPage(FluentPage):
         self._transfer_applied = 0
         self._error_rows = []
         self.transfer_note.setText("转接明细：—")
-        self.table.setRowCount(0)
+        self._clear_cards()
         self.export_btn.setEnabled(False)
         self._set_ratio(0, 0)
         self._update_bars()
@@ -229,28 +226,57 @@ class OrgPage(FluentPage):
         self._update_bars()
 
         if status != "ok":
-            # 账号级失败：不参与名单，只占一行提示，避免静默丢账号
-            self._append_row("—", "—", "—", f"账号 {user or '（空）'} 检查失败："
-                             f"{STATUS_LABEL.get(status, status)}：{message}", branch, None)
+            # 账号级失败：不参与名单，单独一张卡片说明，避免静默丢账号
+            self._append_card("—", "—", [], f"账号 {user or '（空）'} 检查失败："
+                              f"{STATUS_LABEL.get(status, status)}：{message}", branch, None)
         for r in rows:
             self._error_rows.append(r)
-            self._append_row(r.name, r.mobile, r.kinds, r.problems, r.branch, r.kinds)
+            self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
+                              r.problems, r.branch, r.kinds)
+        self.error_title.setText(f"错误团员（{len(self._error_rows)}）")
         if self._error_rows:
             self.export_btn.setEnabled(True)
 
-    def _append_row(self, name, mobile, kind, problem, branch, kind_for_color):
-        r = self.table.rowCount()
-        self.table.setRowCount(r + 1)
-        vals = [name or "—", mobile or "—", kind or "—", problem or "—", branch or "—"]
-        readonly = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        color = QColor(next((KIND_COLOR[k] for k in KIND_COLOR if k in (kind_for_color or "")), None)) \
-            if kind_for_color else None
-        for col, v in enumerate(vals):
-            item = QTableWidgetItem(v)
-            item.setFlags(readonly)
-            if color is not None and col == 2:
-                item.setForeground(color)
-            self.table.setItem(r, col, item)
+    def _clear_cards(self):
+        while self.error_lay.count() > 1:  # 保留标题
+            item = self.error_lay.takeAt(self.error_lay.count() - 1)
+            if item.widget():
+                item.widget().deleteLater()
+        self.error_title.setText("错误团员（0）")
+
+    def _append_card(self, name, mobile, kinds: list, problem, branch, kinds_text):
+        """一张错误团员卡片：左侧姓名+手机号，右侧支部；下方类别与问题。"""
+        card = CardWidget()
+        v = QVBoxLayout(card)
+        v.setContentsMargins(18, 12, 18, 12)
+        v.setSpacing(6)
+
+        head = QHBoxLayout()
+        title = StrongBodyLabel(name or "—")
+        title.setStyleSheet("font-size: 15px;")
+        head.addWidget(title)
+        if mobile and mobile != "—":
+            head.addSpacing(8)
+            head.addWidget(CaptionLabel(mobile))
+        head.addStretch(1)
+        if kinds:
+            for k in kinds:
+                chip = BodyLabel(KIND_LABEL[k])
+                chip.setTextColor(QColor(KIND_COLOR[k]), QColor(KIND_COLOR[k]))
+                head.addWidget(chip)
+        head.addSpacing(12)
+        branch_lbl = CaptionLabel(branch or "—")
+        branch_lbl.setTextColor(QColor("#6b7280"), QColor("#9ca3af"))
+        head.addWidget(branch_lbl)
+        v.addLayout(head)
+
+        body = BodyLabel(problem or "—")
+        body.setWordWrap(True)
+        if kinds is None:  # 账号级失败
+            body.setTextColor(QColor("#c62828"), QColor("#ef5350"))
+        v.addWidget(body)
+
+        self.error_lay.addWidget(card)
 
     def _export(self):
         if not self._error_rows:

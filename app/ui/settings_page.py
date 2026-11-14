@@ -31,6 +31,7 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     StrongBodyLabel,
+    SwitchButton,
     TableWidget,
     ToolButton,
 )
@@ -177,6 +178,7 @@ class SettingsPage(FluentPage):
         self._web_worker: WebOpenWorker | None = None
         self._ws_known: set[str] = set()
         self.home_page = None  # 由 MainWindow 注入，头图设置后即时生效
+        self.window_ref = None  # 由 MainWindow 注入，毛玻璃开关生效用
         self._filter_label = ""  # 当前团支部筛选（完整备注名，空 = 不筛选）
 
         lay = self.vBoxLayout
@@ -369,6 +371,40 @@ class SettingsPage(FluentPage):
         header_lay.addLayout(row7)
         lay.addWidget(header)
 
+        # 外观：毛玻璃混合背景
+        look = CardWidget()
+        look_lay = QVBoxLayout(look)
+        look_lay.setContentsMargins(20, 16, 20, 16)
+        look_lay.addWidget(StrongBodyLabel("外观"))
+        look_lay.addWidget(note_label("开启后窗口背景使用系统毛玻璃混合（Mica 式），关闭恢复纯色"))
+        look_lay.addSpacing(4)
+        self.translucent_switch = SwitchButton("毛玻璃混合背景")
+        self.translucent_switch.setChecked(bool(store.load().get("translucent")))
+        self.translucent_switch.checkedChanged.connect(self._on_translucent_changed)
+        look_lay.addWidget(self.translucent_switch)
+        lay.addWidget(look)
+
+        # 团支书名单（组织管理页支部信息展示）
+        sec = CardWidget()
+        sec_lay = QVBoxLayout(sec)
+        sec_lay.setContentsMargins(20, 16, 20, 16)
+        title_sec = QHBoxLayout()
+        title_sec.addWidget(StrongBodyLabel("团支书名单"))
+        self.sec_status = note_label("未导入")
+        title_sec.addSpacing(8)
+        title_sec.addWidget(self.sec_status)
+        title_sec.addStretch(1)
+        sec_lay.addLayout(title_sec)
+        sec_lay.addWidget(note_label("xlsx 列：支部（编号或名称） / 团支书（姓名） / 手机号码（可选）；展示在「组织管理」的支部信息里"))
+        sec_lay.addSpacing(4)
+        row_sec = QHBoxLayout()
+        self.sec_btn = PushButton(FIF.DOCUMENT, "导入团支书名单")
+        self.sec_btn.clicked.connect(self._import_secretaries)
+        row_sec.addWidget(self.sec_btn)
+        row_sec.addStretch(1)
+        sec_lay.addLayout(row_sec)
+        lay.addWidget(sec)
+
         # 工作区卡片
         ws = CardWidget()
         ws_lay = QVBoxLayout(ws)
@@ -473,6 +509,9 @@ class SettingsPage(FluentPage):
         self.rule_prefix_edit.setText(OrgRule.prefix_text(prefixes))
         self.rule_noprefix_edit.setText(r.get("noPrefix") or "初中部")
         self._update_rule_preview()
+
+        # 团支书名单状态
+        self._refresh_secretary_status()
 
     # ---------- 团支部编号规则 ----------
 
@@ -1051,6 +1090,40 @@ class SettingsPage(FluentPage):
         if self.home_page:
             self.home_page.banner.set_image_path("")
         InfoBar.info("头图已清除", "工具首页恢复占位渐变", duration=2500, parent=self)
+
+    # ---------- 外观（毛玻璃） ----------
+
+    def _on_translucent_changed(self, checked: bool):
+        cfg = store.load()
+        cfg["translucent"] = bool(checked)
+        store.save(cfg)
+        if self.window_ref is not None:
+            self.window_ref.set_translucent(checked)
+
+    # ---------- 团支书名单 ----------
+
+    def _import_secretaries(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择团支书名单", "", "Excel (*.xlsx *.xlsm)")
+        if not path:
+            return
+        try:
+            from app.services.excel import import_secretaries
+
+            rows = import_secretaries(path)
+        except Exception as e:
+            InfoBar.error("团支书名单导入失败", str(e), duration=5000, parent=self)
+            return
+        cfg = store.load()
+        cfg["secretaries"] = rows
+        store.save(cfg)
+        self._refresh_secretary_status(rows)
+        InfoBar.success("团支书名单已导入", f"{len(rows)} 个支部（在「组织管理」展示）", duration=4000, parent=self)
+        if self.window_ref is not None:
+            self.window_ref.org_manage_page.refresh()
+
+    def _refresh_secretary_status(self, rows: list | None = None):
+        rows = store.load().get("secretaries", []) if rows is None else rows
+        self.sec_status.setText(f"已登记 {len(rows)} 个支部" if rows else "未导入")
 
     # ---------- 对外提供 ----------
 
