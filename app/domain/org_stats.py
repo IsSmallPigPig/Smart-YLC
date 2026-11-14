@@ -36,10 +36,12 @@ class OrgStats:
 
 
 def summarize_members(members: list[MemberRecord], results: list[CheckResult]) -> OrgStats:
-    """按团员去重统计异常（一个团员多项异常只计一次；分类计数按类别各计一次）。"""
+    """按团员去重统计异常（一个团员多项异常只计一次；分类计数按类别各计一次）。
+
+    只统计错误级结果（CheckResult.is_error）；职业未填等警告级不进仪表盘。"""
     by_ids: dict[str, set[str]] = {"identity": set(), "report": set(), "fees": set()}
     for r in results:
-        if r.abnormal and r.kind in by_ids:
+        if r.is_error and r.kind in by_ids:
             by_ids[r.kind].add(r.member.member_id)
     abnormal = len(set().union(*by_ids.values())) if members else 0
     return OrgStats(

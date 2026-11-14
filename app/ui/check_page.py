@@ -43,19 +43,18 @@ READONLY_FLAGS = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
 
 
 def default_identity_template() -> CheckTemplate:
-    # 判定词对照站点真实枚举：isRealName→通过；电子志愿书→已上传；电子团员证照片→审核通过
+    # 判定词对照站点真实枚举：isRealName→通过。
+    # 站点语义：团员证照片未上传不算异常（站点自身显示「无异常」），志愿书状态只用于上传进度；
+    # 职业未填按站点惯例只提示（警告级），不计入信息错误。
     return CheckTemplate("identity", "报到身份", [
-        TemplateField("real_name_status", "实名认证", "通过", "contains"),
-        TemplateField("ebook_status", "电子志愿书", "已上传", "contains"),
-        TemplateField("ecard_photo_status", "团员证照片", "审核通过", "contains"),
+        TemplateField("real_name_status", "实名认证", "通过", "contains", True, "error"),
+        TemplateField("occupation", "职业", "", "notEmpty", True, "warning"),
     ])
 
 
 def default_report_template() -> CheckTemplate:
     return CheckTemplate("report", "报到情况", [
-        TemplateField("report_data_status", "报到资料状态", "审核通过", "contains"),
-        TemplateField("report_apply_at", "报到申请时间", "", "notEmpty"),
-        TemplateField("report_audit_at", "报到审核时间", "", "notEmpty"),
+        TemplateField("report_data_status", "报到资料状态", "审核通过", "contains", True, "error"),
     ])
 
 
@@ -257,22 +256,26 @@ class CheckPage(FluentPage):
         self._fill_results(results)
         self.export_btn.setEnabled(bool(results))
         cross_msg = cross.message if cross else "无名单对照"
+        n_err = sum(1 for r in results if r.is_error)
+        n_warn = len(results) - n_err
+        warn_msg = f"；另有 {n_warn} 条警告（不计入异常）" if n_warn else ""
         self.stat.setText(
-            f"{cross_msg}；异常 {len(results)} 条"
+            f"{cross_msg}；错误 {n_err} 条{warn_msg}"
             + (f"（另有 {len(diags)} 条解析诊断）" if diags else "")
         )
-        InfoBar.success("检查完成", f"异常 {len(results)} 条，{cross_msg}", duration=4000, parent=self)
+        InfoBar.success("检查完成", f"错误 {n_err} 条{warn_msg}，{cross_msg}", duration=4000, parent=self)
 
     def _fill_results(self, results):
         for i, r in enumerate(results):
             m = r.member
             point = "；".join(d.reason for d in r.diffs) or (r.basis if r.kind == "fees" else "")
-            row = [KIND_LABEL[r.kind], m.name, m.mobile, m.org_name or m.oid or "-", point, r.basis or "与模板不一致"]
+            level = "错误" if r.is_error else "警告"
+            row = [KIND_LABEL[r.kind], m.name, m.mobile, m.org_name or m.oid or "-", f"[{level}] {point}", r.basis or "与模板不一致"]
             for col, v in enumerate(row):
                 item = QTableWidgetItem(v)
                 item.setFlags(READONLY_FLAGS)
-                if col == 0:
-                    item.setForeground(QColor("#c62828"))
+                if col == 4:
+                    item.setForeground(QColor("#c62828" if r.is_error else "#ef6c00"))
                 self.table.setItem(i, col, item)
 
     def _export(self):

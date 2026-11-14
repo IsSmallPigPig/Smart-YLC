@@ -1,11 +1,11 @@
-"""主窗口：FluentWindow 侧边栏六页导航。"""
+"""主窗口：MSFluentWindow（macOS 风格窄侧边栏：图标+竖排文字，设置在底部）。"""
 
 from __future__ import annotations
 
 import sys
 
 from qfluentwidgets import FluentIcon as FIF
-from qfluentwidgets import FluentWindow, NavigationItemPosition
+from qfluentwidgets import MSFluentWindow, NavigationItemPosition
 
 from app.ui.check_page import CheckPage
 from app.ui.compress_page import CompressPage
@@ -36,7 +36,7 @@ if sys.platform == "darwin":
     StandardTitleBar.__init__ = _local_titlebar_font
 
 
-class MainWindow(FluentWindow):
+class MainWindow(MSFluentWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("智慧团建管理员辅助")
