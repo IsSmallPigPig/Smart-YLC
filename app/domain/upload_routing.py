@@ -76,3 +76,17 @@ def resolve_file_targets(
             continue
         targets.append(FileTarget(fn, name, mobile, cls, acc))
     return targets
+
+
+# ---------- 上传资格：未完成报到的团员，站点不接受志愿书上传 ----------
+
+# league_member.js auditStatus 语义：0/1/2/4/5/8 报到流程未走完，3/6/7 可传志愿书
+UNREPORTED_STATUSES = {"报到被撤回", "报到待审核", "报到被退回", "修改资料待审核", "修改资料被退回", "待省级管理员审核"}
+
+
+def upload_block_reason(report_status: str) -> str:
+    """团员报到资料状态 → 拦截原因；可上传返回空串。"""
+    s = (report_status or "").strip()
+    if s in UNREPORTED_STATUSES:
+        return f"该团员未完成报到（{s}），智慧团建暂不接受志愿书上传，需先在网页端完成报到"
+    return ""

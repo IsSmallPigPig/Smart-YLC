@@ -15,7 +15,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QThread, QTimer, Signal, Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QTableWidgetItem, QWidget
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QTableWidgetItem, QWidget, QMenu
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -37,6 +37,7 @@ from qfluentwidgets import (
 
 from app.ui.page import FluentPage, note_label
 from app.domain.naming import Roster
+from app.domain.org_rule import OrgRule, describe_code, parse_class_code
 from app.domain.transfer import is_graduated
 from app.services import store
 from app.services.api import SiteClient
@@ -176,6 +177,7 @@ class SettingsPage(FluentPage):
         self._web_worker: WebOpenWorker | None = None
         self._ws_known: set[str] = set()
         self.home_page = None  # 由 MainWindow 注入，头图设置后即时生效
+        self._filter_label = ""  # 当前团支部筛选（完整备注名，空 = 不筛选）
 
         lay = self.vBoxLayout
 
@@ -199,11 +201,14 @@ class SettingsPage(FluentPage):
         # 表格上方工具行：图标按钮（无文字）
         tools = QHBoxLayout()
         self.sel_all_btn = ToolButton(FIF.CHECKBOX)
-        self.sel_all_btn.setToolTip("全选 / 取消全选")
+        self.sel_all_btn.setToolTip("全选 / 取消全选（仅可见行）")
         self.sel_all_btn.clicked.connect(self._toggle_select_all)
         self.del_checked_btn = ToolButton(FIF.DELETE)
         self.del_checked_btn.setToolTip("删除勾选账号")
         self.del_checked_btn.clicked.connect(self._delete_checked)
+        self.filter_btn = ToolButton(FIF.FILTER)
+        self.filter_btn.setToolTip("按团支部筛选（树状：学部 → 年级 → 班级）")
+        self.filter_btn.clicked.connect(self._show_filter_menu)
         self.recheck_btn = ToolButton(FIF.SYNC)
         self.recheck_btn.setToolTip("全部测活")
         self.recheck_btn.clicked.connect(self.start_health_check)
@@ -212,8 +217,12 @@ class SettingsPage(FluentPage):
         self.web_btn.clicked.connect(self._open_web)
         tools.addWidget(self.sel_all_btn)
         tools.addWidget(self.del_checked_btn)
+        tools.addWidget(self.filter_btn)
         tools.addWidget(self.recheck_btn)
         tools.addWidget(self.web_btn)
+        self.filter_note = note_label("")
+        tools.addSpacing(8)
+        tools.addWidget(self.filter_note)
         tools.addStretch(1)
         lay.addLayout(tools)
 
@@ -297,6 +306,32 @@ class SettingsPage(FluentPage):
         row3.addWidget(self.roster_btn)
         ros_lay.addLayout(row3)
         lay.addWidget(ros)
+
+        # 团支部编号规则卡（备注预填 + 筛选树共用）
+        rule_card = CardWidget()
+        rule_lay = QVBoxLayout(rule_card)
+        rule_lay.setContentsMargins(20, 16, 20, 16)
+        rule_lay.addWidget(StrongBodyLabel("团支部编号规则"))
+        rule_lay.addWidget(note_label(
+            "编号 = 学部前缀（1 位）+ 入学年份后两位（2 位）+ 班号（2 位）；无前缀的 4 位编号归「无前缀学部」。"
+            "年级按当前学年自动推算（如 24 级今年是高三/初三）。用于导入账号时预填备注和账号筛选"))
+        rule_lay.addSpacing(4)
+        row_rule = QHBoxLayout()
+        row_rule.addWidget(BodyLabel("学部前缀"))
+        self.rule_prefix_edit = LineEdit()
+        self.rule_prefix_edit.setPlaceholderText("1=普通高中，2=国际高中")
+        row_rule.addWidget(self.rule_prefix_edit, 1)
+        row_rule.addWidget(BodyLabel("无前缀学部"))
+        self.rule_noprefix_edit = LineEdit()
+        self.rule_noprefix_edit.setPlaceholderText("初中部")
+        self.rule_noprefix_edit.setFixedWidth(120)
+        row_rule.addWidget(self.rule_noprefix_edit)
+        rule_lay.addLayout(row_rule)
+        self.rule_preview = note_label("")
+        rule_lay.addWidget(self.rule_preview)
+        self.rule_prefix_edit.editingFinished.connect(self._on_rule_changed)
+        self.rule_noprefix_edit.editingFinished.connect(self._on_rule_changed)
+        lay.addWidget(rule_card)
 
         # 文档检查配置（命名 + 总页数）
         doc = CardWidget()
@@ -432,6 +467,76 @@ class SettingsPage(FluentPage):
         pages = cfg.get("expectedPages", "")
         self.expected_pages_edit.setText(str(pages) if pages else "")
 
+        # 团支部编号规则
+        r = cfg.get("orgRule") or {}
+        prefixes = r.get("prefixes") or {"1": "普通高中", "2": "国际高中"}
+        self.rule_prefix_edit.setText(OrgRule.prefix_text(prefixes))
+        self.rule_noprefix_edit.setText(r.get("noPrefix") or "初中部")
+        self._update_rule_preview()
+
+    # ---------- 团支部编号规则 ----------
+
+    def org_rule(self) -> OrgRule:
+        prefixes = OrgRule.parse_prefix_text(self.rule_prefix_edit.text())
+        return OrgRule(
+            prefixes=prefixes or {"1": "普通高中", "2": "国际高中"},
+            no_prefix=self.rule_noprefix_edit.text().strip() or "初中部",
+        )
+
+    def _update_rule_preview(self):
+        r = self.org_rule()
+        a, b = describe_code("12407", r), describe_code("2407", r)
+        self.rule_preview.setText(f"预览：12407 → {a or '无法解析'}；2407 → {b or '无法解析'}")
+
+    def _on_rule_changed(self):
+        self._save_config()
+        self._update_rule_preview()
+        if self._filter_label:
+            self._clear_filter()  # 规则变了，旧筛选可能失效
+
+    # ---------- 账号筛选（树状：学部 → 年级 → 班级） ----------
+
+    def _show_filter_menu(self):
+        rule = self.org_rule()
+        tree: dict[str, dict[str, dict[str, str]]] = {}
+        for a in self.accounts:
+            info = parse_class_code(a["userName"], rule)
+            if info:
+                tree.setdefault(info.dept, {}).setdefault(info.grade, {})[str(info.class_no)] = info.label
+        menu = QMenu(self)
+        menu.addAction("显示全部").triggered.connect(self._clear_filter)
+        if not tree:
+            menu.addAction("（没有能按规则解析的账号）").setEnabled(False)
+        for dept in sorted(tree):
+            sub = menu.addMenu(dept)
+            for grade in sorted(tree[dept]):
+                sub2 = sub.addMenu(grade)
+                for cls in sorted(tree[dept][grade], key=int):
+                    label = tree[dept][grade][cls]
+                    sub2.addAction(f"{cls} 班").triggered.connect(
+                        lambda checked=False, lb=label: self._apply_filter(lb))
+        menu.exec(self.filter_btn.mapToGlobal(self.filter_btn.rect().bottomLeft()))
+
+    def _apply_filter(self, label: str):
+        self._filter_label = label
+        self._apply_row_visibility()
+
+    def _clear_filter(self):
+        self._filter_label = ""
+        self._apply_row_visibility()
+
+    def _apply_row_visibility(self):
+        n = 0
+        for i, acc in enumerate(self.accounts):
+            info = parse_class_code(acc["userName"], self.org_rule())
+            match = (not self._filter_label) or (info.label == self._filter_label)
+            self.table.setRowHidden(i, not match)
+            n += match
+        if self._filter_label:
+            self.filter_note.setText(f"筛选：{self._filter_label}（{n} 个账号）")
+        else:
+            self.filter_note.setText("")
+
     def expected_pages(self) -> int:
         """文档检查的预期页数；未填或非法时返回 0（不核对页数）。"""
         t = self.expected_pages_edit.text().strip()
@@ -449,6 +554,7 @@ class SettingsPage(FluentPage):
             "workspaceDir": self.ws_edit.text().strip(),
             "notifyTime": self.notify_time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME,
             "expectedPages": self.expected_pages(),
+            "orgRule": {"prefixes": self.org_rule().prefixes, "noPrefix": self.org_rule().no_prefix},
         })
         store.save(cfg)
         self._client = None
@@ -539,7 +645,8 @@ class SettingsPage(FluentPage):
             if parse_graduate_year(year) is None:
                 InfoBar.warning("届别无效", "届别请填毕业年份（如 2023），或留空", duration=3000, parent=self)
                 return
-        result = self._upsert_account(user, pwd, self.new_remark.text().strip())
+        remark = self.new_remark.text().strip() or describe_code(user, self.org_rule())
+        result = self._upsert_account(user, pwd, remark)
         if result != "kept":
             acc = next(a for a in self.accounts if a["userName"] == user)
             acc["graduateYear"] = year
@@ -560,17 +667,28 @@ class SettingsPage(FluentPage):
             return
         rows = self._read_account_file(path)
         if not rows:
-            InfoBar.warning("没有读到账号", "每行应为：账号 密码（备注可选）；xlsx 需有「账号」「密码」列", duration=4000, parent=self)
+            InfoBar.warning("没有读到账号", "每行应为：备注（可空） 账号 密码；xlsx 需有「账号」「密码」列", duration=4000, parent=self)
             return
+        rule = self.org_rule()
         stat = {"added": 0, "dedup": 0, "overwritten": 0, "kept": 0}
-        for user, pwd, remark in rows:
-            stat[self._upsert_account(user, pwd, remark)] += 1
+        prefilled = 0
+        for account, pwd, remark in rows:
+            if not remark:
+                remark = describe_code(account, rule)  # 备注留空 → 按编号规则预填
+                prefilled += 1 if remark else 0
+            stat[self._upsert_account(account, pwd, remark)] += 1
         self._after_accounts_changed()
         msg = f"新增 {stat['added']}，去重跳过 {stat['dedup']}，覆盖 {stat['overwritten']}，冲突保留 {stat['kept']}"
+        if prefilled:
+            msg += f"；按编号规则预填备注 {prefilled} 个"
         InfoBar.success("导入完成", msg, duration=5000, parent=self)
 
     def _read_account_file(self, path: str) -> list[tuple[str, str, str]]:
+        """读账号文件 → (账号, 密码, 备注)。新格式：备注第一列、账号第二列、密码第三列；
+        旧格式（账号、密码、备注）兼容识别；备注留空的行按编号规则在导入时预填。"""
         import re as _re
+
+        from app.domain.org_rule import parse_account_row
 
         rows: list[tuple[str, str, str]] = []
         if path.lower().endswith((".xlsx", ".xlsm")):
@@ -583,27 +701,31 @@ class SettingsPage(FluentPage):
             header = [str(c or "").strip() for c in (data[0] if data else [])]
             has_header = any(h in ("账号", "用户名", "userName", "account") for h in header)
             if has_header:
-                u = next((i for i, h in enumerate(header) if h in ("账号", "用户名", "userName", "account")), 0)
-                p = next((i for i, h in enumerate(header) if h in ("密码", "password")), 1)
-                r = next((i for i, h in enumerate(header) if h in ("备注", "说明", "remark")), None)
-                data = data[1:]
+                u = next((i for i, h in enumerate(header) if h in ("账号", "用户名", "userName", "account")), 1)
+                p = next((i for i, h in enumerate(header) if h in ("密码", "password")), 2)
+                r = next((i for i, h in enumerate(header) if h in ("备注", "说明", "remark")), 0)
+                for raw in data[1:]:
+                    if not raw:
+                        continue
+
+                    def cell(i, raw=raw):
+                        return str(raw[i]).strip() if i is not None and i < len(raw) and raw[i] is not None else ""
+
+                    if cell(u) and cell(p):
+                        rows.append((cell(u), cell(p), cell(r)))
             else:
-                u, p, r = 0, 1, 2
-            for raw in data:
-                if not raw:
-                    continue
-
-                def cell(i, raw=raw):
-                    return str(raw[i]).strip() if i is not None and i < len(raw) and raw[i] is not None else ""
-
-                if cell(u) and cell(p):
-                    rows.append((cell(u), cell(p), cell(r)))
+                for raw in data:
+                    if not raw:
+                        continue
+                    parsed = parse_account_row([c for c in raw])
+                    if parsed:
+                        rows.append(parsed)
         else:
             with open(path, encoding="utf-8", errors="replace") as f:
                 for line in f:
-                    parts = _re.split(r"[,;\s]+", line.strip())
-                    if len(parts) >= 2 and parts[0] and parts[1]:
-                        rows.append((parts[0], parts[1], parts[2] if len(parts) > 2 else ""))
+                    parsed = parse_account_row(_re.split(r"[,;\s]+", line.strip()))
+                    if parsed:
+                        rows.append(parsed)
         return rows
 
     # ---------- 账号删除（行内按钮 + 勾选批量） ----------
@@ -632,8 +754,8 @@ class SettingsPage(FluentPage):
         InfoBar.success("已删除", f"移除 {len(users)} 个账号", duration=3000, parent=self)
 
     def _toggle_select_all(self):
-        """有未勾选的就全选，否则全部取消。"""
-        rows = range(self.table.rowCount())
+        """有未勾选的就全选，否则全部取消（只动可见行，被筛选隐藏的行不碰）。"""
+        rows = [i for i in range(self.table.rowCount()) if not self.table.isRowHidden(i)]
         any_unchecked = any(
             self.table.item(i, 0) and self.table.item(i, 0).checkState() != Qt.CheckState.Checked
             for i in rows
@@ -645,7 +767,8 @@ class SettingsPage(FluentPage):
 
     def _delete_checked(self):
         rows = [i for i in range(self.table.rowCount())
-                if self.table.item(i, 0) and self.table.item(i, 0).checkState() == Qt.CheckState.Checked]
+                if not self.table.isRowHidden(i)
+                and self.table.item(i, 0) and self.table.item(i, 0).checkState() == Qt.CheckState.Checked]
         self._remove_accounts(rows)
 
     # ---------- 表格 / 当前账号 ----------
@@ -684,6 +807,7 @@ class SettingsPage(FluentPage):
             self.table.setItem(i, 7, QTableWidgetItem(checked.replace("T", " ")[:19] if checked else "—"))
             self.table.item(i, 7).setFlags(self.READONLY_FLAGS)
         self.table.blockSignals(False)
+        self._apply_row_visibility()  # 应用当前团支部筛选
         # 当前使用下拉
         self.active_combo.blockSignals(True)
         self.active_combo.clear()
@@ -780,7 +904,8 @@ class SettingsPage(FluentPage):
         if self._web_worker and self._web_worker.isRunning():
             return
         checked = [i for i in range(self.table.rowCount())
-                   if self.table.item(i, 0) and self.table.item(i, 0).checkState() == Qt.CheckState.Checked]
+                   if not self.table.isRowHidden(i)
+                   and self.table.item(i, 0) and self.table.item(i, 0).checkState() == Qt.CheckState.Checked]
         idx = checked[0] if checked else next(
             (i for i, a in enumerate(self.accounts) if a["userName"] == self.active_user), 0)
         if not (0 <= idx < len(self.accounts)):
