@@ -62,11 +62,12 @@ class MainWindow(MSFluentWindow):
         self.org_page = OrgPage(self)
 
         self.addSubInterface(self.home_page, FIF.HOME, "工具首页")
-        self.addSubInterface(self.naming_page, FIF.EDIT, "命名检查")
-        self.addSubInterface(self.compress_page, FIF.ZOOM, "批量压缩")
         self.addSubInterface(self.upload_page, FIF.CLOUD, "批量上传")
         self.addSubInterface(self.check_page, FIF.CERTIFICATE, "批量检查")
         self.addSubInterface(self.org_page, FIF.PIE_SINGLE, "组织状况")
+        # 文档类工具与配置放底部，常用网络功能留在上方
+        self.addSubInterface(self.naming_page, FIF.EDIT, "文档检查", NavigationItemPosition.BOTTOM)
+        self.addSubInterface(self.compress_page, FIF.ZOOM, "批量压缩", NavigationItemPosition.BOTTOM)
         self.addSubInterface(
             self.settings_page, FIF.SETTING, "系统配置", NavigationItemPosition.BOTTOM
         )

@@ -98,7 +98,7 @@ class HomePage(FluentPage):
         super().__init__('page-home', parent)
         self.window_ref = window
         lay = self.vBoxLayout
-        lay.setSpacing(10)
+        lay.setSpacing(8)
 
         # 头图横幅（顶部，渐变过渡到背景）
         self.banner = Banner()
@@ -107,12 +107,11 @@ class HomePage(FluentPage):
         self.banner.clear_btn.clicked.connect(self._clear_header)
         lay.addWidget(self.banner)
 
-        # 欢迎大字块：弹性留白撑在横幅与按钮之间，左对齐
+        # 欢迎大字块：弹性留白撑在横幅与按钮之间，左对齐；两行文字紧贴，行间不留额外空隙
         lay.addStretch(1)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
         lay.addWidget(self.hello_label)
-        lay.addSpacing(6)
         lay.addWidget(self.title_label)
         lay.addStretch(1)
 
@@ -130,7 +129,7 @@ class HomePage(FluentPage):
         row.addWidget(org_btn)
         row.addStretch(1)
         lay.addLayout(row)
-        lay.addSpacing(20)
+        lay.addSpacing(10)
 
         lay.addWidget(note_label("上传后需在智慧团建网页端点击「审核」完成认证"))
 
