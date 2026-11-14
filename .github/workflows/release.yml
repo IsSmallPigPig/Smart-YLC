@@ -147,16 +147,20 @@ jobs:
             --add-data "app/assets;assets" `
             main.py
 
-      - name: 改成中文应用名并标明架构
+      - name: 改成中文应用名并打包
         run: |
-          $target = "dist/${env:APP_DISPLAY_NAME}-Windows-x64.exe"
+          $target = "dist/${env:APP_DISPLAY_NAME}.exe"
           Move-Item "dist/${env:APP_NAME}.exe" $target
           Get-Item $target | Select-Object Name, Length
+          # 资源名不能带中文（GitHub 会把中文剥掉，只剩 "-Windows-x64.exe"），
+          # 所以对外用 ASCII 的 zip，解压出来的程序仍叫「智慧团委.exe」
+          python -c "import os, zipfile; d='dist'; n=os.environ['APP_DISPLAY_NAME']; z=zipfile.ZipFile(os.path.join(d, os.environ['APP_NAME']+'-Windows-x64.zip'), 'w', zipfile.ZIP_DEFLATED); z.write(os.path.join(d, n+'.exe'), arcname=n+'.exe'); z.close()"
+          Get-Item "dist/${env:APP_NAME}-Windows-x64.zip" | Select-Object Name, Length
 
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ env.APP_NAME }}-Windows
-          path: dist/${{ env.APP_DISPLAY_NAME }}-Windows-x64.exe
+          path: dist/${{ env.APP_NAME }}-Windows-x64.zip
           if-no-files-found: error
 
   release:
@@ -174,8 +178,13 @@ jobs:
           generate_release_notes: true
           body: |
             ## 下载
-            - **macOS（Apple Silicon / M 系列）**：`智慧团委-macOS-arm64.dmg`
-            - **Windows（64 位）**：`智慧团委-Windows-x64.exe`（单文件版，双击运行）
+            - **macOS（Apple Silicon / M 系列）**：`SmartYouth-macOS-arm64.dmg`
+              （挂载后是「智慧团委.app」）
+            - **Windows（64 位）**：`SmartYouth-Windows-x64.zip`
+              （解压后运行「智慧团委.exe」）
+
+            GitHub 的下载文件名不支持非 ASCII 字符，所以安装包用英文名，
+            安装后的应用名是「智慧团委」。
 
             仅支持 Apple Silicon（M 系列）。Intel Mac 不再提供安装包。
                         Windows 不提供 32 位版本：PySide6 6.x 只发布 x64 与 arm64 轮子，
@@ -190,5 +199,5 @@ jobs:
 
             完整变更列表见下方自动生成的更新日志（由 GitHub bot 生成）。
           files: |
-            artifacts/SmartYouth-macOS-arm64/智慧团委-macOS-arm64.dmg
-            artifacts/SmartYouth-Windows/智慧团委-Windows-x64.exe
+            artifacts/SmartYouth-macOS-arm64/SmartYouth-macOS-arm64.dmg
+            artifacts/SmartYouth-Windows/SmartYouth-Windows-x64.zip
