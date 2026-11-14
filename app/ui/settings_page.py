@@ -15,7 +15,15 @@ from datetime import datetime
 
 from PySide6.QtCore import QThread, QTimer, Signal, Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QTableWidgetItem, QTreeWidgetItem, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QFileDialog,
+    QHBoxLayout,
+    QVBoxLayout,
+    QTableWidgetItem,
+    QTreeWidgetItem,
+    QWidget,
+)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -241,6 +249,8 @@ class SettingsPage(FluentPage):
             header.setSectionResizeMode(col, header.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(7, header.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._on_item_changed)
+        # 编辑器关闭时补刷被推迟的表格刷新（编辑期间测活结果回来不能立刻重建）
+        self.table.itemDelegate().closeEditor.connect(self._on_editor_closed)
 
         a.addWidget(sub_title("添加 / 导入账号"))
         a.addWidget(note_label("同账号同密码自动去重；同名账号密码不同时会询问如何处理"))
@@ -307,6 +317,20 @@ class SettingsPage(FluentPage):
         row_tpl.addWidget(self.template_btn)
         row_tpl.addStretch(1)
         r.addLayout(row_tpl)
+        # 已导入名单列表：一行一个学期，便于管理多个表格
+        self.roster_table = TableWidget()
+        self.roster_table.setColumnCount(3)
+        self.roster_table.setHorizontalHeaderLabels(["学期", "人数", "名单文件"])
+        self.roster_table.setEditTriggers(self.roster_table.EditTrigger.NoEditTriggers)
+        self.roster_table.setMinimumHeight(120)
+        r.addWidget(self.roster_table)
+        row_rdel = QHBoxLayout()
+        self.roster_del_btn = PushButton(FIF.DELETE, "删除所选学期名单")
+        self.roster_del_btn.setToolTip("从配置中移除该学期名单（不删除磁盘上的 xlsx 文件）")
+        self.roster_del_btn.clicked.connect(self._delete_selected_roster)
+        row_rdel.addWidget(self.roster_del_btn)
+        row_rdel.addStretch(1)
+        r.addLayout(row_rdel)
         r.addWidget(sub_title("团支书名单"))
         r.addWidget(note_label("xlsx 列：支部（编号或名称） / 团支书（姓名） / 手机号码（可选）；展示在「组织管理」的支部信息里"))
         row_sec = QHBoxLayout()
@@ -641,12 +665,49 @@ class SettingsPage(FluentPage):
         self._client = None
 
     def _refresh_roster(self):
-        """合并各学期名单为总表（供检查/上传使用）。"""
+        """合并各学期名单为总表（供检查/上传使用），刷新名单管理列表。"""
         merged = Roster("combined")
         for sem in sorted(self.rosters):
             merged.rows.extend(self.rosters[sem].rows)
         self.roster = merged if merged.rows else None
+        self._refresh_roster_table()
         self.roster_changed.emit(self.roster)
+
+    def _refresh_roster_table(self):
+        """名单列表：一行一个学期（含空学期），便于管理多个表格。"""
+        self.roster_table.blockSignals(True)
+        self.roster_table.setRowCount(len(self.rosters))
+        for i, sem in enumerate(sorted(self.rosters)):
+            path = self._roster_paths.get(sem, "")
+            for col, text in (
+                (0, sem),
+                (1, str(len(self.rosters[sem].rows))),
+                (2, path or "（未导入文件）"),
+            ):
+                self.roster_table.setItem(i, col, QTableWidgetItem(text))
+                self.roster_table.item(i, col).setFlags(
+                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        self.roster_table.blockSignals(False)
+
+    def _delete_selected_roster(self):
+        row = self.roster_table.currentRow()
+        if row < 0 or row >= self.roster_table.rowCount():
+            InfoBar.warning("未选中名单", "先在名单列表中点选一行", duration=3000, parent=self)
+            return
+        sem = self.roster_table.item(row, 0).text()
+        n = len(self.rosters[sem].rows)
+        if not dialogs.confirm(self, "删除学期名单",
+                               f"删除 {sem} 的名单（{n} 人）？磁盘上的 xlsx 文件不会被删除。"):
+            return
+        self.rosters.pop(sem, None)
+        self._roster_paths.pop(sem, None)
+        idx = self.semester_combo.findText(sem)
+        if idx >= 0:
+            self.semester_combo.removeItem(idx)
+        self.roster_edit.setText("")
+        self._refresh_roster()
+        self._save_config()
+        InfoBar.success("已删除", f"{sem} 的名单已从配置移除", duration=3000, parent=self)
 
     # ---------- 自启动 / 每日通知 ----------
 
@@ -911,6 +972,12 @@ class SettingsPage(FluentPage):
     EDITABLE_COLS = {1: "userName", 2: "password", 3: "remark", 4: "graduateYear"}
 
     def _refresh_table(self):
+        if self.table.state() == QAbstractItemView.State.EditingState:
+            # 编辑器开着时重建表格会销毁编辑中的 item，视图进入坏状态卡死
+            # （编辑密码触发测活 → 结果回来时往往还在编辑）。推迟到编辑结束。
+            self._table_refresh_pending = True
+            return
+        self._table_refresh_pending = False
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.accounts))
         for i, acc in enumerate(self.accounts):
@@ -1002,6 +1069,10 @@ class SettingsPage(FluentPage):
             self._refresh_combo_only()
         if key in ("userName", "password"):
             self.start_health_check()
+
+    def _on_editor_closed(self, editor, hint):
+        if getattr(self, "_table_refresh_pending", False):
+            QTimer.singleShot(0, self._refresh_table)
 
     def _refresh_combo_only(self):
         self.active_combo.blockSignals(True)
