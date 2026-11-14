@@ -109,6 +109,19 @@ class ProgressDonut(QWidget):
         self._sub = "已上传" if total else "暂无数据"
         self.update()
 
+    def set_value_animated(self, uploaded: int, total: int, duration: int = 520):
+        """页面打开时圆环从零转起；文字直接到位，弧长走补间。"""
+        from app.ui.anim import value_animation
+
+        self.set_value(uploaded, total)
+        target = self._ratio
+
+        def _step(v):
+            self._ratio = target * float(v)
+            self.update()
+
+        value_animation(self, 0.0, 1.0, _step, duration=duration)
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)

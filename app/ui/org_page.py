@@ -34,6 +34,8 @@ from app.domain.account_health import excluded_note, split_accounts
 from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services.api import SiteClient
 from app.ui.charts import BarRowWidget, ProgressDonut
+from app.ui import palette as P
+from app.ui.widgets import PillLabel
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.page import (CallbackWorker, FluentPage, PageHeader, note_label,
                          set_tip,
@@ -49,8 +51,8 @@ STATUS_LABEL = {
     "empty": "未配置",
 }
 
-KIND_COLOR = {"identity": "#ef6c00", "report": "#c62828", "archive": "#00838f", "fees": "#8e24aa"}
-TRANSFER_COLOR = "#1565c0"
+KIND_COLOR = P.KIND
+TRANSFER_COLOR = P.TRANSFER
 
 
 class OrgWorker(QThread):
@@ -206,6 +208,15 @@ class OrgPage(FluentPage):
             bar.set_value(self._by_kind.get(kind, 0), self._total)
         self.transfer_bar.set_value(self._transfer_applied, self._total)
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        # 打开页面时图表做一次入场动画：条形与圆环从零长到当前值（与支部详情一致）
+        max_n = max(self._total, 1)
+        for kind, bar in self.bars.items():
+            bar.set_value_animated(self._by_kind.get(kind, 0), max_n)
+        self.transfer_bar.set_value_animated(self._transfer_applied, max_n)
+        self.donut.set_value_animated(self._uploaded, self._total)
+
     def _start(self):
         usable, excluded = split_accounts(self.window_ref.settings_page.accounts)
         accounts = usable
@@ -255,14 +266,30 @@ class OrgPage(FluentPage):
         """从成员缓存（memberCache）离线重算三项统计，无网络请求。
 
         成员同步拿到新数据后由 30 秒快刷调用；转接统计保留最近一次在线结果，
-        现有展示直接被新数据整体替换（缓存为空则不动）。"""
+        现有展示直接被新数据整体替换（缓存为空则不动）。检查逐人跑，量大时
+        放到后台线程，不卡界面动画。"""
         from app.services import store
 
         cache = store.load().get("memberCache") or {}
         if not cache:
             return
+        from app.ui.page import CallbackWorker
+
+        self._offline_token = getattr(self, "_offline_token", 0) + 1
+        token = self._offline_token
+
+        worker = CallbackWorker(self._offline_snapshot, self)
+        worker.ok.connect(lambda data: token == self._offline_token
+                          and self._apply_offline(data))
+        self._offline_workers = getattr(self, "_offline_workers", [])
+        self._offline_workers.append(worker)
+        worker.start()
+
+    def _offline_snapshot(self):
+        """后台线程：整份成员缓存 → 汇总统计 + 异常名单（含落盘缓存）。"""
         from app.domain.org_manage import record_from_dict
 
+        cache = store.load().get("memberCache") or {}
         total = uploaded = 0
         by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
         error_rows: list = []
@@ -285,6 +312,10 @@ class OrgPage(FluentPage):
             # 离线重算结果同样落 orgStatsCache（transfer 传 None = 保留上次在线结果）
             self._persist_account(user, branch, s.total, s.uploaded,
                                   dict(s.by_kind), None, rows)
+        return total, uploaded, by_kind, error_rows
+
+    def _apply_offline(self, data):
+        total, uploaded, by_kind, error_rows = data
         self._total, self._uploaded = total, uploaded
         self._by_kind = by_kind
         self._error_rows = error_rows
@@ -441,11 +472,8 @@ class OrgPage(FluentPage):
         head.addStretch(1)
         if kinds:
             for k in kinds:
-                chip = BodyLabel(KIND_LABEL[k])
-                # 小底色圆角标签承载白字，不改字体颜色本身
-                chip.setStyleSheet(
-                    f"background-color: {KIND_COLOR[k]}; color: white;"
-                    "border-radius: 4px; padding: 1px 8px;")
+                # 与上传 / 消息页同款标签：纯色底白字、4px 圆角，跨页一致
+                chip = PillLabel(KIND_LABEL[k], k)
                 head.addWidget(chip)
         head.addSpacing(12)
         branch_lbl = CaptionLabel(branch or "")
@@ -456,7 +484,7 @@ class OrgPage(FluentPage):
         body = BodyLabel(problem or "")
         body.setWordWrap(True)
         if kinds is None:  # 账号级失败
-            body.setTextColor(QColor("#c62828"), QColor("#ef5350"))
+            body.setTextColor(QColor(P.DANGER), QColor("#f87171"))
         v.addWidget(body)
 
         self.error_lay.addWidget(card)
@@ -478,8 +506,12 @@ class OrgPage(FluentPage):
             return
         from PySide6.QtWidgets import QFileDialog
 
+        from app.services.export_data import default_name
+
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出异常团员名单", "异常团员名单.xlsx", "Excel (*.xlsx)")
+            self, "导出异常团员名单",
+            default_name("异常团员名单", ".xlsx", f"{len(self._error_rows)}人"),
+            "Excel (*.xlsx)")
         if not path:
             return
         from app.services.excel import save_error_rows

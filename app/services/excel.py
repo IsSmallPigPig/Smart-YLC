@@ -122,6 +122,22 @@ def import_secretaries(path: str) -> list[dict]:
     return out
 
 
+def save_secretary_template(path: str) -> int:
+    """生成团支书名单模板 xlsx（支部 + 团支书 两列），返回写入的示例行数。"""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "团支书名单"
+    ws.append(["支部（班级）", "团支书姓名"])
+    ws.append(["12407", "王五"])
+    ws.append(["12408", "赵六"])
+    for col, width in zip("AB", (30, 14)):
+        ws.column_dimensions[col].width = width
+    wb.save(path)
+    return 2
+
+
 def save_account_template(path: str) -> int:
     """生成账号导入模板 xlsx（列：账号 / 密码 / 备注 / 届别，后两列可留空），返回示例行数。"""
     from openpyxl import Workbook

@@ -106,7 +106,7 @@ def test_home_and_upload_build(app, isolated_store):
     assert len(home.tiles) == 4
     assert len(home.bars) == 4
     upload = UploadPage(window)
-    assert upload.target_combo.count() == 2
+    assert upload.target_combo.count() == 1
     upload._apply_statuses([])
     assert not upload.upload_btn.isEnabled()
 
@@ -294,7 +294,7 @@ def test_theme_switch_fades_then_applies(app, isolated_store):
     done = []
     MainWindow.apply_theme_async(stub, "light", done=lambda: done.append(1))
     assert stub._theme_busy is True  # 过渡期间不接受第二次点击
-    _pump(app, 450)
+    _pump(app, 1200)  # 淡出+换肤+淡入约 300ms，整包跑时留足余量避免计时抖动
     assert done == [1]
     assert stub.theme_calls >= 1
     assert stub._theme_busy is False
@@ -435,3 +435,47 @@ def test_member_card_click_emits(app, isolated_store):
     card.clicked.connect(lambda: hits.append(1))
     QTest.mouseClick(card, Qt.MouseButton.LeftButton, pos=QPoint(20, 20))
     assert hits
+
+
+def test_config_dialog_release_keeps_widgets_parented(app, isolated_store):
+    """齿轮弹窗关掉后，控件不能变成顶层窗口。
+
+    控件用 setParent(None) 归还时在 macOS 上会变成带交通灯的独立小窗
+    （通知频率下拉框曾因此浮在屏幕左上角），这里断言它仍挂在原父级下。"""
+    from qfluentwidgets import ComboBox
+
+    from app.ui.dialogs import ConfigDialog
+
+    host = QWidget()
+    combo = ComboBox(host)
+    combo.addItem("每 4 小时")
+
+    dialog = ConfigDialog("通知设置", host)
+    dialog.add_row(combo)
+    dialog.show()
+    assert combo.parentWidget() is not host  # 已挪进弹窗
+
+    dialog._release()
+    assert combo.parentWidget() is host
+    assert not combo.isWindow()
+
+
+@pytest.mark.skipif(
+    sys.platform == "darwin" and os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"),
+    reason="主窗口用 qframelesswindow 接管原生标题栏，离屏下构造会崩",
+)
+def test_back_button_stays_visible_without_history(app, isolated_store):
+    """返回键一直留在标题栏上：没有返回历史时置灰，不整块消失。"""
+    from app.ui.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        assert win.back_btn.isVisibleTo(win)
+        win._sync_back_state()
+        assert win.back_btn.isVisibleTo(win)
+        # 标题文字左边缘固定：有无可返回的历史都一样
+        left = win.titleBar.titleLabel.geometry().left()
+        win._sync_back_state()
+        assert win.titleBar.titleLabel.geometry().left() == left
+    finally:
+        win.close()

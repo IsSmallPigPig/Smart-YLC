@@ -8,7 +8,7 @@ import sys
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import (
     MSFluentWindow,
@@ -129,8 +129,12 @@ class MainWindow(MSFluentWindow):
         # 启动恢复窗口背景透明材质（兼容旧 translucent 布尔配置）。混合层要等
         # 窗口 show 之后 contentView 尺寸稳定才挂，实际动作在 showEvent 里。
         cfg = store.load()
-        self._material = cfg.get("translucentMaterial") or ("acrylic" if cfg.get("translucent") else "none")
-        self._translucent = self._material != "none" and sys.platform == "darwin"
+        from app.services.materials import normalize, win11_mica_available
+
+        self._material = normalize(cfg.get("translucentMaterial")
+                                   or ("acrylic" if cfg.get("translucent") else "none"))
+        self._translucent = self._material != "none" and (
+            sys.platform == "darwin" or win11_mica_available())
         self._apply_window_background()
 
         # 明暗模式切换（手动或跟随系统变化）：重绘窗口底色 + 重建带烘焙颜色的页面
@@ -215,7 +219,7 @@ class MainWindow(MSFluentWindow):
 
         def _after_messages():
             self.messages_page._load_cache()
-            self.home_page.refresh_stats()
+            self.home_page.refresh_stats(show_loading=False)
             if fast:
                 if synced_any:
                     self.org_page.refresh_offline()  # 成员缓存有更新，离线重算组织状况
@@ -231,7 +235,7 @@ class MainWindow(MSFluentWindow):
         def _finish():
             self._refreshing = False
             self._refresh_worker = None
-            self.home_page.refresh_stats()
+            self.home_page.refresh_stats(show_loading=False)
             if not self._refresh_silent:
                 InfoBar.success("刷新完成", "成员、站内信、组织状况均已更新", duration=4000, parent=self)
 
@@ -319,32 +323,45 @@ class MainWindow(MSFluentWindow):
     def _setup_back_button(self):
         from app.ui.page import set_tip
 
-        self.back_btn = TransparentToolButton(FIF.RETURN, self.titleBar)
-        set_tip(self.back_btn, "返回上一页")
-        self.back_btn.setFixedSize(34, 34)
-
         tb = self.titleBar.hBoxLayout
-        # 去掉默认的左间距与应用图标占位，让按钮按对角线定位
+        # 去掉默认的左间距与应用图标占位：标题栏左边要留给侧边栏那一列
         tb.removeWidget(self.titleBar.iconLabel)
         self.titleBar.iconLabel.hide()
-        # 标题栏放带背景的应用图标，和窗口图标同一张
+
+        # 返回键放在固定宽度的槽位里：没有返回历史时只隐藏按钮、槽位仍在，
+        # 标题文字的左边缘因此不会随页面跳转左右跳。
+        self.back_slot = QWidget(self.titleBar)
+        self.back_slot.setFixedSize(30, 30)
+        # 空槽位本身不接收鼠标事件，否则会挡住下面的拖拽
+        self.back_slot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.back_btn = TransparentToolButton(FIF.RETURN, self.back_slot)
+        set_tip(self.back_btn, "返回上一页")
+        self.back_btn.setFixedSize(30, 30)
+        self.back_btn.move(0, 0)
+
+        # 标题栏放应用图标：带白底板的小方块，深浅主题下都有清晰边界
         from PySide6.QtWidgets import QLabel
 
         from app.ui.brand import app_pixmap
 
         self.logo = QLabel(self.titleBar)
-        self.logo.setPixmap(app_pixmap(22))
-        self.logo.setFixedSize(22, 22)
+        self.logo.setPixmap(app_pixmap(20))
+        self.logo.setFixedSize(20, 20)
         self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         set_tip(self.logo, "智慧团委 Smart-YLC")
-        tb.insertWidget(tb.indexOf(self.titleBar.titleLabel) + 1, self.logo, 0,
+
+        # 顺序：返回键槽位 → 应用图标 → 标题文字。
+        # 三者紧凑排在标题栏最左，间距一致，标题文字的左边缘因此固定。
+        while tb.count() and tb.itemAt(0).spacerItem():
+            tb.takeAt(0)
+        tb.insertWidget(0, self.back_slot, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        tb.insertWidget(tb.indexOf(self.titleBar.titleLabel), self.logo, 0,
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # 图标与标题文字之间留一格，两者的关系和参考图一致
+        tb.insertSpacing(tb.indexOf(self.titleBar.titleLabel), 8)
         # 标题文字按同一基线居中，否则图标与文字看着不在一行
         self.titleBar.titleLabel.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        while tb.count() and tb.itemAt(0).spacerItem():
-            tb.takeAt(0)
-        tb.insertWidget(0, self.back_btn, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.back_btn.clicked.connect(self._on_back_clicked)
         QTimer.singleShot(0, self._place_back_button)
@@ -376,8 +393,9 @@ class MainWindow(MSFluentWindow):
                   and self.org_manage_page.isVisible())
         detail = on_org and self.org_manage_page.in_detail()
         usable = bool(qrouter.history) or detail
+        # 返回键一直留在标题栏上：没有可返回的历史时置灰，而不是整块消失，
+        # 槽位宽度也不变，标题文字的左边缘因此始终固定。
         self.back_btn.setEnabled(usable)
-        self.back_btn.setVisible(usable)
 
     # ---------- 标题栏搜索 ----------
 
@@ -445,13 +463,13 @@ class MainWindow(MSFluentWindow):
         # 撤掉旧占位（重复定位时先清理）
         while tb.count() and tb.itemAt(0).spacerItem():
             tb.takeAt(0)
-        idx = tb.indexOf(self.back_btn)
+        idx = tb.indexOf(self.back_slot)
         if idx >= 0:
             tb.takeAt(idx)
-        nav_w = self.navigationInterface.width() or 66
-        pad = max(8, int(nav_w / 2 - self.back_btn.width() / 2))
-        tb.insertSpacing(0, pad)
-        tb.insertWidget(1, self.back_btn, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # 参考 Fluent Gallery：返回键、图标、标题文字紧凑排在标题栏最左，
+        # 整组左边缘固定在 12px，不随返回历史出现与否移动。
+        tb.insertSpacing(0, 12)
+        tb.insertWidget(1, self.back_slot, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.titleBar.titleLabel.setText(self.windowTitle())
         self.titleBar.titleLabel.adjustSize()
         self._place_search()
@@ -480,19 +498,33 @@ class MainWindow(MSFluentWindow):
         # 透明后直接融进这层真实底色。浅色要铺一层稳定浅底：Fluent 的
         # CardWidget 在浅色下只有 67% 白，全透明窗底会让桌面颜色透进卡片，
         # 深色文字压在深色条纹上就读不清。light/dark 随主题切换自动生效。
+        # Windows 的 Mica 自带桌面取色，窗口底全透明即可，不再叠半透明层。
         if self._translucent:
-            self.setCustomBackgroundColor(QColor(249, 249, 251, 200), QColor(0, 0, 0, 0))
+            if sys.platform == "win32":
+                self.setCustomBackgroundColor(QColor(0, 0, 0, 0), QColor(0, 0, 0, 0))
+            else:
+                self.setCustomBackgroundColor(QColor(249, 249, 251, 200), QColor(0, 0, 0, 0))
         else:
             self.setCustomBackgroundColor(QColor(240, 244, 249), QColor(32, 32, 32))
 
     def set_material(self, material: str):
-        """窗口背景透明材质：none 关闭（纯色底），acrylic/sidebar/hud 为混合层。
+        """窗口背景透明材质：none 关闭（纯色底），acrylic/mica 为混合层。
 
-        配置持久化 translucentMaterial，系统配置里可切；兼容旧 translucent 布尔。"""
-        material = material if material in ("none", "acrylic", "sidebar", "hud") else "none"
+        配置持久化 translucentMaterial，系统配置里可切；兼容旧 translucent 布尔
+        与 sidebar/hud 旧值（自动归一为 acrylic）。"""
+        from app.services.materials import apply_windows_effect, normalize
+
+        material = normalize(material)
         self._material = material
-        # 混合层只在 macOS 实现；其他平台保持纯色底（否则背景没人画，窗口发黑）
-        self._translucent = material != "none" and sys.platform == "darwin"
+        if sys.platform == "darwin":
+            # 混合层只在 macOS / Win11 实现；其他平台保持纯色底（否则背景没人画，窗口发黑）
+            self._translucent = material != "none"
+        elif sys.platform == "win32":
+            from app.services.materials import win11_mica_available
+
+            self._translucent = material != "none" and win11_mica_available()
+        else:
+            self._translucent = False
         self._apply_window_background()
         if sys.platform == "darwin":
             from app.services.mac_effect import disable_acrylic, enable_acrylic
@@ -502,6 +534,12 @@ class MainWindow(MSFluentWindow):
             else:
                 disable_acrylic(self)
                 self._material_applied = True
+        elif sys.platform == "win32" and self._translucent:
+            self._material_applied = apply_windows_effect(self, material)
+            if not self._material_applied:
+                # Win10 等不支持时回退纯色底，不让窗口裸透明发黑
+                self._translucent = False
+                self._apply_window_background()
         else:
             self._material_applied = True
         self.update()

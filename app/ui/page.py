@@ -16,10 +16,12 @@ PAGE_MARGINS = (32, 24, 32, 24)
 
 
 def note_label(text: str) -> CaptionLabel:
-    """说明文字：12px 灰色小字，浅色主题用 gray-600 保证对比度，标题与备注分层。"""
+    """说明文字：12px 灰色小字，比正文再弱一档，标题与备注分层。
+
+    深浅主题各用一档更暗的灰，避免与正文抢视线（比旧版 #9ca3af 更收敛）。"""
     lbl = CaptionLabel(text)
     lbl.setWordWrap(True)
-    lbl.setTextColor(QColor("#4b5563"), QColor("#9ca3af"))
+    lbl.setTextColor(QColor("#3f4751"), QColor("#7e8896"))
     return lbl
 
 
@@ -33,6 +35,36 @@ def chevron_icon(expanded: bool) -> QIcon:
         img = icon.pixmap(16, 16).toImage().transformed(QTransform().rotate(180))
         return QIcon(QPixmap.fromImage(img))
     return icon
+
+
+def triangle_icon(direction: str = "right", size: int = 16) -> QIcon:
+    """纯三角箭头：无外框、无圆圈，只有一个实心三角。
+
+    fluent 的 PAGE_LEFT / PAGE_RIGHT 自带一圈圆环，这里换成手绘三角。
+    颜色随深浅主题变化，主题切换后需要重新生成（见 messages_page.apply_theme）。
+    """
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QPolygonF
+
+    color = QColor("#d6d6d6") if isDarkTheme() else QColor("#3a3a3a")
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(color)
+    w = size * 0.42
+    h = size * 0.72
+    cx, cy = size / 2, size / 2
+    if direction == "left":
+        pts = [QPointF(cx + w / 2, cy - h / 2), QPointF(cx - w / 2, cy),
+               QPointF(cx + w / 2, cy + h / 2)]
+    else:
+        pts = [QPointF(cx - w / 2, cy - h / 2), QPointF(cx + w / 2, cy),
+               QPointF(cx - w / 2, cy + h / 2)]
+    p.drawPolygon(QPolygonF(pts))
+    p.end()
+    return QIcon(pm)
 
 
 def set_tip(widget, text: str, delay: int = 300):

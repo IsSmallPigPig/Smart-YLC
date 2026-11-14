@@ -23,12 +23,12 @@ HEALTH_LABEL = {
 }
 
 HEALTH_COLOR = {
-    "ok": "#2e7d32",
-    "failed": "#c62828",
-    "captcha": "#ef6c00",
+    "ok": "#16a34a",
+    "failed": "#dc2626",
+    "captcha": "#b45309",
     "cooldown": "#9e9e9e",
-    "passwordChange": "#ef6c00",
-    "needMemberName": "#ef6c00",
+    "passwordChange": "#b45309",
+    "needMemberName": "#b45309",
     "network": "#9e9e9e",
     "unknown": "#9e9e9e",
 }

@@ -8,30 +8,49 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPixmap
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import CardWidget, FluentIcon as FIF
-from qfluentwidgets import SubtitleLabel, TitleLabel, isDarkTheme
+from qfluentwidgets import (
+    CaptionLabel,
+    IndeterminateProgressRing,
+    SubtitleLabel,
+    TitleLabel,
+    isDarkTheme,
+)
 
+from app.ui.anim import fade_out
 from app.ui.charts import BarRowWidget, ProgressDonut
 from app.ui.page import FluentPage, note_label
 from app.ui.widgets import StatTile
+from app.ui import palette as P
 
 BANNER_RATIO = 0.40  # 头图占视口高度的比例，铺满上方页面
 
 TILES = (
-    ("upload", "档案上传", FIF.CLOUD, "info"),
-    ("total", "团员总数", FIF.PEOPLE, "info"),
-    ("branches", "支部数量", FIF.PIE_SINGLE, "info"),
-    ("unread", "未读消息", FIF.MESSAGE, "warn"),
+    # (键, 标题, 图标名, 卡片色调, 图标颜色)
+    # 图标颜色统一走冷色系，区分靠图标与标题，不再一卡一色、也不再用刺眼橙
+    ("upload", "档案上传", "upload", "info", "#2f7be0"),
+    ("total", "团员总数", "total", "info", "#4c6ef5"),
+    ("branches", "支部数量", "branches", "info", "#0b8fbf"),
+    ("unread", "未读消息", "unread", "info", "#3b82f6"),
 )
 KIND_CHARTS = (
-    ("identity", "信息错误", "#ef6c00"),
-    ("report", "没有报道", "#c62828"),
-    ("archive", "没有档案", "#00838f"),
-    ("fees", "欠缴团费", "#8e24aa"),
+    # 四类异常统一走冷色系色阶：原橙色 / 紫色在此替换为协调的蓝→青→蓝绿
+    ("identity", "信息错误", P.KIND["identity"]),
+    ("report", "没有报道", P.KIND["report"]),
+    ("archive", "没有档案", P.KIND["archive"]),
+    ("fees", "欠缴团费", P.KIND["fees"]),
 )
 
 
@@ -51,7 +70,12 @@ class Banner(QWidget):
 
     不再把图片压到某个猜出来的背景色上，而是让它直接淡出到真实窗口底色
     （纯色、毛玻璃、明暗主题都一致），交界处因此没有颜色对不上的硬切线。
+
+    左上角切一个圆角：头图是内容区的底子，方角会在侧边栏与页面交界处
+    顶出一个生硬直角，圆角才和整窗的圆角语言一致。
     """
+
+    CORNER_RADIUS = 10
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -64,6 +88,19 @@ class Banner(QWidget):
             self._pixmap = None
         self.update()
 
+    def _corner_path(self, w: int, h: int) -> QPainterPath:
+        """左上角圆角、其余为直角的内容区轮廓。"""
+        r = self.CORNER_RADIUS
+        path = QPainterPath()
+        path.moveTo(r, 0)
+        path.lineTo(w, 0)
+        path.lineTo(w, h)
+        path.lineTo(0, h)
+        path.lineTo(0, r)
+        path.arcTo(QRectF(0, 0, r * 2, r * 2), 180, -90)
+        path.closeSubpath()
+        return path
+
     def paintEvent(self, e):
         w, h = self.width(), self.height()
         if w <= 0 or h <= 0:
@@ -74,6 +111,10 @@ class Banner(QWidget):
         p = QPainter(layer)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
+
+        # 左上角圆角：先裁形状，再往里画图
+        path = self._corner_path(w, h)
+        p.setClipPath(path)
 
         if self._pixmap and not self._pixmap.isNull():
             pm = self._pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
@@ -98,7 +139,31 @@ class Banner(QWidget):
         p.end()
 
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.drawImage(0, 0, layer)
+
+
+class LoadingOverlay(QWidget):
+    """首页加载过渡：概览快照在后台跑时，先用这个遮罩盖住尚未就绪的内容，
+    挡住快照延迟和布局未稳造成的错位；快照回来后再淡出露出内容。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(14)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.ring = IndeterminateProgressRing(self)
+        self.ring.setFixedSize(40, 40)
+        lay.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.label = CaptionLabel("正在加载概览…")
+        lay.addWidget(self.label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.fillRect(self.rect(), page_bg_color())
+        super().paintEvent(e)
 
 
 class HomePage(FluentPage):
@@ -147,8 +212,8 @@ class HomePage(FluentPage):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(12)
         self.tiles: dict[str, StatTile] = {}
-        for index, (key, title, icon, tone) in enumerate(TILES):
-            tile = StatTile(title, "—", "", icon=icon, tone=tone)
+        for index, (key, title, icon, tone, icon_color) in enumerate(TILES):
+            tile = StatTile(title, "—", "", icon=icon, tone=tone, icon_color=icon_color)
             tile.clicked.connect(lambda k=key: self._open_for(k))
             self.tiles[key] = tile
             grid.addWidget(tile, 0, index)
@@ -191,25 +256,56 @@ class HomePage(FluentPage):
         super().showEvent(event)
         self.refresh_stats()
 
-    def refresh_stats(self, animate: bool = True):
+    def refresh_stats(self, animate: bool = True, show_loading: bool = True):
         """概览统计放到后台线程。
 
         快照要读整份配置（memberCache 装着所有团员）并逐个跑检查，量大时在
-        界面线程里做会卡住切页。"""
+        界面线程里做会卡住切页；切到首页时先铺一层加载过渡页遮住未就绪的内容，
+        快照回来再淡出，避免延迟与布局未稳造成的错位被看到。
+        show_loading=False 用于后台静默同步，不弹过渡页。"""
         from app.services import org_snapshot, store
         from app.ui.page import CallbackWorker
 
         self._stats_token = getattr(self, "_stats_token", 0) + 1
         token = self._stats_token
 
+        if show_loading:
+            self._show_loading()
+
         def _snapshot():
             return org_snapshot.snapshot(store.load())
 
+        def _on_done(data):
+            if token != self._stats_token:
+                return
+            if show_loading:
+                self._hide_loading()
+            self._apply_stats(data, animate)
+
         worker = CallbackWorker(_snapshot, self)
-        worker.ok.connect(lambda data: token == self._stats_token
-                          and self._apply_stats(data, animate))
+        worker.ok.connect(_on_done)
         self._workers.append(worker)
         worker.start()
+
+    def _show_loading(self):
+        """铺一层加载过渡页：盖住首页内容，挡住快照延迟与布局未稳。"""
+        if getattr(self, "_loading", None) is None:
+            self._loading = LoadingOverlay(self)
+        ov = self._loading
+        # 清掉上一次淡出残留的透明度，确保这一轮从全不透明开始
+        ov.setGraphicsEffect(None)
+        ov.setGeometry(self.viewport().geometry())
+        ov.raise_()
+        ov.show()
+        ov.ring.start()
+
+    def _hide_loading(self):
+        """快照完成：停止转圈并淡出过渡页，露出已就绪的内容。"""
+        ov = getattr(self, "_loading", None)
+        if ov is None or not ov.isVisible():
+            return
+        ov.ring.stop()
+        fade_out(ov, duration=160, on_done=lambda: ov.hide())
 
     def _apply_stats(self, data: dict, animate: bool = True):
         total = data["total"]
@@ -270,3 +366,7 @@ class HomePage(FluentPage):
         self.banner.move(0, 0)
         self.banner.lower()
         self._apply_font()
+        # 过渡页要始终盖住可视区，尺寸变化时跟着重铺
+        ov = getattr(self, "_loading", None)
+        if ov is not None and ov.isVisible():
+            ov.setGeometry(self.viewport().geometry())
