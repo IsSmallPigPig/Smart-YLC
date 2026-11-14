@@ -301,10 +301,13 @@ class OrgManagePage(FluentPage):
         head = QHBoxLayout()
         title = theme_font(StrongBodyLabel(b.label), 16, int(QFont.Weight.DemiBold))
         head.addWidget(title)
-        if b.code != b.label:
-            head.addSpacing(8)
-            head.addWidget(BodyLabel(f"（{b.code}）"))
         head.addStretch(1)
+        # 搜索过滤时在支部名旁显示匹配到的团员名，一眼看出是谁触发了这张卡片
+        if self.search_edit.text().strip():
+            names = [m.name for m in b.members if m.name]
+            if names:
+                text = "、".join(names[:3]) + (f" 等 {len(names)} 人" if len(names) > 3 else "")
+                head.addWidget(self._chip(text, "#6b7280"))
         total = StrongBodyLabel(f"{st['total']} 人")
         head.addWidget(total)
         v.addLayout(head)
