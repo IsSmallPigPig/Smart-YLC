@@ -123,6 +123,22 @@ def import_secretaries(path: str) -> list[dict]:
     return out
 
 
+def save_account_template(path: str) -> int:
+    """生成账号导入模板 xlsx（列：备注 / 账号 / 密码），返回示例行数。"""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "团支部账号"
+    ws.append(["备注", "账号", "密码"])
+    ws.append(["普通高中高三七班", "ssfz12407", "-abc12345"])
+    ws.append(["普通高中高三一班", "ssfz12401", "-abc12345"])
+    for col, width in zip("ABC", (22, 16, 16)):
+        ws.column_dimensions[col].width = width
+    wb.save(path)
+    return 2
+
+
 def save_error_rows(path: str, rows) -> int:
     """导出错误团员名单 xlsx（rows: ErrorMemberRow 可迭代），返回写入行数。"""
     from openpyxl import Workbook

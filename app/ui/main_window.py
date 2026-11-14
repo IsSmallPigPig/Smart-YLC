@@ -46,6 +46,23 @@ if sys.platform == "darwin":
 
     StandardTitleBar.__init__ = _local_titlebar_font
 
+    # qfluentwidgets 遮罩弹窗（MessageBox 等）关闭时挂 QGraphicsOpacityEffect
+    # 播放渐隐动画：macOS 上该特效对复杂 QFrame 的 raster 渲染会冻结整个窗口
+    # （表现为弹窗出现后按钮点不动、页面卡死）。跳过动画直接结束。
+    from PySide6.QtWidgets import QDialog
+    from qfluentwidgets.components.dialog_box.mask_dialog_base import MaskDialogBase
+
+    def _instant_done(self, code):
+        self.setGraphicsEffect(None)
+        QDialog.done(self, code)
+
+    MaskDialogBase.done = _instant_done
+
+    def _plain_show(self, e):
+        QDialog.showEvent(self, e)
+
+    MaskDialogBase.showEvent = _plain_show
+
 
 class MainWindow(MSFluentWindow):
     def __init__(self):
