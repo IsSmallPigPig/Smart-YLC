@@ -10,7 +10,10 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.11"
+  # 内部标识：bundle id、可执行文件名保持 ASCII，避免签名/路径上的麻烦
   APP_NAME: SmartYouth
+  # 用户看到的名字：.app / .exe / 安装镜像里的显示名
+  APP_DISPLAY_NAME: 智慧团委
   BUNDLE_ID: com.smallylc.smartyouth
 
 jobs:
@@ -44,7 +47,7 @@ jobs:
       - name: 生成应用图标（icns）
         run: |
           SRC="app/assets/smart-ylc@1024.png"
-          ICONSET="build/SmartYouth.iconset"
+          ICONSET="build/$APP_NAME.iconset"
           mkdir -p "$ICONSET"
           # iconutil 要完整的 10 个条目：1x 与 @2x 各五档。之前只生成 1x 五档再补
           # 三档 @2x，漏了 16@2x 与 32@2x，Dock 和访达里的小图标会发虚。
@@ -64,19 +67,30 @@ jobs:
             --windowed --name "$APP_NAME" \
             --osx-bundle-identifier "$BUNDLE_ID" \
             --collect-all qfluentwidgets \
-            --icon build/icon.icns \
+            --icon "build/$APP_NAME.icns" \
             --add-data "app/assets:assets" \
             main.py
 
+      - name: 改成中文应用名
+        run: |
+          # Finder / 启动台显示的是 .app 的文件名，所以直接改包名；
+          # 包内可执行文件名保持 ASCII，不影响签名与自启动路径
+          mv "dist/$APP_NAME.app" "dist/$APP_DISPLAY_NAME.app"
+          PLIST="dist/$APP_DISPLAY_NAME.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_DISPLAY_NAME" "$PLIST" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleName string $APP_DISPLAY_NAME" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_DISPLAY_NAME" "$PLIST" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_DISPLAY_NAME" "$PLIST"
+
       - name: 校验应用图标
         run: |
-          PLIST="dist/$APP_NAME.app/Contents/Info.plist"
+          PLIST="dist/$APP_DISPLAY_NAME.app/Contents/Info.plist"
           NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$PLIST" || true)
           if [ -z "$NAME" ]; then
             echo "::error::Info.plist 没有 CFBundleIconFile，.app 会用默认图标"
             exit 1
           fi
-          ICON="dist/$APP_NAME.app/Contents/Resources/$NAME"
+          ICON="dist/$APP_DISPLAY_NAME.app/Contents/Resources/$NAME"
           if [ ! -f "$ICON" ]; then
             echo "::error::找不到 $ICON"
             exit 1
@@ -91,11 +105,11 @@ jobs:
         run: |
           DMGROOT="dist/dmgroot"
           rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
-          cp -R "dist/$APP_NAME.app" "$DMGROOT/"
+          cp -R "dist/$APP_DISPLAY_NAME.app" "$DMGROOT/"
           # 卷图标：不设的话挂载后的磁盘显示成通用磁盘图标，看不到应用 LOGO
           cp "build/$APP_NAME.icns" "$DMGROOT/.VolumeIcon.icns"
           RW="dist/$APP_NAME-rw.dmg"
-          hdiutil create -volname "$APP_NAME" -srcfolder "$DMGROOT" \
+          hdiutil create -volname "$APP_DISPLAY_NAME" -srcfolder "$DMGROOT" \
             -ov -format UDRW "$RW" > /dev/null
           MOUNT="/tmp/$APP_NAME-vol"
           hdiutil attach "$RW" -nobrowse -mountpoint "$MOUNT" > /dev/null
@@ -106,17 +120,17 @@ jobs:
           fi
           hdiutil detach "$MOUNT" > /dev/null
           hdiutil convert "$RW" -format UDZO \
-            -o "dist/$APP_NAME-macOS-${{ matrix.arch }}.dmg" > /dev/null
+            -o "dist/$APP_DISPLAY_NAME-macOS-${{ matrix.arch }}.dmg" > /dev/null
           rm -rf "$RW" "$DMGROOT"
 
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ env.APP_NAME }}-macOS-${{ matrix.arch }}
-          path: dist/${{ env.APP_NAME }}-macOS-${{ matrix.arch }}.dmg
+          path: dist/${{ env.APP_DISPLAY_NAME }}-macOS-${{ matrix.arch }}.dmg
           if-no-files-found: error
 
   build-windows:
-    # windows-latest 自带 x86_64 工具链，打出的就是 64 位 Windows 版
+    # 只出 64 位：PySide6 6.x 没有 win32（32 位）轮子，无法编译 32 位程序
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -124,6 +138,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 确认解释器架构
+        run: python -c "import platform; print('python:', platform.architecture()[0], platform.machine()); assert platform.architecture()[0] == '64bit'"
 
       - name: 安装依赖
         run: |
@@ -140,13 +157,16 @@ jobs:
             --add-data "app/assets;assets" `
             main.py
 
-      - name: 重命名 exe 标明架构
-        run: Move-Item "dist/$env:APP_NAME.exe" "dist/$env:APP_NAME-Windows-x64.exe"
+      - name: 改成中文应用名并标明架构
+        run: |
+          $target = "dist/${env:APP_DISPLAY_NAME}-Windows-x64.exe"
+          Move-Item "dist/${env:APP_NAME}.exe" $target
+          Get-Item $target | Select-Object Name, Length
 
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ env.APP_NAME }}-Windows
-          path: dist/${{ env.APP_NAME }}-Windows-x64.exe
+          path: dist/${{ env.APP_DISPLAY_NAME }}-Windows-x64.exe
           if-no-files-found: error
 
   release:
@@ -159,27 +179,29 @@ jobs:
           path: artifacts
 
       - name: 发布 Release（notes 由 GitHub bot 自动生成）
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           body: |
             ## 下载
-            - **macOS（Apple Silicon / M 系列）**：`SmartYouth-macOS-arm64.dmg`
-            - **macOS（Intel）**：`SmartYouth-macOS-x86_64.dmg`
-            - **Windows（64 位）**：`SmartYouth-Windows-x64.exe`（单文件版，双击运行）
+            - **macOS（Apple Silicon / M 系列）**：`智慧团委-macOS-arm64.dmg`
+            - **macOS（Intel）**：`智慧团委-macOS-x86_64.dmg`
+            - **Windows（64 位）**：`智慧团委-Windows-x64.exe`（单文件版，双击运行）
 
             拿不准 Mac 的芯片型号时，点左上角苹果菜单 →「关于本机」：
             「芯片」显示 Apple M 系列选 arm64，显示处理器（Intel）选 x86_64。
+                        Windows 不提供 32 位版本：PySide6 6.x 只发布 x64 与 arm64 轮子，
+            无法编译 32 位程序。
 
             ## 首次运行说明
             - **macOS**：应用未做签名与公证，首次打开若提示「无法验证开发者」，
               请在访达中**右键 → 打开**，或终端执行：
-              `xattr -cr /Applications/SmartYouth.app`
+              `xattr -cr /Applications/智慧团委.app`
             - **Windows**：同样无代码签名，SmartScreen 可能提示「已保护你的电脑」，
               点「更多信息 → 仍要运行」。
 
             完整变更列表见下方自动生成的更新日志（由 GitHub bot 生成）。
           files: |
-            artifacts/SmartYouth-macOS-arm64/SmartYouth-macOS-arm64.dmg
-            artifacts/SmartYouth-macOS-x86_64/SmartYouth-macOS-x86_64.dmg
-            artifacts/SmartYouth-Windows/SmartYouth-Windows-x64.exe
+            artifacts/SmartYouth-macOS-arm64/智慧团委-macOS-arm64.dmg
+            artifacts/SmartYouth-macOS-x86_64/智慧团委-macOS-x86_64.dmg
+            artifacts/SmartYouth-Windows/智慧团委-Windows-x64.exe
