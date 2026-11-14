@@ -158,7 +158,7 @@ def _abnormal_only(kind: str, members: list[MemberRecord], template: CheckTempla
     out: list[CheckResult] = []
     for m in members:
         diffs = compare_with_template(m, template)
-        conflict = _occupation_conflict_diff(m) if kind == "identity" else None
+        conflict = _occupation_diff(m) if kind == "identity" else None
         if conflict:
             diffs.append(conflict)
         if diffs:
@@ -166,26 +166,21 @@ def _abnormal_only(kind: str, members: list[MemberRecord], template: CheckTempla
     return out
 
 
-# 在读身份启发式：全日制学历是中学/中专阶段、单位是学校，但职业填成了社会职业 → 信息错误
-STUDENT_EDU_MARKS = ("高中", "初中", "小学", "中专", "中职", "中技")
-SCHOOL_UNIT_MARKS = ("学校", "中学", "小学", "实验", "附属", "学院", "大学")
+# 报到身份的职业/收入检查（用户规则）：
+# 职业必须为「学生」——未填 → 警告；填了但不是学生 → 信息错误。
+# 收入必须为「职业为学生无收入」——不一致（含为空）→ 信息错误。
 
 
-def _occupation_conflict_diff(m: MemberRecord) -> FieldDiff | None:
-    edu = (m.full_time_education or "").strip()
-    if not any(k in edu for k in STUDENT_EDU_MARKS):
-        return None
-    unit = (m.work_unit or "").strip()
-    if not unit or not any(k in unit for k in SCHOOL_UNIT_MARKS):
-        return None
+def _occupation_diff(m: MemberRecord) -> FieldDiff | None:
     occ = (m.occupation or "").strip()
-    if not occ or "学生" in occ or "教职工" in occ or "教师" in occ:
-        return None
-    return FieldDiff(
-        "occupation", "职业", "学生", occ,
-        f"职业「{occ}」与在读身份不符（{edu}在读，学习单位 {unit}），请核对并修改",
-        "error",
-    )
+    if not occ:
+        return FieldDiff("occupation", "职业", "学生", "（空）", "职业未填，请补充", "warning")
+    if "学生" not in occ:
+        return FieldDiff(
+            "occupation", "职业", "学生", occ,
+            f"职业应为「学生」，实际为「{occ}」，请核对并修改", "error",
+        )
+    return None
 
 
 def build_identity_results(members: list[MemberRecord], template: CheckTemplate) -> list[CheckResult]:
