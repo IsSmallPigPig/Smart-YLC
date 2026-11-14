@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QDialog
 
 from qfluentwidgets import ComboBox, SubtitleLabel
@@ -20,6 +20,13 @@ class BranchPickerDialog(FluentPanelDialog):
     def __init__(self, accounts: list[dict], parent: QObject | None = None,
                  current: str = ""):
         super().__init__(parent)
+        # 必须是独立窗口：基类把 FramelessWindowHint 设成唯一标志位，弹窗会退化成
+        # 父窗口里的普通子控件。账号网页窗口里是原生网页图层（QWebEngineView），
+        # 子控件会被它整片盖住——对话框看着在、点不到，像整个窗口卡住。
+        self.setWindowFlags(Qt.WindowType.Dialog
+                            | Qt.WindowType.FramelessWindowHint
+                            | Qt.WindowType.NoDropShadowWindowHint)
+        self.setClosableOnMaskClicked(True)   # 点遮罩即取消，不用非找到按钮
         self.chosen = ""
         self.widget.setMinimumWidth(420)
         self.viewLayout.setSpacing(10)
@@ -54,7 +61,22 @@ def pick_branch(accounts: list[dict], parent: QObject | None,
     if not usable:
         return None
     dlg = BranchPickerDialog(usable, parent, current)
-    dlg.finished.connect(lambda code: code == QDialog.DialogCode.Accepted
-                         and dlg.chosen and on_pick(dlg.chosen))
+    picked: list[str] = []
+
+    def _deliver():
+        # 等弹窗这一轮彻底收掉再建网页视图：原生视图创建会让窗口重建一次，
+        # 在 finished 回调里同步做，遮罩与窗口状态容易错位
+        if picked:
+            on_pick(picked[0])
+
+    def _finished(code: int):
+        if code == QDialog.DialogCode.Accepted and dlg.chosen:
+            picked.append(dlg.chosen)
+            QTimer.singleShot(0, _deliver)
+
+    dlg.finished.connect(_finished)
+    if parent is not None:
+        # 遮罩铺满它所属的窗口、弹窗居中：几何跟父窗口对齐才有这个效果
+        dlg.setGeometry(parent.window().frameGeometry())
     dlg.show()
     return dlg
