@@ -198,7 +198,7 @@ class UploadWorker(QThread):
                             skipped += 1
                             continue
 
-                    self.stage.emit(f"上传 {name} → {account}")
+                    self.stage.emit(f"上传 {name} 到 {account}")
                     result = client.upload_file(job["upload_path"])
                     if not result.ok:
                         self.row_ready.emit(account, path, "失败", result.message)
@@ -240,8 +240,7 @@ class UploadPage(FluentPage):
         lay = self.vBoxLayout
 
         # 标题与工具条直接写在背景上；说明小字承担原来两行设置项的职责
-        self.header = PageHeader(
-            "上传档案", "先选择工作目录，里面的 PDF 会自动加入待处理")
+        self.header = PageHeader("上传档案")
         self.pick_btn = PushButton(FIF.FOLDER, "选择目录")
         self.pick_btn.clicked.connect(self._pick_dir)
         self.rescan_btn = PushButton(FIF.SYNC, "刷新目录")
@@ -321,7 +320,7 @@ class UploadPage(FluentPage):
     def refresh(self):
         directory = self._workspace_dir()
         if not directory:
-            self.header.set_desc("先选择工作目录，里面的 PDF 会自动加入待处理")
+            self.header.set_desc("")  # 空态写在正文里，标题下不再重复一遍
             self.statuses = []
             self._empty_text = "还没有选择工作目录"
             self.summary.setText("")

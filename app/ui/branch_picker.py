@@ -12,7 +12,6 @@ from PySide6.QtWidgets import QDialog
 from qfluentwidgets import ComboBox, SubtitleLabel
 
 from app.ui.dialogs import FluentPanelDialog
-from app.ui.page import note_label
 
 
 class BranchPickerDialog(FluentPanelDialog):
@@ -37,7 +36,6 @@ class BranchPickerDialog(FluentPanelDialog):
         if index >= 0:
             self.combo.setCurrentIndex(index)
         self.viewLayout.addWidget(self.combo)
-        self.viewLayout.addWidget(note_label("只列出状态正常的支部；每个支部一份独立浏览器存储，标签之间互不顶号"))
 
         self.yesButton.setText("打开")
         self.cancelButton.setText("取消")

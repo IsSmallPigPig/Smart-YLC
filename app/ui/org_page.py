@@ -157,7 +157,7 @@ class OrgPage(FluentPage):
         lay = self.vBoxLayout
 
         # 标题与工具条在背景上，仪表盘卡片只装图表
-        self.header = PageHeader("组织状况", "各支部上传进度、异常分类与转接申请")
+        self.header = PageHeader("组织状况")
         self.start_btn = PrimaryPushButton(FIF.SYNC, "开始统计")
         self.start_btn.clicked.connect(self._start)
         self.export_btn = ToolButton(FIF.SAVE)
@@ -320,15 +320,18 @@ class OrgPage(FluentPage):
         worker.start()
 
     def _offline_snapshot(self):
-        """后台线程：整份成员缓存 → 汇总统计 + 异常名单（含落盘缓存）。"""
+        """后台线程：本轮有缓存的支部重算一遍，再按整份 orgStatsCache 汇总。
+
+        以前只汇总「本轮 memberCache 里的支部」，后台 30 秒同步一轮只拿到几个
+        账号时，其余支部会从页面上消失——看着就是组织状况的数据丢了。"""
         from app.domain.org_manage import record_from_dict
 
-        cache = store.load().get("memberCache") or {}
-        total = uploaded = 0
-        by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
-        error_rows: list = []
+        cfg = store.load()
+        members_cache = cfg.get("memberCache") or {}
+        # 先按整份缓存汇总（含本轮没同步到的支部），再逐个覆盖本轮重算出来的
+        stats = {k: dict(v) for k, v in (cfg.get("orgStatsCache") or {}).items()}
         id_tpl, rep_tpl = default_identity_template(), default_report_template()
-        for user, blob in cache.items():
+        for user, blob in members_cache.items():
             members = [record_from_dict(d) for d in blob.get("members", [])]
             branch = blob.get("branch") or user
             results = (
@@ -337,16 +340,22 @@ class OrgPage(FluentPage):
                 + build_fee_results(members)
             )
             s = summarize_members(members, results)
-            total += s.total
-            uploaded += s.uploaded
-            for k, v in dict(s.by_kind).items():
-                by_kind[k] = by_kind.get(k, 0) + v
             rows = build_error_rows(results, branch)
-            error_rows.extend(rows)
-            # 离线重算结果同样落 orgStatsCache（transfer 传 None = 保留上次在线结果）
+            stats[user] = {
+                "branch": branch,
+                "total": s.total,
+                "uploaded": s.uploaded,
+                "by_kind": dict(s.by_kind),
+                "transfer": (stats.get(user) or {}).get("transfer"),
+                "error_rows": [vars(r) for r in rows],
+                "updatedAt": datetime.now().isoformat(timespec="seconds"),
+            }
+            # 逐个支部照样落盘（transfer 传 None = 保留上次在线结果）
             self._persist_account(user, branch, s.total, s.uploaded,
                                   dict(s.by_kind), None, rows)
-        return total, uploaded, by_kind, error_rows
+
+        agg = self._aggregate(stats)
+        return agg["total"], agg["uploaded"], agg["by_kind"], agg["rows"]
 
     def _apply_offline(self, data):
         total, uploaded, by_kind, error_rows = data
@@ -407,6 +416,35 @@ class OrgPage(FluentPage):
         return {"applied": t.applied, "total": t.total, "succeeded": t.succeeded,
                 "pending": t.pending, "returned": t.returned, "names": list(t.names)}
 
+    def _aggregate(self, cache: dict) -> dict:
+        """把整份 orgStatsCache 汇总成页面要的数字与名单。
+
+        「恢复上次结果」和「后台离线重算」共用这一份逻辑，避免两处口径不一致
+        （重算只覆盖本次同步到的支部，其余支部的数字照样在总量里）。"""
+        total = uploaded = 0
+        by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
+        rows: list[ErrorMemberRow] = []
+        applied = succeeded = pending = returned = 0
+        names: list[str] = []
+        updated = ""
+        for entry in (cache or {}).values():
+            total += int(entry.get("total") or 0)
+            uploaded += int(entry.get("uploaded") or 0)
+            for k, v in (entry.get("by_kind") or {}).items():
+                if k in by_kind:
+                    by_kind[k] += int(v or 0)
+            rows.extend(ErrorMemberRow(**r) for r in entry.get("error_rows") or [])
+            t = entry.get("transfer") or {}
+            applied += int(t.get("applied") or 0)
+            succeeded += int(t.get("succeeded") or 0)
+            pending += int(t.get("pending") or 0)
+            returned += int(t.get("returned") or 0)
+            names.extend(t.get("names") or [])
+            updated = max(updated, str(entry.get("updatedAt") or ""))
+        return {"total": total, "uploaded": uploaded, "by_kind": by_kind, "rows": rows,
+                "applied": applied, "succeeded": succeeded, "pending": pending,
+                "returned": returned, "names": names, "updated": updated}
+
     def _persist_account(self, user, branch, total, uploaded, by_kind, transfer, rows):
         """本支部统计成功 → 写入配置 orgStatsCache；重启后从缓存恢复，不被清除。
 
@@ -418,8 +456,10 @@ class OrgPage(FluentPage):
 
         def _write(cfg: dict):
             cache = cfg.setdefault("orgStatsCache", {})
-            for k in [k for k in cache if k not in valid]:
-                del cache[k]
+            # valid 为空只可能是账号还没载入；这时清理会把整份统计抹掉
+            if valid:
+                for k in [k for k in cache if k not in valid]:
+                    del cache[k]
             existing = cache.get(key) or {}
             cache[key] = {
                 "branch": branch,
@@ -442,42 +482,26 @@ class OrgPage(FluentPage):
         cache = store.load().get("orgStatsCache") or {}
         if not cache:
             return
-        total = uploaded = 0
-        by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
-        rows: list[ErrorMemberRow] = []
-        applied = succeeded = pending = returned = 0
-        names: list[str] = []
-        updated = ""
-        for user, e in cache.items():
-            total += e.get("total", 0)
-            uploaded += e.get("uploaded", 0)
-            for k, v in (e.get("by_kind") or {}).items():
-                by_kind[k] = by_kind.get(k, 0) + v
-            rows.extend(ErrorMemberRow(**r) for r in e.get("error_rows", []))
-            t = e.get("transfer") or {}
-            applied += t.get("applied", 0)
-            succeeded += t.get("succeeded", 0)
-            pending += t.get("pending", 0)
-            returned += t.get("returned", 0)
-            names.extend(t.get("names", []))
-            updated = max(updated, e.get("updatedAt", ""))
-        self._total, self._uploaded = total, uploaded
-        self._by_kind = by_kind
-        self._error_rows = rows
-        self._transfer_applied = applied
-        self._set_ratio(total, uploaded)
+        agg = self._aggregate(cache)
+        self._total, self._uploaded = agg["total"], agg["uploaded"]
+        self._by_kind = agg["by_kind"]
+        self._error_rows = agg["rows"]
+        self._transfer_applied = agg["applied"]
+        self._set_ratio(agg["total"], agg["uploaded"])
         self._update_bars()
         self._clear_cards()
-        for r in rows:
+        for r in agg["rows"]:
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch, r.kinds)
-        self.error_title.setText(f"异常团员 {len(rows)}")
-        if rows:
+        self.error_title.setText(f"异常团员 {len(agg['rows'])}")
+        if agg["rows"]:
             self.export_btn.setEnabled(True)
         # 缓存里是 ISO 时间串，直接显示会带 T 和秒；截图/阅读都不好看
+        updated = agg["updated"]
         stamp = f"，更新于 {updated.replace('T', ' ')[:16]}" if updated else ""
         self.transfer_note.setText(
-            f"转接申请 {applied} 人，成功 {succeeded}，审核中 {pending}，退回 {returned}{stamp}")
+            f"转接申请 {agg['applied']} 人，成功 {agg['succeeded']}，"
+            f"审核中 {agg['pending']}，退回 {agg['returned']}{stamp}")
 
     def _clear_cards(self):
         while self.error_lay.count() > 1:  # 保留标题

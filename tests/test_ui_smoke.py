@@ -71,7 +71,9 @@ def test_settings_page_builds(app, isolated_store):
     page = SettingsPage()
     assert page.notify_mode.count() == 3
     assert page.notify_row.desc_label is not None
-    assert page.workspace_row.desc_label.text().startswith("先选择工作目录")
+    # 未选目录时不写说明：这一行的 desc 只承载已选路径，空的就隐藏
+    assert page.workspace_row.desc_label.text() == ""
+    assert not page.workspace_row.desc_label.isVisible()
 
 
 def test_load_config_keeps_workspace_and_rosters(app, isolated_store):

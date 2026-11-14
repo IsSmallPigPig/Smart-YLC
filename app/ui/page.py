@@ -156,8 +156,9 @@ class PageHeader(QWidget):
         self.controls.setSpacing(8)
         row.addLayout(self.controls)
         lay.addLayout(row)
-        self.desc_label = note_label(desc)
+        self.desc_label = note_label("")
         lay.addWidget(self.desc_label)
+        self.set_desc(desc)
 
     def add_control(self, widget: QWidget):
         self.controls.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
