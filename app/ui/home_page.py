@@ -38,12 +38,12 @@ from app.ui import palette as P
 BANNER_RATIO = 0.40  # 头图占视口高度的比例，铺满上方页面
 
 TILES = (
-    # (键, 标题, 图标名, 卡片色调, 图标颜色)
-    # 图标颜色统一走冷色系，区分靠图标与标题，不再一卡一色、也不再用刺眼橙
-    ("upload", "档案上传", "upload", "info", "#2f7be0"),
-    ("total", "团员总数", "total", "info", "#4c6ef5"),
-    ("branches", "支部数量", "branches", "info", "#0b8fbf"),
-    ("unread", "未读消息", "unread", "info", "#3b82f6"),
+    # (键, 标题, 官方 color 图标名, 卡片色调)
+    # 图标用 microsoft/fluentui-system-icons 的彩色渐变实心图标，原色渲染
+    ("upload", "档案上传", "upload", "info"),
+    ("total", "团员总数", "total", "info"),
+    ("branches", "支部数量", "branches", "info"),
+    ("unread", "未读消息", "unread", "info"),
 )
 KIND_CHARTS = (
     # 四类异常统一走冷色系色阶：原橙色 / 紫色在此替换为协调的蓝→青→蓝绿
@@ -219,8 +219,8 @@ class HomePage(FluentPage):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(12)
         self.tiles: dict[str, StatTile] = {}
-        for index, (key, title, icon, tone, icon_color) in enumerate(TILES):
-            tile = StatTile(title, "—", "", icon=icon, tone=tone, icon_color=icon_color)
+        for index, (key, title, icon, tone) in enumerate(TILES):
+            tile = StatTile(title, "—", "", icon=icon, tone=tone)
             tile.clicked.connect(lambda k=key: self._open_for(k))
             self.tiles[key] = tile
             grid.addWidget(tile, 0, index)
