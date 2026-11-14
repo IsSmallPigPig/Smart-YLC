@@ -292,13 +292,10 @@ class SettingsPage(FluentPage):
         self.new_sem_btn = PushButton(FIF.ADD, "新建学期")
         self.new_sem_btn.setToolTip("按学期框里的名字新建一个空学期，之后再导入名单")
         self.new_sem_btn.clicked.connect(self._create_semester)
-        self.roster_edit = LineEdit()
-        self.roster_edit.setPlaceholderText("选择名单文件")
         self.roster_btn = PrimaryPushButton("导入到该学期")
         self.roster_btn.clicked.connect(self._import_roster)
         row3.addWidget(self.semester_combo)
         row3.addWidget(self.new_sem_btn)
-        row3.addWidget(self.roster_edit, 1)
         row3.addWidget(self.roster_btn)
         r.addLayout(row3)
         row_tpl = QHBoxLayout()
@@ -518,7 +515,6 @@ class SettingsPage(FluentPage):
         self.semester_combo.addItems(sorted(self.rosters) or [guess_semester()])
         self.semester_combo.setCurrentText(guess_semester())
         self.semester_combo.blockSignals(False)
-        self.roster_edit.setText(self._roster_paths.get(self.semester_combo.currentText().strip(), ""))
         self._refresh_roster()
 
         # 工作区
@@ -710,7 +706,6 @@ class SettingsPage(FluentPage):
         idx = self.semester_combo.findText(sem)
         if idx >= 0:
             self.semester_combo.removeItem(idx)
-        self.roster_edit.setText("")
         self._refresh_roster()
         self._save_config()
         InfoBar.success("已删除", f"{sem} 的名单已从配置移除", duration=3000, parent=self)
@@ -1284,14 +1279,12 @@ class SettingsPage(FluentPage):
         if sem not in items:
             self.semester_combo.addItem(sem)
         self.semester_combo.setCurrentText(sem)
-        self.roster_edit.setText(path)
         self._refresh_roster()
         self._save_config()
         InfoBar.success(f"已导入 {sem}", f"{len(roster.rows)} 名团员", duration=3000, parent=self)
 
     def _on_semester_changed(self, sem: str):
-        """切换学期时回显该学期已导入的名单文件。"""
-        self.roster_edit.setText(self._roster_paths.get(sem.strip(), ""))
+        """切换学期。"""
 
     def _create_semester(self):
         """按学期框里的名字新建空学期（不用先导入名单）。"""
@@ -1308,7 +1301,6 @@ class SettingsPage(FluentPage):
         if sem not in items:
             self.semester_combo.addItem(sem)
         self.semester_combo.setCurrentText(sem)
-        self.roster_edit.setText("")
         self._refresh_roster()
         self._save_config()
         InfoBar.success("学期已新建", f"{sem}：选择名单文件后导入到该学期", duration=3000, parent=self)
