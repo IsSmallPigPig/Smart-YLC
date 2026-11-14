@@ -15,13 +15,7 @@ from qfluentwidgets import CheckBox, SegmentedWidget, StrongBodyLabel, SubtitleL
 
 from app.services.export_data import CONTENT_KEYS, CONTENT_TITLES
 from app.ui.dialogs import FluentPanelDialog
-from app.ui.page import note_label, theme_font
-
-
-SCOPE_HINT = {
-    "branch": "每个支部生成一个表格，打包成 zip 保存",
-    "merged": "全部支部的数据写进一个表格",
-}
+from app.ui.page import theme_font
 
 
 class ExportDialog(FluentPanelDialog):
@@ -36,12 +30,9 @@ class ExportDialog(FluentPanelDialog):
         self.scope_seg = SegmentedWidget(self.widget)
         self.scope_seg.addItem("branch", "分班导出")
         self.scope_seg.addItem("merged", "合并导出")
-        self.scope_seg.setCurrentItem(scope if scope in SCOPE_HINT else "branch")
+        self.scope_seg.setCurrentItem(scope if scope in ("branch", "merged") else "branch")
         self.scope_seg.setFixedHeight(34)
         self.viewLayout.addWidget(self.scope_seg)
-        self.scope_hint = note_label(SCOPE_HINT[self.scope_seg.currentRouteKey() or "branch"])
-        self.viewLayout.addWidget(self.scope_hint)
-        self.scope_seg.currentItemChanged.connect(lambda *_: self._sync_hint())
 
         self.viewLayout.addWidget(
             theme_font(StrongBodyLabel("导出内容", self.widget), 14,
@@ -50,7 +41,7 @@ class ExportDialog(FluentPanelDialog):
         for key in CONTENT_KEYS:
             box = CheckBox(CONTENT_TITLES[key], self.widget)
             box.setChecked(True)
-            box.stateChanged.connect(self._sync_hint)
+            box.stateChanged.connect(self._sync_state)
             self.boxes[key] = box
             self.viewLayout.addWidget(box)
 
@@ -63,14 +54,11 @@ class ExportDialog(FluentPanelDialog):
         self.mode.setCurrentItem("split")
         self.mode.setFixedHeight(34)
         self.viewLayout.addWidget(self.mode)
-        self.mode_hint = note_label("")
-        self.viewLayout.addWidget(self.mode_hint)
-        self.mode.currentItemChanged.connect(lambda *_: self._sync_hint())
 
         self.yesButton.setText("开始导出")
         self.cancelButton.setText("取消")
         self.finished.connect(self.deleteLater)
-        self._sync_hint()
+        self._sync_state()
 
     @property
     def scope(self) -> str:
@@ -79,14 +67,8 @@ class ExportDialog(FluentPanelDialog):
     def _contents(self) -> list[str]:
         return [key for key in CONTENT_KEYS if self.boxes[key].isChecked()]
 
-    def _sync_hint(self, *_):
-        n = len(self._contents())
-        self.scope_hint.setText(SCOPE_HINT[self.scope])
-        if self.mode.currentRouteKey() == "single":
-            self.mode_hint.setText(f"五项内容合并到一张表，每行标注类别（已选 {n} 项）")
-        else:
-            self.mode_hint.setText(f"每项内容单独一张表（已选 {n} 项）")
-        self.yesButton.setEnabled(n > 0)
+    def _sync_state(self, *_):
+        self.yesButton.setEnabled(bool(self._contents()))
 
     def validate(self) -> bool:
         contents = self._contents()

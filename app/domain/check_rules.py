@@ -272,5 +272,5 @@ def build_daily_summary(
         f"欠缴 {by_kind['fees']} 人（{unpaid_amount:g} 元）" if by_kind["fees"] else "团费无欠缴",
     ]
     if cross.detected:
-        parts.append("⚠️ 未匹配到任何预设团员，请核对名单与账号")
+        parts.append("未匹配到任何预设团员，请核对名单与账号")
     return "；".join(parts)

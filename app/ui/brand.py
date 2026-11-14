@@ -54,9 +54,23 @@ def app_pixmap(size: int = 256) -> QPixmap:
 def app_tile_pixmap(size: int = 64) -> QPixmap:
     """只要白底方块本身，裁掉投影和四周留白。
 
-    app_pixmap 是完整图标（带投影与边距），适合当窗口/托盘图标；放进正文当 logo 时
-    那圈留白会让方块缩进去，左缘和同一列的文字对不上（512 的图左边空了 54px）。
+    方块在 icon.svg 的 viewBox 里占 (4, 4, 92, 92)，外面那一圈是投影与描边余量；
+    app_pixmap 是完整图标（带投影与边距），放进正文当 logo 时那圈留白会让方块
+    缩进去，左缘和同一列的文字对不上（512 的图左边空了 54px）。
+
+    优先用矢量按目标尺寸栅格化：位图缩到 64 再由 2× 屏放大，边缘一圈是插值糊影。
     """
+    svg = icon_path("smart-ylc-icon.svg")
+    if svg.is_file():
+        from PySide6.QtSvg import QSvgRenderer
+
+        renderer = QSvgRenderer(str(svg))
+        if renderer.isValid():
+            renderer.setViewBox(QRectF(4, 4, 92, 92))
+            return hidpi_canvas(
+                size, lambda p: renderer.render(p, QRectF(0, 0, size, size)))
+
+    # 没有矢量资源时回退到位图裁剪
     png = icon_path("smart-ylc@512.png")
     src = QPixmap(str(png)) if png.is_file() else app_pixmap(512)
     if src.isNull():
