@@ -43,8 +43,30 @@ def section_title(text: str) -> StrongBodyLabel:
 
 
 def sub_title(text: str) -> StrongBodyLabel:
-    """卡片内分组小标题：13px 加粗，弱于卡片标题一级。"""
-    return theme_font(StrongBodyLabel(text), 13, int(QFont.Weight.DemiBold))
+    """卡片内分组小标题：15px 加粗，弱于卡片标题一级。"""
+    return theme_font(StrongBodyLabel(text), 15, int(QFont.Weight.DemiBold))
+
+
+class SettingRow(QWidget):
+    """仿 Ghost Downloader 的设置行：左侧标题 + 灰色说明，右侧控件右对齐垂直居中。
+
+    用法：row = SettingRow("明暗模式", "更改应用的外观", combo)；
+    control 也可以是先包好的 QWidget（多个控件时）。"""
+
+    def __init__(self, title: str, desc: str = "", control: QWidget | None = None, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(16)
+        text_lay = QVBoxLayout()
+        text_lay.setContentsMargins(0, 0, 0, 0)
+        text_lay.setSpacing(3)
+        text_lay.addWidget(theme_font(StrongBodyLabel(title), 14, int(QFont.Weight.DemiBold)))
+        if desc:
+            text_lay.addWidget(note_label(desc))
+        lay.addLayout(text_lay, 1)
+        if control is not None:
+            lay.addWidget(control, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
 
 class CollapsibleCard(CardWidget):
@@ -58,7 +80,7 @@ class CollapsibleCard(CardWidget):
         self._expanded = bool(expanded)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 14, 20, 14)
-        outer.setSpacing(8)
+        outer.setSpacing(10)
         header = QHBoxLayout()
         header.addWidget(section_title(title))
         header.addStretch(1)
@@ -70,7 +92,7 @@ class CollapsibleCard(CardWidget):
         self.body = QWidget(self)
         self.body_lay = QVBoxLayout(self.body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
-        self.body_lay.setSpacing(6)
+        self.body_lay.setSpacing(12)
         outer.addWidget(self.body)
         self._sync()
         # 主题切换时箭头颜色要按新主题重烘焙（旋转图标是像素级副本）
