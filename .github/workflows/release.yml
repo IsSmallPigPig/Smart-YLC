@@ -113,6 +113,7 @@ jobs:
         with:
           name: ${{ env.APP_NAME }}-macOS-${{ matrix.arch }}
           path: dist/${{ env.APP_NAME }}-macOS-${{ matrix.arch }}.dmg
+          if-no-files-found: error
 
   build-windows:
     # windows-latest 自带 x86_64 工具链，打出的就是 64 位 Windows 版
@@ -146,6 +147,7 @@ jobs:
         with:
           name: ${{ env.APP_NAME }}-Windows
           path: dist/${{ env.APP_NAME }}-Windows-x64.exe
+          if-no-files-found: error
 
   release:
     needs: [build-macos, build-windows]
