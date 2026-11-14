@@ -4,8 +4,9 @@
   1. 命名检查：解析「姓名+手机号码+入团志愿书.pdf」，不合格的文件标记跳过
   2. 按名单班级路由：12407 → ssfz12407；解析不到班级/账号的标记失败，不影响其余文件
   3. 压缩：超过 9.5MB 的自动压到阈值内（压临时副本，不动原文件）
-  4. 逐账号登录（先探测会话，失效才登录）后上传；上传前按团员报到资料状态预检，
-     未完成报到（报到被撤回/待审核/被退回等）的团员直接跳过并说明原因，不浪费一次失败请求
+  4. 逐账号登录（先探测会话，失效才登录）后上传；上传前按团员状况预检
+     （优先复用 4 小时内的成员缓存，不重复请求）：未完成报到、线上已显示
+     审核通过（电子志愿书已上传）的团员直接跳过并说明原因，不浪费一次失败请求
   5. 结束后反馈：成功 / 跳过 / 失败 各多少，明细见表格
 """
 
@@ -34,11 +35,13 @@ from app.ui.page import FluentPage, note_label
 from app.constants import LIMITS, MB
 from app.domain.chunk_protocol import check_site_limits
 from app.domain.naming import analyze_file_name
+from app.domain.org_manage import record_from_dict
 from app.domain.upload_routing import (
     resolve_file_targets,
     roster_class_lookup,
-    upload_block_reason,
+    upload_skip_reason,
 )
+from app.services import login_gate, store
 from app.services.workspace import load_pending
 
 TARGET = LIMITS["PDF_DEFAULT_TARGET_BYTES"]
@@ -79,8 +82,30 @@ class UploadWorker(QThread):
             return None, "需要验证码（密码失败过多），请先在网页端登录一次"
         return None, msg or "登录失败"
 
-    def _member_map(self, client) -> dict[tuple[str, str], object]:
-        """该团支部的 (姓名, 手机号) → 团员记录（含报到状态与 mid）。"""
+    def _member_map(self, client, account: str) -> dict[tuple[str, str], object]:
+        """该团支部的 (姓名, 手机号) → 团员记录（含报到/志愿书状态与 mid）。
+
+        优先复用「组织状况」维护的成员缓存（4 小时内拉取过就不重复请求，
+        也不动缓存数据）；缓存缺失或过期才在线拉取。"""
+        from datetime import datetime, timezone
+
+        blob = (store.load().get("memberCache") or {}).get(account) or {}
+        ts = blob.get("fetchedAt", "")
+        fresh = False
+        if ts:
+            try:
+                age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds() / 3600
+                fresh = 0 <= age_h < login_gate.FRESH_HOURS
+            except ValueError:
+                fresh = False
+        if fresh:
+            try:
+                m = {(d["name"], d["mobile"]): record_from_dict(d)
+                     for d in blob.get("members", [])}
+                if m:
+                    return m
+            except (KeyError, TypeError):
+                pass  # 缓存结构异常 → 回落在线拉取
         try:
             members, _ = client.get_all_members()
         except Exception:
@@ -110,18 +135,18 @@ class UploadWorker(QThread):
                     for j in acc_jobs:
                         self.row_ready.emit(j["row"], account, os.path.basename(j["path"]), "失败", f"登录失败：{err}")
                     continue
-                self.stage.emit(f"核对 {account} 团员报到情况…")
-                member_map = self._member_map(client)
+                self.stage.emit(f"核对 {account} 团员状况…")
+                member_map = self._member_map(client, account)
 
                 for j in acc_jobs:
                     if self._stop:
                         break
                     path, name = j["path"], os.path.basename(j["path"])
-                    # 预检：未完成报到的团员直接跳过
+                    # 预检：未完成报到拦截；线上已审核通过（志愿书已上传）跳过重复上传
                     a = analyze_file_name(name)
                     member = member_map.get(a.parsed) if a.parsed else None
                     if member is not None:
-                        reason = upload_block_reason(member.report_data_status)
+                        reason = upload_skip_reason(member.report_data_status, member.ebook_status)
                         if reason:
                             self.row_ready.emit(j["row"], account, name, "跳过", reason)
                             skipped += 1
@@ -342,6 +367,6 @@ class UploadPage(FluentPage):
         if audit_manual:
             parts.append(f"{audit_manual} 个需网页端手动审核（原因见表格说明）")
         if skipped:
-            parts.append(f"跳过 {skipped}（未完成报到等，原因见表格）")
+            parts.append(f"跳过 {skipped}（未完成报到/线上已审核通过等，原因见表格）")
         parts.append(f"失败 {failed}")
         InfoBar.success("上传批次结束", "、".join(parts), duration=8000, parent=self)

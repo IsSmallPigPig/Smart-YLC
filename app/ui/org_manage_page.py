@@ -119,10 +119,16 @@ class MemberSyncWorker(QThread):
             for i, acc in enumerate(self.accounts):
                 if self._stop:
                     break
+                acc = dict(acc)
+                # 新鲜跳过的账号不发网络请求，直接返回、不吃账号间隔
+                #（30 秒快刷全靠这批账号秒回，间隔只留在真正拉取的账号之间）
+                if login_gate.fresh_skip(acc, "memberCache"):
+                    self.account_done.emit(*self._fetch_one(acc))
+                    continue
                 if i:
                     time.sleep(self.BG_GAP_SECONDS)
                 try:
-                    self.account_done.emit(*self._fetch_one(dict(acc)))
+                    self.account_done.emit(*self._fetch_one(acc))
                 except Exception as e:
                     self.account_done.emit("", "", 0, "network", f"同步线程异常：{e}")
         else:

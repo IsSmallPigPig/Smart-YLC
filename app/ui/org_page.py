@@ -124,6 +124,9 @@ class OrgPage(FluentPage):
         self._members_max = 10
         self._error_rows: list = []
         self._transfer_applied = 0
+        self._snapshot = None  # 刷新前的展示快照（整轮失败时回滚）
+        self._first_result = True
+        self._ok_accounts = 0
 
         lay = self.vBoxLayout
 
@@ -193,22 +196,92 @@ class OrgPage(FluentPage):
             InfoBar.warning("未配置账号", "请先到「系统配置」添加团支部账号", duration=3000, parent=self)
             return
         self.start_btn.setEnabled(False)
+        # 保留现有展示：归零累加器但不重绘，新账号结果陆续抵达时逐个替换；
+        # 整轮一无所获（全失败/全跳过）时回滚快照，组织状况数据不丢
+        self._snapshot = (
+            self._total, self._uploaded, dict(self._by_kind), self._members_max,
+            self._transfer_applied, self.transfer_note.text(), list(self._error_rows))
         self._total = self._uploaded = 0
         self._by_kind = {"identity": 0, "report": 0, "fees": 0}
         self._members_max = 10
         self._transfer_applied = 0
         self._error_rows = []
-        self.transfer_note.setText("转接明细：—")
-        self._clear_cards()
-        self.export_btn.setEnabled(False)
-        self._set_ratio(0, 0)
-        self._update_bars()
+        self._first_result = True
+        self._ok_accounts = 0
         self.worker = OrgWorker(accounts)
         self.worker.account_done.connect(self._on_account)
-        self.worker.all_done.connect(lambda: self.start_btn.setEnabled(True))
+        self.worker.all_done.connect(self._on_run_done)
         self.worker.start()
 
+    def _on_run_done(self):
+        self.start_btn.setEnabled(True)
+        if self._ok_accounts == 0:
+            # 这一轮没有拿到任何账号数据：恢复刷新前的组织状况
+            (self._total, self._uploaded, byk, self._members_max,
+             self._transfer_applied, note, rows) = self._snapshot
+            self._by_kind = byk
+            self._error_rows = rows
+            self.transfer_note.setText(note)
+            self._set_ratio(self._total, self._uploaded)
+            self._update_bars()
+            self._clear_cards()
+            for r in rows:
+                self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
+                                  r.problems, r.branch, r.kinds)
+            self.error_title.setText(f"错误团员（{len(rows)}）")
+
+    def refresh_offline(self):
+        """从成员缓存（memberCache）离线重算三项统计，无网络请求。
+
+        成员同步拿到新数据后由 30 秒快刷调用；转接统计保留最近一次在线结果，
+        现有展示直接被新数据整体替换（缓存为空则不动）。"""
+        from app.services import store
+
+        cache = store.load().get("memberCache") or {}
+        if not cache:
+            return
+        from app.domain.org_manage import record_from_dict
+
+        total = uploaded = 0
+        by_kind = {"identity": 0, "report": 0, "fees": 0}
+        members_max = 10
+        error_rows: list = []
+        id_tpl, rep_tpl = default_identity_template(), default_report_template()
+        for user, blob in cache.items():
+            members = [record_from_dict(d) for d in blob.get("members", [])]
+            branch = blob.get("branch") or user
+            results = (
+                build_identity_results(members, id_tpl)
+                + build_report_results(members, rep_tpl)
+                + build_fee_results(members)
+            )
+            s = summarize_members(members, results)
+            total += s.total
+            uploaded += s.uploaded
+            members_max = max(members_max, s.total)
+            for k, v in dict(s.by_kind).items():
+                by_kind[k] = by_kind.get(k, 0) + v
+            error_rows.extend(build_error_rows(results, branch))
+        self._total, self._uploaded = total, uploaded
+        self._by_kind = by_kind
+        self._members_max = members_max
+        self._error_rows = error_rows
+        self._set_ratio(total, uploaded)
+        self._update_bars()
+        self._clear_cards()
+        for r in error_rows:
+            self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
+                              r.problems, r.branch, r.kinds)
+        self.error_title.setText(f"错误团员（{len(error_rows)}）")
+        if error_rows:
+            self.export_btn.setEnabled(True)
+
     def _on_account(self, user, branch, total, uploaded, abnormal, by_kind, status, message, transfer, rows):
+        if self._first_result:
+            # 新数据开始抵达：旧卡片让位（本轮一无所获时 _on_run_done 会回滚）
+            self._first_result = False
+            self._clear_cards()
+        self._ok_accounts += status == "ok"
         self._total += total
         self._uploaded += uploaded
         self._set_ratio(self._total, self._uploaded)

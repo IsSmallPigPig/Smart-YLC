@@ -4,7 +4,7 @@
 即在本地标记已读（持久化到 messagesRead），支持一键全部标为已读。
 分组大标题；卡片主标题是团员姓名（手机号在系统名单/本地名单里能查到时），
 原站内信标题（去掉【系统通知】中括号）作为彩色底白字小标签放在大标题右侧；
-未读消息另加「未读」标签和淡色卡片底。
+未读消息另加「未读」标签（卡片不加底色）。
 
 消息缓存持久化到配置 messagesCache（只写不删）；拉取走并发线程（≤4），
 失败账号弹 InfoBar 不影响其他账号；缓存为空或超过 4 小时进入页面时自动拉取。
@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -49,16 +49,26 @@ SECTION_PAGE = 60  # 每个分组一次渲染的卡片数，其余走「显示�
 
 
 class MessageFetchWorker(QThread):
-    """并发拉取各账号站内信，逐账号落盘 messagesCache。只读查询。"""
+    """并发拉取各账号站内信，逐账号落盘 messagesCache。只读查询。
+
+    force=True（30 秒快刷）：绕开 4 小时新鲜跳过，每轮都拉，用于检测新消息；
+    风控/验证码冷却账号仍被登录闸门拦下，密码已错的账号直接跳过不尝试登录。
+    缓存里已有消息时，本次拉到的新 receive_id 会发出 new_ready 信号（首次
+    拉取的账号不算新消息，避免一上来刷一屏通知）。"""
 
     account_done = Signal(str, int, str, str)  # user, count, status, message
+    new_ready = Signal(list)  # 新消息摘要 [{account, title, content, time}]
     all_done = Signal()
 
     MAX_WORKERS = 4
+    # 快刷时已知不可用的账号状态：不再尝试（密码错误的账号反复登录会被锁定）
+    FAST_SKIP_HEALTH = {"failed", "captcha", "cooldown"}
 
-    def __init__(self, accounts: list[dict]):
+    def __init__(self, accounts: list[dict], force: bool = False):
         super().__init__()
         self.accounts = accounts
+        self.force = force
+        self._new: list[dict] = []
         self._stop = False
 
     def stop(self):
@@ -68,8 +78,11 @@ class MessageFetchWorker(QThread):
         user, pwd = acc.get("userName", ""), acc.get("password", "")
         if not user or not pwd:
             return user, 0, "empty", "账号或密码为空"
-        # 状态正常且 4 小时内拉取过 → 无需刷新；验证码/风控冷却中 → 跳过
-        skip = login_gate.fresh_skip(acc, "messagesCache")
+        # 快刷时密码错误/冷却中的账号直接跳过，不发起网络请求
+        if self.force and (acc.get("health") or {}).get("status") in self.FAST_SKIP_HEALTH:
+            return user, 0, "cooldown", "该账号不可用（密码错误/冷却中），快刷跳过"
+        # 状态正常且 4 小时内拉取过 → 无需刷新（快刷模式除外）；冷却中 → 跳过
+        skip = "" if self.force else login_gate.fresh_skip(acc, "messagesCache")
         if skip:
             return user, 0, "fresh", skip
         try:
@@ -83,18 +96,34 @@ class MessageFetchWorker(QThread):
                 # 合并而非整段覆盖：线上通知始终是「未读」，重复拉取按 receive_id
                 # 去重，已读标记（messagesRead）也在本地，旧消息不会反复涌入列表
                 cache = cfg.get("messagesCache", {})
+                old = {
+                    m.get("receive_id") or m.get("receiveId")
+                    for m in cache.get(user, {}).get("messages", [])
+                }
+                had_cache = bool(cache.get(user, {}).get("messages"))
                 merged = {
                     m.get("receive_id"): m
                     for m in cache.get(user, {}).get("messages", [])
                     if m.get("receive_id")
                 }
+                fresh_rows = []
                 for v in views:
-                    merged[v.receive_id] = v.__dict__ | {"kind": v.kind}
+                    row = v.__dict__ | {"kind": v.kind}
+                    merged[v.receive_id] = row
+                    # 已有缓存时，缓存里没有的 receive_id 才算新消息
+                    if had_cache and v.receive_id not in old:
+                        fresh_rows.append({
+                            "account": user,
+                            "title": v.title,
+                            "content": (v.content or "")[:120],
+                            "time": v.time_str,
+                        })
                 cache[user] = {
                     "fetchedAt": datetime.now(timezone.utc).isoformat(),
                     "messages": list(merged.values()),
                 }
                 cfg["messagesCache"] = cache
+                self._new.extend(fresh_rows)
 
             # 逐账号落盘（store.update 持锁整段读写），中途停掉不丢已拉取的消息
             store.update(_write_cache)
@@ -113,6 +142,8 @@ class MessageFetchWorker(QThread):
                     self.account_done.emit(*fut.result())
                 except Exception as e:
                     self.account_done.emit("", 0, "network", f"拉取线程异常：{e}")
+        if self._new and not self._stop:
+            self.new_ready.emit(self._new)
         self.all_done.emit()
 
 
@@ -330,10 +361,7 @@ class MessagesPage(FluentPage):
     def _message_card(self, v: MessageView, unread: bool) -> QWidget:
         card = CardWidget()
         card.setCursor(Qt.CursorShape.PointingHandCursor)
-        if unread:
-            # 未读：主色半透明淡染（setBackgroundColor 走 fluent 自绘，圆角保留）
-            card.setBackgroundColor(QColor(0, 103, 244, 64 if isDarkTheme() else 32))
-        else:
+        if not unread:
             # 已读：整卡变暗，不改字体颜色
             from PySide6.QtWidgets import QGraphicsOpacityEffect
 

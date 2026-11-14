@@ -107,10 +107,25 @@ def resolve_file_targets(
 # league_member.js auditStatus 语义：0/1/2/4/5/8 报到流程未走完，3/6/7 可传志愿书
 UNREPORTED_STATUSES = {"报到被撤回", "报到待审核", "报到被退回", "修改资料待审核", "修改资料被退回", "待省级管理员审核"}
 
+# 电子志愿书状态（volunteerBookModifyStatus 枚举）：这两种说明志愿书已上传且通过审核，
+# 线上已有电子志愿书，重复上传没有意义
+UPLOADED_EBOOK_STATUSES = {"通过", "已上传"}
+
 
 def upload_block_reason(report_status: str) -> str:
     """团员报到资料状态 → 拦截原因；可上传返回空串。"""
     s = (report_status or "").strip()
     if s in UNREPORTED_STATUSES:
         return f"该团员未完成报到（{s}），智慧团建暂不接受志愿书上传，需先在网页端完成报到"
+    return ""
+
+
+def upload_skip_reason(report_status: str, ebook_status: str) -> str:
+    """上传前预检：未完成报到拦截，线上已有审核通过的电子志愿书跳过重复上传。"""
+    blocked = upload_block_reason(report_status)
+    if blocked:
+        return blocked
+    e = (ebook_status or "").strip()
+    if e in UPLOADED_EBOOK_STATUSES:
+        return f"线上系统已显示审核通过（电子志愿书{e}），无需重复上传"
     return ""
