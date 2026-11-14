@@ -15,6 +15,14 @@ import pytest
 from app.ui.browser_page import BrowserWindow
 
 
+class _Profile:
+    def __init__(self):
+        self.dropped = False
+
+    def deleteLater(self):
+        self.dropped = True
+
+
 class _Tab:
     def __init__(self, title: str):
         self.title = title
@@ -39,6 +47,7 @@ class _FakeBrowser:
         self._state = {u: "ready" for u in open_users}
         self._login_token = {u: 1 for u in open_users}
         self._auto_logins = {u: 2 for u in open_users}
+        self._profiles = {u: _Profile() for u in open_users}
         self.relogged: list[str] = []
         self.closed: list[str] = []
 
@@ -96,9 +105,11 @@ def test_refresh_accounts_closes_tab_of_deleted_account():
     b = _FakeBrowser([_acc("ssfz1", "高一1班"), _acc("ssfz2", "高一2班")], ["ssfz1", "ssfz2"])
     b._creds = {"ssfz1": ("p", ""), "ssfz2": ("p", "")}
     b.accounts = [_acc("ssfz1", "高一1班")]
+    stale = b._profiles["ssfz2"]
     b.refresh_accounts()
     assert b.closed == ["ssfz2"]
     assert list(b._views) == ["ssfz1"]
+    assert stale.dropped and "ssfz2" not in b._profiles   # 账号没了就不留存储分区
     assert b.relogged == []
 
 
