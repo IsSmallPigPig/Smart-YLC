@@ -17,12 +17,14 @@ class HomePage(FluentPage):
         lay = self.vBoxLayout
         lay.setSpacing(10)
 
-        # 欢迎大字块（大标题左对齐）
-        lay.addSpacing(72)
-        lay.addWidget(SubtitleLabel("欢迎，"))
-        lay.addSpacing(2)
-        lay.addWidget(TitleLabel("团委管理员"))
-        lay.addSpacing(28)
+        # 欢迎大字块：上下弹性留白把它撑在首页上半区（约占可视高度一半），左对齐
+        lay.addStretch(1)
+        self.hello_label = SubtitleLabel("欢迎，")
+        self.title_label = TitleLabel("团委管理员")
+        lay.addWidget(self.hello_label)
+        lay.addSpacing(6)
+        lay.addWidget(self.title_label)
+        lay.addStretch(1)
 
         # 两个入口按钮：居中
         row = QHBoxLayout()
@@ -41,3 +43,21 @@ class HomePage(FluentPage):
         lay.addSpacing(20)
 
         lay.addWidget(note_label("上传后需在智慧团建网页端点击「审核」完成认证"))
+
+        self._apply_font()
+
+    def _apply_font(self):
+        """大字随窗口高度缩放：团委管理员约 0.14 倍视口高，欢迎略小。"""
+        vh = max(420, self.viewport().height())
+        title_px = max(40, int(vh * 0.14))
+        hello_px = max(32, int(vh * 0.105))
+        f = self.title_label.font()
+        f.setPixelSize(title_px)
+        self.title_label.setFont(f)
+        f2 = self.hello_label.font()
+        f2.setPixelSize(hello_px)
+        self.hello_label.setFont(f2)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._apply_font()
