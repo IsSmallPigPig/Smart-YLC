@@ -123,16 +123,16 @@ def import_secretaries(path: str) -> list[dict]:
 
 
 def save_account_template(path: str) -> int:
-    """生成账号导入模板 xlsx（列：备注 / 账号 / 密码），返回示例行数。"""
+    """生成账号导入模板 xlsx（列：账号 / 密码 / 备注 / 届别，后两列可留空），返回示例行数。"""
     from openpyxl import Workbook
 
     wb = Workbook()
     ws = wb.active
     ws.title = "团支部账号"
-    ws.append(["备注", "账号", "密码"])
-    ws.append(["普通高中高三七班", "ssfz12407", "-abc12345"])
-    ws.append(["普通高中高三一班", "ssfz12401", "-abc12345"])
-    for col, width in zip("ABC", (22, 16, 16)):
+    ws.append(["账号", "密码", "备注", "届别"])
+    ws.append(["ssfz12407", "-abc12345", "普通高中高三七班", "2026"])
+    ws.append(["ssfz12401", "-abc12345", "", ""])  # 备注与届别可留空：备注按编号规则自动预填
+    for col, width in zip("ABCD", (16, 16, 22, 10)):
         ws.column_dimensions[col].width = width
     wb.save(path)
     return 2

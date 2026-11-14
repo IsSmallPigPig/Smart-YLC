@@ -15,7 +15,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QThread, QTimer, Signal, Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QTableWidgetItem, QWidget, QMenu
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QTableWidgetItem, QTreeWidgetItem, QWidget
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -30,9 +30,11 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     StrongBodyLabel,
+    SubtitleLabel,
     SwitchButton,
     TableWidget,
     ToolButton,
+    TreeWidget,
 )
 
 from app.ui import dialogs
@@ -540,25 +542,59 @@ class SettingsPage(FluentPage):
     # ---------- 账号筛选（树状：学部 → 年级 → 班级） ----------
 
     def _show_filter_menu(self):
+        """筛选弹窗：fluent TreeWidget 树状（学部 → 年级 → 班级），点班级生效并关闭。"""
         rule = self.org_rule()
         tree: dict[str, dict[str, dict[str, str]]] = {}
         for a in self.accounts:
             info = parse_class_code(a["userName"], rule)
             if info:
                 tree.setdefault(info.dept, {}).setdefault(info.grade, {})[str(info.class_no)] = info.label
-        menu = QMenu(self)
-        menu.addAction("显示全部").triggered.connect(self._clear_filter)
+
+        dlg = dialogs.FluentPanelDialog(self.window())
+        dlg.subtitle = SubtitleLabel("按团支部筛选", dlg.widget)
+        dlg.viewLayout.addWidget(dlg.subtitle)
+
+        tw = TreeWidget(dlg.widget)
+        tw.setHeaderHidden(True)
+        tw.setMinimumHeight(300)
+
+        def _add(text: str, label: str | None, parent_item=None) -> QTreeWidgetItem:
+            # 顶层节点必须以 tree 为父构造（自动挂树）；label=None 表示纯展开节点
+            item = (QTreeWidgetItem(parent_item, [text]) if parent_item is not None
+                    else QTreeWidgetItem(tw, [text]))
+            if label is not None:
+                item.setData(0, Qt.ItemDataRole.UserRole, label)
+            return item
+
+        _add("显示全部", "")  # 顶层；label="" 表示清除筛选
         if not tree:
-            menu.addAction("（没有能按规则解析的账号）").setEnabled(False)
+            empty = _add("（没有能按规则解析的账号）", None)
+            empty.setDisabled(True)
         for dept in sorted(tree):
-            sub = menu.addMenu(dept)
+            d = _add(dept, None)
             for grade in sorted(tree[dept]):
-                sub2 = sub.addMenu(grade)
+                g = _add(grade, None, d)
                 for cls in sorted(tree[dept][grade], key=int):
-                    label = tree[dept][grade][cls]
-                    sub2.addAction(f"{cls} 班").triggered.connect(
-                        lambda checked=False, lb=label: self._apply_filter(lb))
-        menu.exec(self.filter_btn.mapToGlobal(self.filter_btn.rect().bottomLeft()))
+                    _add(f"{cls} 班", tree[dept][grade][cls], g)
+        tw.expandAll()
+        def _on_clicked(item: QTreeWidgetItem, _col: int):
+            label = item.data(0, Qt.ItemDataRole.UserRole)
+            if label is None:  # 学部/年级节点：单击切换展开
+                item.setExpanded(not item.isExpanded())
+                return
+            if label == "":
+                self._clear_filter()
+            else:
+                self._apply_filter(label)
+            dlg.accept()
+
+        tw.itemClicked.connect(_on_clicked)
+        dlg.viewLayout.addWidget(tw)
+
+        dlg.widget.setMinimumWidth(420)
+        dlg.yesButton.setText("关闭")
+        dlg.hideCancelButton()
+        dlg.exec()
 
     def _apply_filter(self, label: str):
         self._filter_label = label
@@ -708,30 +744,46 @@ class SettingsPage(FluentPage):
             return
         rows = self._read_account_file(path)
         if not rows:
-            InfoBar.warning("没有读到账号", "每行应为：备注（可空） 账号 密码；xlsx 需有「账号」「密码」列", duration=4000, parent=self)
+            InfoBar.warning("没有读到账号",
+                            "每行应为：账号 密码（备注、届别可空）；xlsx 需有「账号」「密码」列",
+                            duration=4000, parent=self)
             return
         rule = self.org_rule()
         stat = {"added": 0, "dedup": 0, "overwritten": 0, "kept": 0}
         prefilled = 0
-        for account, pwd, remark in rows:
+        bad_years: list[str] = []
+        for account, pwd, remark, year in rows:
             if not remark:
                 remark = describe_code(account, rule)  # 备注留空 → 按编号规则预填
                 prefilled += 1 if remark else 0
             stat[self._upsert_account(account, pwd, remark)] += 1
+            if year:
+                from app.domain.transfer import parse_graduate_year
+
+                if parse_graduate_year(year) is None:
+                    bad_years.append(account)
+                    continue
+                acc = next(a for a in self.accounts if a["userName"] == account)
+                acc["graduateYear"] = year
         self._after_accounts_changed()
         msg = f"新增 {stat['added']}，去重跳过 {stat['dedup']}，覆盖 {stat['overwritten']}，冲突保留 {stat['kept']}"
         if prefilled:
             msg += f"；按编号规则预填备注 {prefilled} 个"
+        if bad_years:
+            msg += f"；届别无效未设置：{'、'.join(bad_years[:5])}"
         InfoBar.success("导入完成", msg, duration=5000, parent=self)
 
-    def _read_account_file(self, path: str) -> list[tuple[str, str, str]]:
-        """读账号文件 → (账号, 密码, 备注)。新格式：备注第一列、账号第二列、密码第三列；
-        旧格式（账号、密码、备注）兼容识别；备注留空的行按编号规则在导入时预填。"""
+    def _read_account_file(self, path: str) -> list[tuple[str, str, str, str]]:
+        """读账号文件 → (账号, 密码, 备注, 届别)。
+
+        xlsx 表头格式：「账号」「密码」必填，「备注」「届别」可选；
+        旧格式（备注、账号、密码三列，或纯文本行）兼容识别；
+        备注留空的行按编号规则在导入时预填。"""
         import re as _re
 
         from app.domain.org_rule import parse_account_row
 
-        rows: list[tuple[str, str, str]] = []
+        rows: list[tuple[str, str, str, str]] = []
         if path.lower().endswith((".xlsx", ".xlsm")):
             from openpyxl import load_workbook
 
@@ -745,6 +797,7 @@ class SettingsPage(FluentPage):
                 u = next((i for i, h in enumerate(header) if h in ("账号", "用户名", "userName", "account")), 1)
                 p = next((i for i, h in enumerate(header) if h in ("密码", "password")), 2)
                 r = next((i for i, h in enumerate(header) if h in ("备注", "说明", "remark")), 0)
+                y = next((i for i, h in enumerate(header) if h in ("届别", "毕业年份", "届")), None)
                 for raw in data[1:]:
                     if not raw:
                         continue
@@ -753,20 +806,20 @@ class SettingsPage(FluentPage):
                         return str(raw[i]).strip() if i is not None and i < len(raw) and raw[i] is not None else ""
 
                     if cell(u) and cell(p):
-                        rows.append((cell(u), cell(p), cell(r)))
+                        rows.append((cell(u), cell(p), cell(r), cell(y)))
             else:
                 for raw in data:
                     if not raw:
                         continue
                     parsed = parse_account_row([c for c in raw])
                     if parsed:
-                        rows.append(parsed)
+                        rows.append((*parsed, ""))
         else:
             with open(path, encoding="utf-8", errors="replace") as f:
                 for line in f:
                     parsed = parse_account_row(_re.split(r"[,;\s]+", line.strip()))
                     if parsed:
-                        rows.append(parsed)
+                        rows.append((*parsed, ""))
         return rows
 
     # ---------- 账号删除（行内按钮 + 勾选批量） ----------
