@@ -318,12 +318,16 @@ class SettingsPage(FluentPage):
         row_tpl.addWidget(self.template_btn)
         row_tpl.addStretch(1)
         r.addLayout(row_tpl)
-        # 已导入名单列表：一行一个学期，便于管理多个表格
+        # 已导入名单列表：一行一个学期，便于管理多个表格；横向铺满卡片
         self.roster_table = TableWidget()
         self.roster_table.setColumnCount(3)
         self.roster_table.setHorizontalHeaderLabels(["学期", "人数", "名单文件"])
         self.roster_table.setEditTriggers(self.roster_table.EditTrigger.NoEditTriggers)
-        self.roster_table.setMinimumHeight(120)
+        header = self.roster_table.horizontalHeader()
+        header.setSectionResizeMode(0, header.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, header.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, header.ResizeMode.Stretch)  # 文件列吃满剩余宽度
+        self.roster_table.setColumnWidth(2, 320)  # stretch 前给个合理初始宽
         r.addWidget(self.roster_table)
         row_rdel = QHBoxLayout()
         self.roster_del_btn = PushButton(FIF.DELETE, "删除所选学期名单")
@@ -696,6 +700,9 @@ class SettingsPage(FluentPage):
                 self.roster_table.item(i, col).setFlags(
                     Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.roster_table.blockSignals(False)
+        # 高度随行数收缩，不留大片空白
+        self.roster_table.setFixedHeight(
+            min(max(len(self.rosters), 1), 8) * 36 + 42)
 
     def _delete_selected_roster(self):
         row = self.roster_table.currentRow()
