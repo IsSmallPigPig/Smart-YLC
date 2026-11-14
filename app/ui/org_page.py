@@ -33,7 +33,7 @@ from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services.api import SiteClient
 from app.ui.charts import BarRowWidget, ProgressDonut
 from app.ui.check_page import default_identity_template, default_report_template
-from app.ui.page import FluentPage, note_label, theme_font, section_title
+from app.ui.page import CallbackWorker, FluentPage, note_label, theme_font, section_title
 
 STATUS_LABEL = {
     "ok": "正常",
@@ -364,5 +364,20 @@ class OrgPage(FluentPage):
             return
         from app.services.excel import save_error_rows
 
-        n = save_error_rows(path, self._error_rows)
-        InfoBar.success("已导出", f"{n} 名错误团员 → {path}", duration=5000, parent=self)
+        rows = list(self._error_rows)
+        self.export_btn.setEnabled(False)
+
+        def _ok(n: int):
+            self.export_btn.setEnabled(True)
+            self._workers = [w for w in getattr(self, "_workers", []) if w is not worker]
+            InfoBar.success("已导出", f"{n} 名错误团员 → {path}", duration=5000, parent=self)
+
+        def _fail(msg: str):
+            self.export_btn.setEnabled(True)
+            InfoBar.error("导出失败", msg, duration=5000, parent=self)
+
+        worker = CallbackWorker(lambda: save_error_rows(path, rows), self)
+        worker.ok.connect(_ok)
+        worker.fail.connect(_fail)
+        self._workers = getattr(self, "_workers", []) + [worker]
+        worker.start()

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QTransform
 from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
@@ -115,6 +115,27 @@ class CollapsibleCard(CardWidget):
             img = icon.pixmap(16, 16).toImage().transformed(QTransform().rotate(180))
             icon = QIcon(QPixmap.fromImage(img))
         self.toggle_btn.setIcon(icon)
+
+
+class CallbackWorker(QThread):
+    """把一个函数放到后台线程跑，结果经信号回 GUI 线程。
+
+    用于界面上的文件解析/写盘等重活：ok(object) 带返回值，fail(str) 带异常信息。
+    调用方需持有引用防 GC（存到 self._workers 之类）。"""
+
+    ok = Signal(object)
+    fail = Signal(str)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+        self.finished.connect(self.deleteLater)
+
+    def run(self):
+        try:
+            self.ok.emit(self._fn())
+        except Exception as e:
+            self.fail.emit(str(e))
 
 
 class FluentPage(ScrollArea):

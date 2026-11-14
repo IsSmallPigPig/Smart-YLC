@@ -43,7 +43,7 @@ from qfluentwidgets import (
 )
 
 from app.ui import dialogs
-from app.ui.page import CollapsibleCard, FluentPage, SettingRow, note_label, sub_title
+from app.ui.page import CallbackWorker, CollapsibleCard, FluentPage, SettingRow, note_label, sub_title
 from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, describe_code, parse_class_code
 from app.domain.transfer import is_graduated
@@ -184,6 +184,7 @@ class SettingsPage(FluentPage):
         self._worker: HealthWorker | None = None
         self._ws_worker: WorkspaceWorker | None = None
         self._web_worker: WebOpenWorker | None = None
+        self._workers: list[CallbackWorker] = []  # 后台解析 worker 引用，防 GC
         self._ws_known: set[str] = set()
         self.home_page = None  # 由 MainWindow 注入，头图设置后即时生效
         self.window_ref = None  # 由 MainWindow 注入，毛玻璃开关生效用
@@ -493,24 +494,34 @@ class SettingsPage(FluentPage):
         self.notify_time_edit.setText(store.notify_time(cfg))
         self._refresh_autostart_btn()
 
-        # 名单：分学期（只新建未导入的学期没有文件路径，也要保留）
+        # 名单：分学期（只新建未导入的学期没有文件路径，也要保留）。
+        # 所有学期立即占位（下拉/名单表即时完整），xlsx 解析放后台线程，完成后替换数据
         self.rosters = {}
         self._roster_paths = {}
         semesters = dict(cfg.get("rosters") or {})
         if cfg.get("rosterPath") and not semesters:
             semesters[guess_semester()] = cfg["rosterPath"]  # 旧版单文件迁移
+        pending = []
         for sem, path in semesters.items():
+            self.rosters[sem] = Roster(sem)
+            self._roster_paths[sem] = path or ""
             if path and os.path.isfile(path):
-                try:
-                    self.rosters[sem] = self._parse_roster(path)
-                    self._roster_paths[sem] = path
-                except ValueError as e:
-                    InfoBar.warning(f"{sem} 名单加载失败", str(e), duration=5000, parent=self)
-            else:
-                # 无路径（新建未导入）或文件已不在：保留学期，内容为空
-                self.rosters.setdefault(sem, Roster(sem))
-                if path:
-                    self._roster_paths[sem] = path
+                pending.append((sem, path))
+        if pending:
+            def _parse_all():
+                out = []
+                for sem, path in pending:
+                    try:
+                        out.append((sem, path, self._parse_roster(path), None))
+                    except ValueError as e:
+                        out.append((sem, path, None, str(e)))
+                return out
+
+            w = CallbackWorker(_parse_all, self)
+            w.ok.connect(self._on_rosters_parsed)
+            w.fail.connect(lambda msg: InfoBar.error("名单加载失败", msg, duration=5000, parent=self))
+            self._workers.append(w)
+            w.start()
         self.semester_combo.blockSignals(True)
         self.semester_combo.clear()
         self.semester_combo.addItems(sorted(self.rosters) or [guess_semester()])
@@ -740,7 +751,17 @@ class SettingsPage(FluentPage):
             self, "选择账号文件", "", "表格或文本 (*.xlsx *.xlsm *.txt *.csv)")
         if not path:
             return
-        rows = self._read_account_file(path)
+        # xlsx 解析放后台线程，大文件不卡界面
+        self.import_btn.setEnabled(False)
+        w = CallbackWorker(lambda: self._read_account_file(path), self)
+        w.ok.connect(self._on_account_file_read)
+        w.fail.connect(lambda msg: (InfoBar.error("读取失败", msg, duration=5000, parent=self),
+                                    self.import_btn.setEnabled(True)))
+        self._workers.append(w)
+        w.start()
+
+    def _on_account_file_read(self, rows: list):
+        self.import_btn.setEnabled(True)
         if not rows:
             InfoBar.warning("没有读到账号",
                             "每行应为：账号 密码（备注、届别可空）；xlsx 需有「账号」「密码」列",
@@ -1194,6 +1215,16 @@ class SettingsPage(FluentPage):
 
         return import_roster(path)
 
+    def _on_rosters_parsed(self, results: list):
+        """启动名单后台解析完成：落盘内存、刷新列表与总表。"""
+        for sem, path, roster, err in results:
+            if err:
+                InfoBar.warning(f"{sem} 名单加载失败", err, duration=5000, parent=self)
+                continue
+            self.rosters[sem] = roster
+            self._roster_paths[sem] = path
+        self._refresh_roster()
+
     def _import_roster(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择名单", "", "Excel (*.xlsx *.xlsm)")
         if not path:
@@ -1202,11 +1233,17 @@ class SettingsPage(FluentPage):
         if not sem:
             InfoBar.warning("学期为空", "在学期框选择已有学期，或直接输入新学期名（如 2027春）", duration=3000, parent=self)
             return
-        try:
-            self.rosters[sem] = self._parse_roster(path)
-        except Exception as e:
-            InfoBar.error("名单导入失败", str(e), duration=5000, parent=self)
-            return
+        self.roster_btn.setEnabled(False)
+        w = CallbackWorker(lambda: self._parse_roster(path), self)
+        w.ok.connect(lambda roster, sem=sem, path=path: self._on_roster_imported(sem, path, roster))
+        w.fail.connect(lambda msg: (InfoBar.error("名单导入失败", msg, duration=5000, parent=self),
+                                    self.roster_btn.setEnabled(True)))
+        self._workers.append(w)
+        w.start()
+
+    def _on_roster_imported(self, sem: str, path: str, roster: Roster):
+        self.roster_btn.setEnabled(True)
+        self.rosters[sem] = roster
         self._roster_paths[sem] = path
         # 新学期名自动加入下拉列表（建立学期）
         items = [self.semester_combo.itemText(i) for i in range(self.semester_combo.count())]
@@ -1216,7 +1253,7 @@ class SettingsPage(FluentPage):
         self.roster_edit.setText(path)
         self._refresh_roster()
         self._save_config()
-        InfoBar.success(f"已导入 {sem}", f"{len(self.rosters[sem].rows)} 名团员", duration=3000, parent=self)
+        InfoBar.success(f"已导入 {sem}", f"{len(roster.rows)} 名团员", duration=3000, parent=self)
 
     def _on_semester_changed(self, sem: str):
         """切换学期时回显该学期已导入的名单文件。"""
