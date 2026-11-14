@@ -337,7 +337,7 @@ class MainWindow(MSFluentWindow):
         self.logo.setFixedSize(22, 22)
         self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         set_tip(self.logo, "智慧团委 Smart-YLC")
-        tb.insertWidget(tb.indexOf(self.titleBar.titleLabel), self.logo, 0,
+        tb.insertWidget(tb.indexOf(self.titleBar.titleLabel) + 1, self.logo, 0,
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         # 标题文字按同一基线居中，否则图标与文字看着不在一行
         self.titleBar.titleLabel.setAlignment(
@@ -375,7 +375,9 @@ class MainWindow(MSFluentWindow):
         on_org = (self.stackedWidget.currentWidget() is self.org_manage_page
                   and self.org_manage_page.isVisible())
         detail = on_org and self.org_manage_page.in_detail()
-        self.back_btn.setEnabled(bool(qrouter.history) or detail)
+        usable = bool(qrouter.history) or detail
+        self.back_btn.setEnabled(usable)
+        self.back_btn.setVisible(usable)
 
     # ---------- 标题栏搜索 ----------
 
