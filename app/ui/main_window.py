@@ -75,7 +75,7 @@ class MainWindow(MSFluentWindow):
 
         # 侧边栏顶部返回按钮：行为与旧版 NavigationInterface 的 returnButton 一致，
         # 沿 qrouter 历史回退，无历史时置灰
-        back_item = self.navigationBar.addItem(
+        back_item = self.navigationInterface.addItem(
             "return", FIF.RETURN, "", onClick=qrouter.pop,
             selectable=False, position=NavigationItemPosition.TOP)
 
