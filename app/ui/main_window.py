@@ -1,6 +1,5 @@
 """主窗口：MSFluentWindow（macOS 风格窄侧边栏），返回按钮在标题栏左上角，
-支持毛玻璃混合背景（系统配置可设）。文档检查/批量压缩不在侧边栏单列，
-从工具首页的卡片进入。"""
+支持毛玻璃混合背景（系统配置可设）。文档检查/批量压缩在侧边栏底部与系统配置一组。"""
 
 from __future__ import annotations
 
@@ -83,9 +82,9 @@ class MainWindow(MSFluentWindow):
         self.addSubInterface(self.check_page, FIF.CERTIFICATE, "批量检查")
         self.addSubInterface(self.org_page, FIF.PIE_SINGLE, "组织状况")
         self.addSubInterface(self.org_manage_page, FIF.PEOPLE, "组织管理")
-        # 文档检查/批量压缩从首页卡片进入，不在侧边栏单列
-        self.stackedWidget.addWidget(self.naming_page)
-        self.stackedWidget.addWidget(self.compress_page)
+        # 文档类工具与系统配置放在一起，置于侧边栏底部
+        self.addSubInterface(self.naming_page, FIF.EDIT, "文档检查", position=NavigationItemPosition.BOTTOM)
+        self.addSubInterface(self.compress_page, FIF.ZOOM, "批量压缩", position=NavigationItemPosition.BOTTOM)
         self.addSubInterface(
             self.settings_page, FIF.SETTING, "系统配置", position=NavigationItemPosition.BOTTOM
         )
