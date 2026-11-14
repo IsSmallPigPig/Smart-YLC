@@ -16,6 +16,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 
+from app.ui.hidpi import canvas_pixmap
+
 
 def icons_dir() -> Path:
     """图标目录：源码里是 app/assets/icons，打包后在临时目录的 assets/icons 下。"""
@@ -46,8 +48,7 @@ def native_pixmap(name: str, size: int = 32) -> QPixmap:
     if not renderer.isValid():
         return QPixmap()
 
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
+    pm = canvas_pixmap(size)
     painter = QPainter(pm)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     renderer.render(painter)

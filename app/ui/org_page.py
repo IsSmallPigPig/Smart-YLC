@@ -32,6 +32,7 @@ from app.domain.check_rules import (
 from app.domain.org_stats import KIND_LABEL, ErrorMemberRow, build_error_rows, summarize_members
 from app.domain.account_health import excluded_summary, split_accounts
 from app.domain.transfer import fetch_transfer_applies, is_graduated
+from app.services import store
 from app.services.api import SiteClient
 from app.ui.charts import BarRowWidget, ProgressDonut
 from app.ui import palette as P
@@ -303,8 +304,6 @@ class OrgPage(FluentPage):
         成员同步拿到新数据后由 30 秒快刷调用；转接统计保留最近一次在线结果，
         现有展示直接被新数据整体替换（缓存为空则不动）。检查逐人跑，量大时
         放到后台线程，不卡界面动画。"""
-        from app.services import store
-
         cache = store.load().get("memberCache") or {}
         if not cache:
             return
@@ -413,7 +412,6 @@ class OrgPage(FluentPage):
 
         transfer 为 None（离线重算）时保留上次在线结果；已删除账号的旧条目
         随本次写盘一并清理，避免僵尸支部常驻。"""
-        from app.services import store
 
         valid = {a.get("userName", "") for a in self.window_ref.settings_page.accounts}
         key = user.replace(self.GRAD_SUFFIX, "")
@@ -440,7 +438,6 @@ class OrgPage(FluentPage):
         都会更新缓存，重启不清除；正在统计时不覆盖）。"""
         if self.worker is not None and self.worker.isRunning():
             return
-        from app.services import store
 
         cache = store.load().get("orgStatsCache") or {}
         if not cache:
@@ -477,7 +474,8 @@ class OrgPage(FluentPage):
         self.error_title.setText(f"异常团员 {len(rows)}")
         if rows:
             self.export_btn.setEnabled(True)
-        stamp = f"，更新于 {updated}" if updated else ""
+        # 缓存里是 ISO 时间串，直接显示会带 T 和秒；截图/阅读都不好看
+        stamp = f"，更新于 {updated.replace('T', ' ')[:16]}" if updated else ""
         self.transfer_note.setText(
             f"转接申请 {applied} 人，成功 {succeeded}，审核中 {pending}，退回 {returned}{stamp}")
 

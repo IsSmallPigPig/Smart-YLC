@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QTransform
 from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
+from app.ui.hidpi import canvas_pixmap, ui_dpr
 from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, ScrollArea, StrongBodyLabel, TransparentToolButton, isDarkTheme, qconfig
 
 PAGE_MARGINS = (32, 24, 32, 24)
@@ -34,12 +35,14 @@ def chevron_left_icon(size: int = 16, enabled: bool = True) -> QIcon:
     QIcon.Disabled，不自己调透明度的话置灰状态看不出来。
     主题切换后要重新调用（颜色在生成位图时就定死了）。
     """
-    img = FIF.CHEVRON_RIGHT.icon().pixmap(size, size).toImage()
+    dpr = ui_dpr()
+    px = max(1, round(size * dpr))
+    img = FIF.CHEVRON_RIGHT.icon().pixmap(px, px).toImage()
     normal = QPixmap.fromImage(img.transformed(QTransform().rotate(180)))
+    normal.setDevicePixelRatio(dpr)
     if enabled:
         return QIcon(normal)
-    faded = QPixmap(normal.size())
-    faded.fill(Qt.GlobalColor.transparent)
+    faded = canvas_pixmap(size)
     painter = QPainter(faded)
     painter.setOpacity(0.4)
     painter.drawPixmap(0, 0, normal)
@@ -54,8 +57,12 @@ def chevron_icon(expanded: bool) -> QIcon:
     """
     icon = FIF.CHEVRON_DOWN_MED.icon()
     if expanded:
-        img = icon.pixmap(16, 16).toImage().transformed(QTransform().rotate(180))
-        return QIcon(QPixmap.fromImage(img))
+        dpr = ui_dpr()
+        px = max(1, round(16 * dpr))
+        img = icon.pixmap(px, px).toImage().transformed(QTransform().rotate(180))
+        pm = QPixmap.fromImage(img)
+        pm.setDevicePixelRatio(dpr)
+        return QIcon(pm)
     return icon
 
 
@@ -69,8 +76,7 @@ def triangle_icon(direction: str = "right", size: int = 16) -> QIcon:
     from PySide6.QtGui import QPolygonF
 
     color = QColor("#d6d6d6") if isDarkTheme() else QColor("#3a3a3a")
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
+    pm = canvas_pixmap(size)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setPen(Qt.PenStyle.NoPen)

@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QTimer, QThread, Signal, Qt
-from PySide6.QtGui import QAction, QIcon, QPixmap
+from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from qfluentwidgets import setTheme, Theme
@@ -118,6 +118,9 @@ def run_tray() -> int:
 
     # 托盘里也能打开主窗口，内嵌网页同样要求共享 OpenGL 上下文
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    # 与主界面一致：分数缩放按实际比例渲染（托盘菜单/通知图标也跟着清晰）
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     from app.setup import setup_app
