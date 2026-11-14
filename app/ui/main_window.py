@@ -51,7 +51,7 @@ if sys.platform == "darwin":
 class MainWindow(MSFluentWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("智慧团建管理员辅助")
+        self.setWindowTitle("智慧团委")
         self.setMinimumSize(960, 640)
 
         # 窗口自适应屏幕：85% 可用区域（上限 1180×760），居中

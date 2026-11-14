@@ -16,7 +16,7 @@ import os
 import shutil
 import tempfile
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QTableWidgetItem
 
@@ -31,7 +31,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
 )
 
-from app.ui.page import FluentPage, note_label
+from app.ui.page import FluentPage, fit_table_columns, note_label
 from app.constants import LIMITS, MB
 from app.domain.chunk_protocol import check_site_limits
 from app.domain.naming import analyze_file_name
@@ -289,6 +289,7 @@ class UploadPage(FluentPage):
         color = RESULT_COLOR.get(result)
         if color:
             self.table.item(i, 2).setForeground(QColor(color))
+        fit_table_columns(self.table)
 
     def _start(self):
         files = self._gather_files()
@@ -353,10 +354,16 @@ class UploadPage(FluentPage):
         self.worker.start()
 
     def _on_row(self, i: int, account: str, name: str, result: str, reason: str):
+        QTimer.singleShot(0, lambda: self._apply_row(i, account, name, result, reason))
+
+    def _apply_row(self, i: int, account: str, name: str, result: str, reason: str):
         self._set_row(i, name, account, result, reason)
         self.stat.setText(f"已处理 {i + 1}/{self.table.rowCount()}：{name}")
 
     def _on_done(self, ok: int, skipped: int, total: int, audit_ok: int, audit_manual: int):
+        QTimer.singleShot(0, lambda: self._apply_done(ok, skipped, total, audit_ok, audit_manual))
+
+    def _apply_done(self, ok: int, skipped: int, total: int, audit_ok: int, audit_manual: int):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._refresh_ws_note()

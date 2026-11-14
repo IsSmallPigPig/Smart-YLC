@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QTableWidgetItem
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout
@@ -23,7 +23,7 @@ from qfluentwidgets import (
     InfoBar,
 )
 
-from app.ui.page import FluentPage, note_label
+from app.ui.page import FluentPage, fit_table_columns, note_label
 from app.constants import NAME_SUFFIX, PDF_EXT_RE
 from app.domain.naming import analyze_file_name, apply_page_verdict, build_naming_report, page_verdict
 
@@ -125,6 +125,9 @@ class NamingPage(FluentPage):
         self.worker.start()
 
     def _on_done(self, report):
+        QTimer.singleShot(0, lambda: self._apply_done(report))
+
+    def _apply_done(self, report):
         self.scan_btn.setEnabled(True)
         self.report = report
         s = report.summary
@@ -142,6 +145,7 @@ class NamingPage(FluentPage):
             for col in range(5):
                 self.table.item(i, col).setForeground(color)
         self.rename_btn.setEnabled(any(i.parsed and i.suggested_name != i.original_name for i in issues))
+        fit_table_columns(self.table)
         InfoBar.success(
             self, "检查完成",
             f"共 {s.total} 个文件：通过 {s.ok}，有{'' if s.with_issues == 0 else '问题 ' + str(s.with_issues)}"

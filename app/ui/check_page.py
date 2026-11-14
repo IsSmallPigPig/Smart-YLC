@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtCore import QThread, QTimer, Signal, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFileDialog, QTableWidgetItem
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
@@ -24,7 +24,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
-from app.ui.page import FluentPage
+from app.ui.page import FluentPage, fit_table_columns
 from app.domain.check_rules import (
     CheckResult,
     CheckTemplate,
@@ -248,11 +248,19 @@ class CheckPage(FluentPage):
             self.table.setItem(r, col, item)
 
     def _on_account_done(self, user: str, results: list, error: str):
+        # 拆出 queued 信号处理栈：栈内直接改表格会触发 delegate override，
+        # PySide6 6.12 + 后台线程活跃时 shiboken 会崩溃
+        QTimer.singleShot(0, lambda: self._apply_account_done(user, results, error))
+
+    def _apply_account_done(self, user: str, results: list, error: str):
         if error:
             self._errors.append((user, error))
             self._append_error_row(user, error)
 
     def _on_done(self, results, diags, cross):
+        QTimer.singleShot(0, lambda: self._apply_done(results, diags, cross))
+
+    def _apply_done(self, results, diags, cross):
         self.scan_btn.setEnabled(True)
         kind_idx = self.kind_combo.currentIndex()
         if kind_idx < 3:
@@ -284,6 +292,7 @@ class CheckPage(FluentPage):
             self._append_error_row(user, err)
         self._fill_results(results)
         self.export_btn.setEnabled(bool(results))
+        fit_table_columns(self.table)
 
     def _fill_results(self, results):
         # 必须先扩行：QTableWidget 对超出 rowCount 的 setItem 会静默丢弃

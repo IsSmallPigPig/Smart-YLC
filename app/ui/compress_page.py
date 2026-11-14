@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QThread, Signal, QUrl
+from PySide6.QtCore import QThread, QTimer, Signal, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import QTableWidgetItem
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
@@ -23,7 +23,7 @@ from qfluentwidgets import (
 )
 
 from app.ui import dialogs
-from app.ui.page import FluentPage
+from app.ui.page import FluentPage, fit_table_columns
 from app.constants import LIMITS, MB, human_size
 from app.services.compress import compress_pdf
 
@@ -146,6 +146,7 @@ class CompressPage(FluentPage):
             self.table.setItem(i, 1, QTableWidgetItem(human_size(os.path.getsize(p))))
             for col in (2, 3, 4, 5):
                 self.table.setItem(i, col, QTableWidgetItem("…"))
+        fit_table_columns(self.table)
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.worker = CompressWorker(files, out_dir, target)
@@ -154,6 +155,9 @@ class CompressPage(FluentPage):
         self.worker.start()
 
     def _on_row(self, i: int, r: dict):
+        QTimer.singleShot(0, lambda: self._apply_row(i, r))
+
+    def _apply_row(self, i: int, r: dict):
         green, red, orange = QColor("#2e7d32"), QColor("#c62828"), QColor("#ef6c00")
         if r.get("error"):
             self.table.setItem(i, 3, QTableWidgetItem("失败"))
@@ -178,8 +182,12 @@ class CompressPage(FluentPage):
         done = i + 1
         self.ring.setValue(int(done / max(1, self.table.rowCount()) * 100))
         self.stat.setText(f"进行中 {done}/{self.table.rowCount()}：{r['name']}")
+        fit_table_columns(self.table)
 
     def _on_done(self, ok: int, total: int):
+        QTimer.singleShot(0, lambda: self._apply_done(ok, total))
+
+    def _apply_done(self, ok: int, total: int):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.ring.setValue(100)
