@@ -1,7 +1,7 @@
-"""工具首页：头图横幅（渐变过渡到背景）+ 欢迎大字 + 居中两个入口按钮。
+"""工具首页：头图铺满顶部（渐变过渡到背景）+ 欢迎大字 + 居中两个入口按钮。
 
 字重体系：标题类文字用重字重（Black/Bold），说明类用小号常规字重。
-头图持久化到配置文件 headerImage 键，未设置时显示同色系占位渐变。
+头图在「系统配置」设置，持久化到配置文件 headerImage 键，未设置时显示同色系占位渐变。
 """
 
 from __future__ import annotations
@@ -10,12 +10,14 @@ import os
 
 from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QColor, QFont, QPainter, QLinearGradient, QPainterPath, QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import FluentIcon as FIF
-from qfluentwidgets import InfoBar, PrimaryPushButton, PushButton, SubtitleLabel, TitleLabel, ToolButton, isDarkTheme
+from qfluentwidgets import PrimaryPushButton, PushButton, SubtitleLabel, TitleLabel, isDarkTheme
 
 from app.ui.page import FluentPage, note_label
+
+BANNER_RATIO = 0.40  # 头图占视口高度的比例，铺满上方页面
 
 
 def page_bg_color() -> QColor:
@@ -30,26 +32,17 @@ def page_bg_color() -> QColor:
 
 
 class Banner(QWidget):
-    """头图横幅：图片 cover 铺满，底部渐隐到页面背景色；未设图时显示同色渐变占位。"""
+    """头图：铺满整个宽度、直角贴边，图片 cover 铺满，底部渐隐到页面背景色；未设图时显示同色渐变占位。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap: QPixmap | None = None
-        self.setMinimumHeight(120)
-
-        self.pick_btn = ToolButton(FIF.PHOTO, self)
-        self.pick_btn.setToolTip("设置头图")
-        self.clear_btn = ToolButton(FIF.DELETE, self)
-        self.clear_btn.setToolTip("清除头图")
-        self.clear_btn.setVisible(False)
 
     def set_image_path(self, path: str):
         if path and os.path.isfile(path):
             self._pixmap = QPixmap(path)
-            self.clear_btn.setVisible(True)
         else:
             self._pixmap = None
-            self.clear_btn.setVisible(False)
         self.update()
 
     def paintEvent(self, e):
@@ -58,10 +51,6 @@ class Banner(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
 
         bg = page_bg_color()
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
-        painter.setClipPath(path)
-
         w, h = self.width(), self.height()
         if self._pixmap and not self._pixmap.isNull():
             # cover 铺满：等比缩放到覆盖后居中裁剪
@@ -76,21 +65,12 @@ class Banner(QWidget):
             grad.setColorAt(1, bg)
             painter.fillRect(self.rect(), grad)
 
-        # 底部 45% 渐隐到页面背景，与下方内容自然衔接
-        fade = QLinearGradient(0, h * 0.55, 0, h)
+        # 底部 40% 渐隐到页面背景，与下方内容自然衔接
+        fade = QLinearGradient(0, h * 0.60, 0, h)
         top = QColor(bg.red(), bg.green(), bg.blue(), 0)
         fade.setColorAt(0, top)
         fade.setColorAt(1, bg)
-        painter.fillRect(QRectF(0, h * 0.55, w, h * 0.45), fade)
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        # 右上角小按钮
-        m = 10
-        bw = self.clear_btn.isVisible()
-        if bw:
-            self.clear_btn.move(self.width() - m - self.clear_btn.width(), m)
-        self.pick_btn.move(self.width() - m - self.pick_btn.width() - (bw * (self.clear_btn.width() + 4)), m)
+        painter.fillRect(QRectF(0, h * 0.60, w, h * 0.40), fade)
 
 
 class HomePage(FluentPage):
@@ -98,22 +78,27 @@ class HomePage(FluentPage):
         super().__init__('page-home', parent)
         self.window_ref = window
         lay = self.vBoxLayout
-        lay.setSpacing(8)
+        # 头图铺满上方页面：页面外边距归零，正文内容用自己的边距
+        lay.setContentsMargins(0, 0, 0, 28)
+        lay.setSpacing(0)
 
-        # 头图横幅（顶部，渐变过渡到背景）
+        # 头图横幅（通栏，贴顶，无圆角）
         self.banner = Banner()
-        self.banner.setFixedHeight(240)
-        self.banner.pick_btn.clicked.connect(self._pick_header)
-        self.banner.clear_btn.clicked.connect(self._clear_header)
+        self.banner.setFixedHeight(260)
         lay.addWidget(self.banner)
 
-        # 欢迎大字块：弹性留白撑在横幅与按钮之间，左对齐；两行文字紧贴，行间不留额外空隙
-        lay.addStretch(1)
+        body = QWidget()
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(36, 24, 36, 0)
+        body_lay.setSpacing(8)
+
+        # 欢迎大字块：弹性留白撑在横幅与按钮之间，左对齐；两行文字紧贴
+        body_lay.addStretch(1)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
-        lay.addWidget(self.hello_label)
-        lay.addWidget(self.title_label)
-        lay.addStretch(1)
+        body_lay.addWidget(self.hello_label)
+        body_lay.addWidget(self.title_label)
+        body_lay.addStretch(1)
 
         # 两个入口按钮：居中
         row = QHBoxLayout()
@@ -128,42 +113,21 @@ class HomePage(FluentPage):
         row.addSpacing(16)
         row.addWidget(org_btn)
         row.addStretch(1)
-        lay.addLayout(row)
-        lay.addSpacing(10)
+        body_lay.addLayout(row)
+        body_lay.addSpacing(10)
 
-        lay.addWidget(note_label("上传后需在智慧团建网页端点击「审核」完成认证"))
+        body_lay.addWidget(note_label("上传后需在智慧团建网页端点击「审核」完成认证"))
+        lay.addWidget(body)
 
         self._apply_font()
         self._load_header()
 
-    # ---------- 头图持久化 ----------
+    # ---------- 头图持久化（设置入口在「系统配置」） ----------
 
     def _load_header(self):
         from app.services import store
 
-        path = store.load().get("headerImage", "")
-        self.banner.set_image_path(path)
-
-    def _pick_header(self):
-        from PySide6.QtWidgets import QFileDialog
-        from app.services import store
-
-        path, _ = QFileDialog.getOpenFileName(self, "选择头图", "", "图片 (*.png *.jpg *.jpeg *.webp *.bmp)")
-        if not path:
-            return
-        cfg = store.load()
-        cfg["headerImage"] = path
-        store.save(cfg)
-        self.banner.set_image_path(path)
-        InfoBar.success("头图已设置", os.path.basename(path), duration=2500, parent=self)
-
-    def _clear_header(self):
-        from app.services import store
-
-        cfg = store.load()
-        cfg["headerImage"] = ""
-        store.save(cfg)
-        self.banner.set_image_path("")
+        self.banner.set_image_path(store.load().get("headerImage", ""))
 
     # ---------- 字重与缩放 ----------
 
@@ -183,4 +147,6 @@ class HomePage(FluentPage):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        # 头图铺满上方页面：高度跟随视口
+        self.banner.setFixedHeight(max(200, int(self.viewport().height() * BANNER_RATIO)))
         self._apply_font()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from qfluentwidgets import FluentIcon as FIF
-from qfluentwidgets import MSFluentWindow, NavigationItemPosition
+from qfluentwidgets import MSFluentWindow, NavigationItemPosition, qrouter
 
 from app.ui.check_page import CheckPage
 from app.ui.compress_page import CompressPage
@@ -60,6 +60,7 @@ class MainWindow(MSFluentWindow):
         self.upload_page = UploadPage(self)
         self.check_page = CheckPage(self)
         self.org_page = OrgPage(self)
+        self.settings_page.home_page = self.home_page  # 系统配置里设置头图后即时刷新首页
 
         self.addSubInterface(self.home_page, FIF.HOME, "工具首页")
         self.addSubInterface(self.upload_page, FIF.CLOUD, "批量上传")
@@ -71,5 +72,17 @@ class MainWindow(MSFluentWindow):
         self.addSubInterface(
             self.settings_page, FIF.SETTING, "系统配置", NavigationItemPosition.BOTTOM
         )
+
+        # 侧边栏顶部返回按钮：行为与旧版 NavigationInterface 的 returnButton 一致，
+        # 沿 qrouter 历史回退，无历史时置灰
+        back_item = self.navigationBar.addItem(
+            "return", FIF.RETURN, "", onClick=qrouter.pop,
+            selectable=False, position=NavigationItemPosition.TOP)
+
+        def _enable_back(empty: bool):
+            back_item.setEnabled(not empty)
+
+        qrouter.emptyChanged.connect(_enable_back)
+        _enable_back(not qrouter.history)
 
         QTimer.singleShot(0, lambda: self.switchTo(self.home_page))
