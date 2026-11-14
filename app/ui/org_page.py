@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
@@ -28,7 +29,7 @@ from app.domain.check_rules import (
     build_identity_results,
     build_report_results,
 )
-from app.domain.org_stats import KIND_LABEL, build_error_rows, summarize_members
+from app.domain.org_stats import KIND_LABEL, ErrorMemberRow, build_error_rows, summarize_members
 from app.domain.account_health import excluded_note, split_accounts
 from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services.api import SiteClient
@@ -127,6 +128,7 @@ class OrgPage(FluentPage):
         self._snapshot = None  # 刷新前的展示快照（整轮失败时回滚）
         self._first_result = True
         self._ok_accounts = 0
+        QTimer.singleShot(0, self._restore_persisted)  # 重启后恢复上次的组织状况
 
         lay = self.vBoxLayout
 
@@ -266,7 +268,11 @@ class OrgPage(FluentPage):
             uploaded += s.uploaded
             for k, v in dict(s.by_kind).items():
                 by_kind[k] = by_kind.get(k, 0) + v
-            error_rows.extend(build_error_rows(results, branch))
+            rows = build_error_rows(results, branch)
+            error_rows.extend(rows)
+            # 离线重算结果同样落 orgStatsCache（transfer 传 None = 保留上次在线结果）
+            self._persist_account(user, branch, s.total, s.uploaded,
+                                  dict(s.by_kind), None, rows)
         self._total, self._uploaded = total, uploaded
         self._by_kind = by_kind
         self._error_rows = error_rows
@@ -310,6 +316,93 @@ class OrgPage(FluentPage):
         self.error_title.setText(f"错误团员（{len(self._error_rows)}）")
         if self._error_rows:
             self.export_btn.setEnabled(True)
+        if status == "ok":
+            self._persist_account(user, branch, total, uploaded, dict(by_kind or {}), transfer, rows)
+
+    # ---------- 组织状况持久化（orgStatsCache） ----------
+
+    GRAD_SUFFIX = "（毕业应转出）"
+
+    @staticmethod
+    def _transfer_dict(t) -> dict:
+        return {"applied": t.applied, "total": t.total, "succeeded": t.succeeded,
+                "pending": t.pending, "returned": t.returned, "names": list(t.names)}
+
+    def _persist_account(self, user, branch, total, uploaded, by_kind, transfer, rows):
+        """本支部统计成功 → 写入配置 orgStatsCache；重启后从缓存恢复，不被清除。
+
+        transfer 为 None（离线重算）时保留上次在线结果；已删除账号的旧条目
+        随本次写盘一并清理，避免僵尸支部常驻。"""
+        from app.services import store
+
+        valid = {a.get("userName", "") for a in self.window_ref.settings_page.accounts}
+        key = user.replace(self.GRAD_SUFFIX, "")
+
+        def _write(cfg: dict):
+            cache = cfg.setdefault("orgStatsCache", {})
+            for k in [k for k in cache if k not in valid]:
+                del cache[k]
+            existing = cache.get(key) or {}
+            cache[key] = {
+                "branch": branch,
+                "total": total,
+                "uploaded": uploaded,
+                "by_kind": {k: by_kind.get(k, 0) for k in ("identity", "report", "archive", "fees")},
+                "transfer": self._transfer_dict(transfer) if transfer else existing.get("transfer"),
+                "error_rows": [vars(r) for r in rows],
+                "updatedAt": datetime.now().isoformat(timespec="seconds"),
+            }
+
+        store.update(_write)
+
+    def _restore_persisted(self):
+        """启动时从 orgStatsCache 恢复上次的组织状况（在线统计成功/离线重算
+        都会更新缓存，重启不清除；正在统计时不覆盖）。"""
+        if self.worker is not None and self.worker.isRunning():
+            return
+        from app.services import store
+
+        cache = store.load().get("orgStatsCache") or {}
+        if not cache:
+            return
+        total = uploaded = 0
+        by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
+        rows: list[ErrorMemberRow] = []
+        applied = succeeded = pending = returned = 0
+        names: list[str] = []
+        updated = ""
+        for user, e in cache.items():
+            total += e.get("total", 0)
+            uploaded += e.get("uploaded", 0)
+            for k, v in (e.get("by_kind") or {}).items():
+                by_kind[k] = by_kind.get(k, 0) + v
+            rows.extend(ErrorMemberRow(**r) for r in e.get("error_rows", []))
+            t = e.get("transfer") or {}
+            applied += t.get("applied", 0)
+            succeeded += t.get("succeeded", 0)
+            pending += t.get("pending", 0)
+            returned += t.get("returned", 0)
+            names.extend(t.get("names", []))
+            updated = max(updated, e.get("updatedAt", ""))
+        self._total, self._uploaded = total, uploaded
+        self._by_kind = by_kind
+        self._error_rows = rows
+        self._transfer_applied = applied
+        self._set_ratio(total, uploaded)
+        self._update_bars()
+        self._clear_cards()
+        for r in rows:
+            self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
+                              r.problems, r.branch, r.kinds)
+        self.error_title.setText(f"错误团员（{len(rows)}）")
+        if rows:
+            self.export_btn.setEnabled(True)
+        uniq_names = list(dict.fromkeys(names))
+        detail = f"：{'、'.join(uniq_names[:6])}" if uniq_names else ""
+        stamp = f"　·　数据更新于 {updated}" if updated else ""
+        self.transfer_note.setText(
+            f"转接明细：已申请 {applied} 人 / 在册 {total} 人{detail}"
+            f"（接转成功 {succeeded} · 审核中 {pending} · 被退回 {returned}）{stamp}")
 
     def _clear_cards(self):
         while self.error_lay.count() > 1:  # 保留标题
