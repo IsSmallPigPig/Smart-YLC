@@ -410,10 +410,12 @@ class BrowserWindow(FluentWindowBase):
         title = theme_font(BodyLabel("还没有打开支部", box), 20, int(QFont.Weight.DemiBold))
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(title, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.welcome_hint = note_label("让我们拜访一下支部的同志们")
-        # note_label 默认开换行，CaptionLabel 高度只有一行：末尾的字折到第二行会被裁掉
+        # 平时不显示任何说明：图标 + 标题 + 按钮已经说明了这一页要做什么，
+        # 只有「没有可用账号」这类不影响按钮的差错才写这一行
+        self.welcome_hint = note_label("")
         self.welcome_hint.setWordWrap(False)
         self.welcome_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.welcome_hint.setVisible(False)
         lay.addWidget(self.welcome_hint, 0, Qt.AlignmentFlag.AlignHCenter)
         self.start_btn = PrimaryPushButton(FIF.GLOBE, "开始访问", box)
         self.start_btn.setFixedSize(140, 34)
@@ -618,6 +620,10 @@ class BrowserWindow(FluentWindowBase):
 
     # ---------- 标签 ----------
 
+    def _set_welcome_hint(self, text: str):
+        self.welcome_hint.setText(text)
+        self.welcome_hint.setVisible(bool(text))
+
     def pick_new_tab(self):
         """弹窗问要访问哪个支部，确认后开它的标签页；只列状态正常的账号。"""
         from app.ui.branch_picker import pick_branch
@@ -626,13 +632,12 @@ class BrowserWindow(FluentWindowBase):
             return
         usable, excluded = split_accounts(self._accounts())
         if not usable:
-            # 窗口里不放漂浮提示条：说明就写在欢迎页的说明行上
-            self.welcome_hint.setText(
+            self._set_welcome_hint(
                 "没有可用的支部账号" if not excluded
-                else "支部账号状态都不正常，先到测活恢复，或在系统配置重新登录")
+                else "支部账号状态都不正常，先测活恢复，或在系统配置重新登录")
             self._raise_page("")
             return
-        self.welcome_hint.setText("让我们拜访一下支部的同志们")
+        self._set_welcome_hint("")
         pick_branch(usable, self, self._open, self._current)
 
     def _open(self, user: str):

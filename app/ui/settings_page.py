@@ -152,7 +152,7 @@ class WorkspaceWorker(QThread):
                 name = info["name"]
                 msgs = []
                 if info.get("renamed_from"):
-                    msgs.append(f"已改名：{info['renamed_from']} → {name}")
+                    msgs.append(f"原名 {info['renamed_from']}，已改为 {name}")
                 if info.get("compressed"):
                     msgs.append(info["message"])
                 if info.get("problem"):
@@ -189,7 +189,7 @@ class SettingsPage(FluentPage):
         self._loading = False
 
         lay = self.vBoxLayout
-        self.header = PageHeader("系统配置", "账号、名单与编号规则、外观、通知与更新")
+        self.header = PageHeader("系统配置")
         lay.addWidget(self.header)
 
         def group(title: str, expanded: bool) -> CollapsibleCard:
@@ -223,9 +223,10 @@ class SettingsPage(FluentPage):
         self.web_btn = ToolButton(FIF.GLOBE)
         set_tip(self.web_btn, "在独立窗口打开所选账号的网页端，标签之间互不顶号")
         self.web_btn.clicked.connect(self._open_web)
+        # 说明都放按钮的悬浮提示里：行内只留控件，靠布局对齐就够了
         row(acc_card, SettingRow(
-            "当前账号", desc="上传与网页端默认使用的账号；打开网页端会弹出独立窗口",
-            icon=FIF.PEOPLE, control=controls(self.active_combo, self.web_btn)))
+            "当前账号", icon=FIF.PEOPLE,
+            control=controls(self.active_combo, self.web_btn)))
 
         self.health_btn = ToolButton(FIF.HEART)
         set_tip(self.health_btn, "全部测活：查一遍所有账号的登录状态")
@@ -233,8 +234,7 @@ class SettingsPage(FluentPage):
         self.refresh_all_btn = PrimaryPushButton(FIF.CLOUD_DOWNLOAD, "同步数据")
         set_tip(self.refresh_all_btn, "依次刷新成员缓存、站内信、组织状况")
         self.refresh_all_btn.clicked.connect(self._refresh_all_clicked)
-        row(acc_card, SettingRow("账号测活", desc="测活查登录状态，同步数据拉成员与站内信",
-                                 icon=FIF.SYNC,
+        row(acc_card, SettingRow("账号测活", icon=FIF.SYNC,
                                  control=controls(self.refresh_all_btn, self.health_btn)))
 
         self.del_checked_btn = ToolButton(FIF.DELETE)
@@ -280,7 +280,7 @@ class SettingsPage(FluentPage):
         self.add_open_btn = PushButton(FIF.ADD, "添加账号")
         set_tip(self.add_open_btn, "填账号与密码，确定后立刻测活")
         self.add_open_btn.clicked.connect(self._open_add_account)
-        row(acc_card, SettingRow("添加账号", desc="账号与密码都填好再点添加",
+        row(acc_card, SettingRow("添加账号",
                                  icon=FIF.DICTIONARY_ADD,
                                  control=controls(self.add_open_btn)))
 
@@ -295,7 +295,7 @@ class SettingsPage(FluentPage):
         self.file_btn = PushButton(FIF.LIBRARY, "导入导出")
         set_tip(self.file_btn, "批量导入账号、下载模板、导出配置")
         self.file_btn.clicked.connect(self._open_file_dialog)
-        row(acc_card, SettingRow("账号文件", desc="导入或导出配置，便于换机迁移", icon=FIF.LIBRARY,
+        row(acc_card, SettingRow("账号文件", icon=FIF.LIBRARY,
                                  control=controls(self.file_btn)),
             last=True)
 
@@ -309,7 +309,7 @@ class SettingsPage(FluentPage):
         self.roster_del_btn = ToolButton(FIF.DELETE)
         set_tip(self.roster_del_btn, "删除选中的名单")
         self.roster_del_btn.clicked.connect(self._delete_selected_roster)
-        self.roster_row = SettingRow("团员名单", desc="导入姓名与班级，供检查与上传匹配",
+        self.roster_row = SettingRow("团员名单",
                                      icon=FIF.DICTIONARY,
                                      control=controls(self.roster_btn, self.template_btn,
                                                        self.roster_del_btn))
@@ -336,7 +336,7 @@ class SettingsPage(FluentPage):
         self.sec_del_btn = ToolButton(FIF.DELETE)
         set_tip(self.sec_del_btn, "删除选中的支书")
         self.sec_del_btn.clicked.connect(self._delete_selected_secretaries)
-        self.sec_row = SettingRow("支书名单", desc="支部与团支书姓名，用于核对与通知",
+        self.sec_row = SettingRow("支书名单",
                                   icon=FIF.CERTIFICATE,
                                   control=controls(self.sec_btn, self.sec_tpl_btn,
                                                    self.sec_del_btn))
@@ -355,7 +355,7 @@ class SettingsPage(FluentPage):
         rule_card = group("编号规则", False)
         self.rule_btn = PushButton(FIF.EDIT, "编辑规则")
         self.rule_btn.clicked.connect(self._open_rule_dialog)
-        self.rule_row = SettingRow("编号规则", desc="从账号里识别学部、年级与班级",
+        self.rule_row = SettingRow("编号规则",
                                    icon=FIF.EDUCATION, control=controls(self.rule_btn))
         row(rule_card, self.rule_row)
         self.expected_pages_edit = LineEdit()
@@ -373,7 +373,7 @@ class SettingsPage(FluentPage):
             self.theme_combo.addItem(label)
         self.theme_combo.setCurrentIndex(THEME_INDEX.get(store.load().get("themeMode", "auto"), 0))
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        row(look_card, SettingRow("明暗模式", desc="跟随系统，或固定浅色与暗色",
+        row(look_card, SettingRow("明暗模式",
                                   icon=FIF.BRIGHTNESS, control=controls(self.theme_combo)))
         self.material_combo = ComboBox()
         # 只提供 fluent widgets 官方的两种材质：Acrylic 毛玻璃 与 Mica
@@ -386,14 +386,14 @@ class SettingsPage(FluentPage):
                               or ("acrylic" if _cfg.get("translucent") else "none"))
         self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "mica": 2}.get(_material, 0))
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
-        row(look_card, SettingRow("窗口背景", desc="Acrylic 与 Mica：Mica 在 Windows 11 生效",
+        row(look_card, SettingRow("窗口背景", desc="Mica 仅 Windows 11",
                                   icon=FIF.TILES, control=controls(self.material_combo)))
         self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
         self.header_pick_btn.clicked.connect(self._pick_header_image)
         self.header_clear_btn = ToolButton(FIF.DELETE)
         set_tip(self.header_clear_btn, "清除头图，恢复默认")
         self.header_clear_btn.clicked.connect(self._clear_header_image)
-        row(look_card, SettingRow("首页头图", desc="图片铺满首页顶部并向下渐隐",
+        row(look_card, SettingRow("首页头图",
                                   icon=FIF.PHOTO,
                                   control=controls(self.header_pick_btn, self.header_clear_btn),
                                   ), last=True)
@@ -549,7 +549,7 @@ class SettingsPage(FluentPage):
         if ws_dir and os.path.isdir(ws_dir):
             self._setup_watcher(ws_dir)
         elif not ws_dir:
-            self.workspace_row.set_desc("先选择工作目录，里面的 PDF 会自动加入待处理")
+            self.workspace_row.set_desc("")
 
         # 文档检查：预期页数
         pages = cfg.get("expectedPages", "")
