@@ -162,9 +162,9 @@ class SiteClient:
         return list(found.values()), diagnostics
 
     def get_members_page(self, page_no: int, page_size: int = 100, oid: str = "") -> tuple[list[MemberRecord], int, list[Diagnostic]]:
-        """POST /api/v1/admin/members/page + authorize_name 头。"""
+        """POST /api/v1/admin/members/page。参数名是 page/pageSize（LeagueMemberApi.list 实测）。"""
         diagnostics: list[Diagnostic] = []
-        payload = {"pageNo": page_no, "pageSize": page_size}
+        payload = {"page": page_no, "pageSize": page_size}
         if oid:
             payload["oid"] = oid
         try:
