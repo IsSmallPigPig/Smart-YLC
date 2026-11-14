@@ -24,47 +24,20 @@ from qfluentwidgets import (
 
 from app.ui.page import note_label, theme_font
 
+from app.ui import palette as P
+
 TONE_COLOR = {
-    "ok": "#2e7d32",
-    "warn": "#ef6c00",
-    "error": "#c62828",
-    "info": "#1565c0",
-    "muted": "#6b7280",
+    "ok": P.OK,
+    "warn": P.WARNING,
+    "error": P.DANGER,
+    "info": P.BRAND,
+    "muted": P.MUTED,
 }
 
 
 def tint(color: str, alpha: int = 26) -> str:
     c = QColor(color)
     return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
-
-
-class Pill(QLabel):
-    """柔和圆角标签：浅底同色系文字，比饱和色块安静。"""
-
-    def __init__(self, text: str = "", tone: str = "ok", parent=None):
-        super().__init__(text, parent)
-        font = self.font()
-        font.setPixelSize(12)
-        font.setWeight(QFont.Weight.Medium)
-        self.setFont(font)
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.set_state(text, tone)
-        qconfig.themeChanged.connect(self._repaint_tone)
-
-    def _repaint_tone(self, *_):
-        """底色是按当前主题算的，主题变了要按同样的状态重算一次。"""
-        self.set_state(self._label_text, self._label_tone)
-
-    def set_state(self, text: str, tone: str):
-        self._label_text = text
-        self._label_tone = tone
-        color = TONE_COLOR.get(tone, TONE_COLOR["muted"])
-        c = QColor(color)
-        fg = c.lighter(155).name() if isDarkTheme() else c.darker(115).name()
-        self.setText(text)
-        self.setStyleSheet(
-            f"background-color: {tint(color, 46 if isDarkTheme() else 26)};"
-            f"color: {fg}; border-radius: 9px; padding: 2px 9px;")
 
 
 class PillLabel(QWidget):
@@ -75,12 +48,24 @@ class PillLabel(QWidget):
     """
 
     TONES = {
-        "blue": ("#0067f4", "#ffffff"),
+        # 基础语气
+        "blue": (P.BRAND, "#ffffff"),
         "gray": ("#4b5563", "#ffffff"),
-        "darkgray": ("#6b7280", "#ffffff"),
-        "orange": ("#c2410c", "#ffffff"),
-        "green": ("#2e7d32", "#ffffff"),
-        "red": ("#c62828", "#ffffff"),
+        "darkgray": (P.MUTED, "#ffffff"),
+        "orange": (P.WARNING, "#ffffff"),
+        "green": (P.OK, "#ffffff"),
+        "red": (P.DANGER, "#ffffff"),
+        # 结果语气（与 TONE_COLOR 同键，供上传状态行复用）
+        "ok": (P.OK, "#ffffff"),
+        "warn": (P.WARNING, "#ffffff"),
+        "error": (P.DANGER, "#ffffff"),
+        "muted": (P.MUTED, "#ffffff"),
+        "info": (P.BRAND, "#ffffff"),
+        # 异常分类（与组织管理成员标签同色，保证跨页一致）
+        "identity": (P.KIND["identity"], "#ffffff"),
+        "report": (P.KIND["report"], "#ffffff"),
+        "archive": (P.KIND["archive"], "#ffffff"),
+        "fees": (P.KIND["fees"], "#ffffff"),
     }
 
     def __init__(self, text: str = "", tone: str = "gray", parent=None):
@@ -134,7 +119,8 @@ class PillLabel(QWidget):
             color = color.lighter(125) if isDarkTheme() else QColor(bg)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(color)
-        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10.5, 10.5)
+        # 4px 圆角小标签，与组织管理成员标签（border-radius:4px）一致，不用满圆药丸
+        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 4, 4)
         p.setPen(QColor(fg))
         text = self._text
         if self._fixed_w:
@@ -143,40 +129,17 @@ class PillLabel(QWidget):
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
 
 
-class StatusDot(QWidget):
-    """状态圆点：6px 实心，外圈一层淡色。"""
-
-    def __init__(self, tone: str = "ok", parent=None):
-        super().__init__(parent)
-        self._tone = tone
-        self._color = QColor(TONE_COLOR.get(tone, TONE_COLOR["muted"]))
-        self.setFixedSize(14, 14)
-
-    def set_tone(self, tone: str):
-        self._tone = tone
-        self._color = QColor(TONE_COLOR.get(tone, TONE_COLOR["muted"]))
-        self.update()
-
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        halo = QColor(self._color)
-        halo.setAlpha(46)
-        p.setBrush(halo)
-        p.drawEllipse(0, 0, 14, 14)
-        p.setBrush(self._color)
-        p.drawEllipse(4, 4, 6, 6)
-
-
 def muted(text: str) -> CaptionLabel:
     lbl = CaptionLabel(text)
-    lbl.setTextColor(QColor("#4b5563"), QColor("#9ca3af"))
+    lbl.setTextColor(QColor("#3f4751"), QColor("#7e8896"))
     return lbl
 
 
 class StatusRow(CardWidget):
-    """一行状态：圆点 + 标题/说明 + 右侧若干指标 + 状态标签。
+    """一行状态：标题/说明 + 右侧若干指标 + 状态标签。
+
+    状态标签用与组织管理成员标签同款的实心小标签（PillLabel：纯色底白字、4px 圆角），
+    不再用左侧圆点 + 浅底软标签的混搭，跨页视觉统一。
 
     item 结构：{title, note, tone, status, meta: [str], }
     """
@@ -188,9 +151,6 @@ class StatusRow(CardWidget):
         lay.setContentsMargins(14, 9, 14, 9)
         lay.setSpacing(10)
         self._lay = lay
-
-        self.dot = StatusDot(item.get("tone", "ok"))
-        lay.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
 
         text = QVBoxLayout()
         text.setContentsMargins(0, 0, 0, 0)
@@ -207,17 +167,15 @@ class StatusRow(CardWidget):
             lay.addWidget(muted(str(meta)), 0, Qt.AlignmentFlag.AlignVCenter)
 
         status = item.get("status")
-        self.pill = Pill(str(status), item.get("tone", "ok")) if status else None
+        self.pill = PillLabel(str(status), item.get("tone", "muted")) if status else None
         if self.pill is not None:
             lay.addWidget(self.pill, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def set_state(self, status: str, tone: str, note: str | None = None):
-        self.dot.set_tone(tone)
-        if note is not None:
-            if self.note_lbl is not None:
-                self.note_lbl.setText(note)
+        if note is not None and self.note_lbl is not None:
+            self.note_lbl.setText(note)
         if self.pill is None:
-            self.pill = Pill(status, tone)
+            self.pill = PillLabel(status, tone)
             self._lay.addWidget(self.pill, 0, Qt.AlignmentFlag.AlignVCenter)
         else:
             self.pill.set_state(status, tone)
@@ -257,6 +215,38 @@ class StatusList(QWidget):
         return len(self._rows)
 
 
+class BadgeIcon(QWidget):
+    """彩色实心图标：直接画 filled 实体图标，不用描边线条。
+
+    素材是 Fluent UI System Icons 的 filled 变体（MIT），存在
+    app/assets/icons/ 下，配色由调用方指定。"""
+
+    def __init__(self, name: str = "", color: str = "#0067f4", size: int = 28,
+                 parent=None):
+        super().__init__(parent)
+        self._name = name
+        self._color = QColor(color)
+        self.setFixedSize(size, size)
+
+    def set_color(self, color: str):
+        self._color = QColor(color)
+        self.update()
+
+    def paintEvent(self, e):
+        if not self._name:
+            return
+        from app.ui.icons import colored_pixmap
+
+        pm = colored_pixmap(self._name, self._color.name(),
+                             max(self.width(), self.height()))
+        if pm.isNull():
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.drawPixmap(0, 0, pm)
+        p.end()
+
+
 class StatTile(CardWidget):
     """统计磁贴：fluent 风格的大图标 + 大数字 + 一行说明。
 
@@ -267,7 +257,8 @@ class StatTile(CardWidget):
     clicked = Signal()
 
     def __init__(self, title: str, value: str = "0", note: str = "",
-                 icon: FluentIcon = None, tone: str = "info", parent=None):
+                 icon: str = "", tone: str = "info", parent=None,
+                 icon_color: str = ""):
         super().__init__(parent)
         self.setBorderRadius(8)
         self.setClickEnabled(True)
@@ -279,9 +270,9 @@ class StatTile(CardWidget):
         head = QHBoxLayout()
         head.setSpacing(10)
         self.icon_box = None
-        if icon is not None:
-            self.icon_box = IconWidget(icon)
-            self.icon_box.setFixedSize(30, 30)
+        if icon:
+            color = icon_color or TONE_COLOR.get(tone, TONE_COLOR["info"])
+            self.icon_box = BadgeIcon(icon, color)
             head.addWidget(self.icon_box, 0, Qt.AlignmentFlag.AlignVCenter)
         head.addWidget(theme_font(BodyLabel(title), 14, int(QFont.Weight.DemiBold)))
         head.addStretch(1)

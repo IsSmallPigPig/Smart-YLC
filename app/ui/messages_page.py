@@ -51,6 +51,7 @@ from app.ui.page import (
     PageHeader,
     note_label,
     theme_font,
+    triangle_icon,
 )
 from app.ui.widgets import PillLabel
 
@@ -247,11 +248,11 @@ class MessagesPage(FluentPage):
         self.list_box.setMinimumHeight(180)
         lay.addWidget(self.list_box)
 
-        # 翻页放在列表底下：左右箭头 + 当前页，居中一行
-        self.prev_btn = TransparentToolButton(FIF.PAGE_LEFT)
+        # 翻页放在列表底下：左右实心三角 + 当前页，居中一行
+        self.prev_btn = TransparentToolButton(triangle_icon("left"))
         set_tip(self.prev_btn, "上一页")
         self.prev_btn.clicked.connect(lambda *_: self._flip(-1))
-        self.next_btn = TransparentToolButton(FIF.PAGE_RIGHT)
+        self.next_btn = TransparentToolButton(triangle_icon("right"))
         set_tip(self.next_btn, "下一页")
         self.next_btn.clicked.connect(lambda *_: self._flip(1))
         self.page_label = note_label("")
@@ -479,15 +480,22 @@ class MessagesPage(FluentPage):
             hook = getattr(card, "apply_theme", None)
             if hook is not None:
                 hook()
+        # 翻页三角是按主题手绘的，换肤后要重新画
+        self.prev_btn.setIcon(triangle_icon("left"))
+        self.next_btn.setIcon(triangle_icon("right"))
 
     # ---------- UI ----------
 
     def _message_card(self, v: MessageView, unread: bool) -> QWidget:
-        """一条消息：姓名 + 原标题标签 + 未读标签 … 时间、账号固定宽度右对齐。"""
+        """一条消息：姓名 + 原标题标签 + 未读标签 … 时间、账号固定宽度右对齐。
+
+        卡片圆角放大到 12，整行铺满内容宽度（与首页/组织页共用 FluentPage
+        的 32px 页边距），小间距分隔，恢复以前那种成组卡片的观感。"""
         card = CardWidget()
+        card.setBorderRadius(12)
         card.setCursor(Qt.CursorShape.PointingHandCursor)
         outer = QVBoxLayout(card)
-        outer.setContentsMargins(16, 7, 16, 7)
+        outer.setContentsMargins(18, 10, 18, 10)
         outer.setSpacing(3)
 
         head = QHBoxLayout()
@@ -518,13 +526,15 @@ class MessagesPage(FluentPage):
             head.addWidget(flag, 0)
 
         head.addStretch(1)
+        # 时间、账号各占一列固定宽度并左对齐：所有行从同一条竖线开始，
+        # 右对齐会因数字宽窄差异导致左边缘参差不齐
         when = CaptionLabel(v.time_str)
-        when.setFixedWidth(152)
-        when.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        when.setFixedWidth(148)
+        when.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         head.addWidget(when, 0)
         account = CaptionLabel(v.account)
-        account.setFixedWidth(96)
-        account.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        account.setFixedWidth(92)
+        account.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         head.addWidget(account, 0)
         outer.addLayout(head)
 

@@ -13,8 +13,8 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from PySide6.QtCore import QThread, QTimer, Signal, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QThread, QTimer, Signal, Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -48,6 +48,7 @@ from app.ui.page import (CONTROL_MAX_WIDTH, CallbackWorker, CollapsibleCard, Flu
                           FullRow, PageHeader, SettingRow, fit_table_columns,
                           note_label)
 from app.ui.rule_dialog import RuleDialog
+from app.ui import palette as P
 from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, RuleError, describe_code
 from app.domain.transfer import is_graduated
@@ -327,12 +328,16 @@ class SettingsPage(FluentPage):
 
         self.sec_btn = PrimaryPushButton("导入支书")
         self.sec_btn.clicked.connect(self._import_secretaries)
+        self.sec_tpl_btn = ToolButton(FIF.DOWNLOAD)
+        set_tip(self.sec_tpl_btn, "下载支书名单模板（只需班级和姓名）")
+        self.sec_tpl_btn.clicked.connect(self._download_secretary_template)
         self.sec_del_btn = ToolButton(FIF.DELETE)
         set_tip(self.sec_del_btn, "删除选中的支书")
         self.sec_del_btn.clicked.connect(self._delete_selected_secretaries)
         self.sec_row = SettingRow("支书名单", desc="支部与团支书姓名，用于核对与通知",
                                   icon=FIF.CERTIFICATE,
-                                  control=controls(self.sec_btn, self.sec_del_btn))
+                                  control=controls(self.sec_btn, self.sec_tpl_btn,
+                                                   self.sec_del_btn))
         row(ros_card, self.sec_row)
         self.sec_table = TableWidget()
         self.sec_table.setColumnCount(3)
@@ -367,13 +372,17 @@ class SettingsPage(FluentPage):
         row(look_card, SettingRow("明暗模式", desc="跟随系统，或固定浅色与暗色",
                                   icon=FIF.BRIGHTNESS, control=controls(self.theme_combo)))
         self.material_combo = ComboBox()
-        for label in ("关闭", "Acrylic 毛玻璃", "Sidebar 浅毛玻璃", "HudWindow 深色毛玻璃"):
+        # 只提供 fluent widgets 官方的两种材质：Acrylic 毛玻璃 与 Mica
+        for label in ("关闭", "Acrylic 毛玻璃", "Mica"):
             self.material_combo.addItem(label)
         _cfg = store.load()
-        _material = _cfg.get("translucentMaterial") or ("acrylic" if _cfg.get("translucent") else "none")
-        self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "sidebar": 2, "hud": 3}.get(_material, 0))
+        from app.services.materials import normalize
+
+        _material = normalize(_cfg.get("translucentMaterial")
+                              or ("acrylic" if _cfg.get("translucent") else "none"))
+        self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "mica": 2}.get(_material, 0))
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
-        row(look_card, SettingRow("窗口背景", desc="毛玻璃混合层只在 macOS 生效",
+        row(look_card, SettingRow("窗口背景", desc="Acrylic 与 Mica：Mica 在 Windows 11 生效",
                                   icon=FIF.TILES, control=controls(self.material_combo)))
         self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
         self.header_pick_btn.clicked.connect(self._pick_header_image)
@@ -391,12 +400,12 @@ class SettingsPage(FluentPage):
         self.ws_edit.setPlaceholderText("选择工作目录")
         self.ws_btn = PushButton(FIF.FOLDER, "选择目录")
         self.ws_btn.clicked.connect(self._pick_workspace)
-        self.ws_more_btn = ToolButton(FIF.SETTING)
-        set_tip(self.ws_more_btn, "查看当前工作目录的完整路径")
-        self.ws_more_btn.clicked.connect(self._open_workspace_dialog)
+        self.ws_open_btn = PushButton(FIF.LINK, "打开目录")
+        set_tip(self.ws_open_btn, "在访达中打开当前工作目录")
+        self.ws_open_btn.clicked.connect(self._open_workspace_folder)
         self.workspace_row = SettingRow(
             "工作目录", desc="未选择目录", icon=FIF.FOLDER,
-            control=controls(self.ws_btn, self.ws_more_btn))
+            control=controls(self.ws_btn, self.ws_open_btn))
         row(ws_card, self.workspace_row)
 
         self.notify_mode = ComboBox()
@@ -535,6 +544,7 @@ class SettingsPage(FluentPage):
         # 工作区
         ws_dir = cfg.get("workspaceDir", "")
         self.ws_edit.setText(ws_dir)
+        self.ws_open_btn.setEnabled(bool(ws_dir and os.path.isdir(ws_dir)))
         if ws_dir and os.path.isdir(ws_dir):
             self._setup_watcher(ws_dir)
         elif not ws_dir:
@@ -867,12 +877,14 @@ class SettingsPage(FluentPage):
             dialog.add_row(widget)
         dialog.show()
 
-    def _open_workspace_dialog(self):
-        """工作目录：显示完整路径，方便核对或复制。"""
-        dialog = self._config_dialog("工作目录", "目录里的 PDF 会自动加入待处理")
-        self.ws_edit.setReadOnly(True)
-        dialog.add_field("工作目录的完整路径", self.ws_edit)
-        dialog.show()
+    def _open_workspace_folder(self):
+        """在访达中打开当前工作目录；未选择时提示先选目录。"""
+        d = self.ws_edit.text().strip()
+        if not d or not os.path.isdir(d):
+            InfoBar.warning("还未选择工作目录", "先点「选择目录」指定工作目录",
+                            duration=3000, parent=self)
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(d))
 
     def _open_notify_dialog(self):
         """通知频率：发送时间、间隔与手动测试。"""
@@ -1155,7 +1167,7 @@ class SettingsPage(FluentPage):
             status_item = QTableWidgetItem(status_text)
             status_item.setFlags(self.READONLY_FLAGS)
             if graduated:
-                status_item.setForeground(QColor("#ef6c00"))
+                status_item.setForeground(QColor(P.WARNING))
             self.table.setItem(i, 5, status_item)
             h = acc.get("health") or {}
             status, msg = h.get("status", "unknown"), h.get("message", "")
@@ -1447,6 +1459,20 @@ class SettingsPage(FluentPage):
         save_roster_template(path)
         InfoBar.success("模板已保存", path, duration=4000, parent=self)
 
+    def _download_secretary_template(self):
+        """支书名单模板：只要支部（班级）和团支书姓名两列。"""
+        from app.services.export_data import default_name
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存支书名单模板",
+            default_name("支书名单模板", ".xlsx"), "Excel (*.xlsx)")
+        if not path:
+            return
+        from app.services.excel import save_secretary_template
+
+        save_secretary_template(path)
+        InfoBar.success("模板已保存", path, duration=4000, parent=self)
+
     # ---------- 工作区 ----------
 
     def _pick_workspace(self):
@@ -1454,6 +1480,7 @@ class SettingsPage(FluentPage):
         if not d:
             return
         self.ws_edit.setText(d)
+        self.ws_open_btn.setEnabled(True)
         self._setup_watcher(d)
         self._save_config()
         # 立即扫一遍存量 PDF
@@ -1539,7 +1566,7 @@ class SettingsPage(FluentPage):
         _done()
 
     def _on_material_changed(self, index: int):
-        material = ("none", "acrylic", "sidebar", "hud")[index]
+        material = ("none", "acrylic", "mica")[index]
         store.update(lambda cfg: cfg.__setitem__("translucentMaterial", material))
         if self.window_ref is not None:
             self.window_ref.set_material(material)

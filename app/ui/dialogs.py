@@ -81,14 +81,27 @@ class ConfigDialog(FluentPanelDialog):
         self.yesButton.setText(yes_text)
         self.cancelButton.hide()
         self._items: list = []
+        self._orig_parents: dict[int, object] = {}
         self.finished.connect(self._release)
 
     def add(self, widget) -> None:
         """塞一个控件进来。控件仍归调用方所有，关窗时还回去而不是跟着销毁。"""
         self._items.append(widget)
+        self._remember_parent(widget)
         widget.setParent(self.widget)
         widget.show()
         self.body.addWidget(widget)
+
+    def _remember_parent(self, widget):
+        """记下控件原来的父级。
+
+        关窗时用 setParent(None) 还控件会把它变成顶层控件——在 macOS 上就是一个
+        带交通灯按钮的独立小窗（通知频率下拉框曾这样浮在屏幕左上角）。
+        正确的做法是装回原来的父级再隐藏。"""
+        parent = widget.parentWidget()
+        if parent is None:
+            parent = self.parentWidget()
+        self._orig_parents[id(widget)] = parent
 
     def add_row(self, *widgets, spacing: int = 8):
         """一排并排的控件；按钮横向填满弹窗宽度。"""
@@ -100,6 +113,7 @@ class ConfigDialog(FluentPanelDialog):
         lay.setSpacing(spacing)
         for widget in widgets:
             self._items.append(widget)
+            self._remember_parent(widget)
             widget.setParent(box)
             widget.show()
             lay.addWidget(widget, 1)
@@ -119,6 +133,7 @@ class ConfigDialog(FluentPanelDialog):
         hint = note_label(label)
         lay.addWidget(hint)
         self._items.append(widget)
+        self._remember_parent(widget)
         widget.setParent(box)
         widget.show()
         lay.addWidget(widget)
@@ -126,9 +141,11 @@ class ConfigDialog(FluentPanelDialog):
         return box
 
     def _release(self, *_):
-        """弹窗关闭：把控件交还调用方并藏起来，再销毁弹窗本身。"""
+        """弹窗关闭：把控件装回原父级并藏起来，再销毁弹窗本身。"""
         for widget in self._items:
-            widget.setParent(None)
+            parent = self._orig_parents.pop(id(widget), None)
+            if parent is not None:
+                widget.setParent(parent)
             widget.hide()
         self._items.clear()
         self.deleteLater()

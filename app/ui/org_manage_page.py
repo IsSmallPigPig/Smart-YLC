@@ -50,14 +50,15 @@ from app.services import login_gate, store
 from app.services.api import SiteClient
 from app.ui.anim import animate_expand, fade_in, value_animation
 from app.ui.charts import BarRowWidget
+from app.ui import palette as P
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.export_flow import start_export
 from app.ui.page import (CardRow, FluentPage, PageHeader, chevron_icon, note_label,
                          set_tip,
                          section_title, theme_font)
 
-SOURCE_COLOR = {"local": "#6b7280", "system": "#1565c0", "both": "#2e7d32"}
-KIND_COLOR = {"identity": "#ef6c00", "report": "#c62828", "archive": "#00838f", "fees": "#8e24aa"}
+SOURCE_COLOR = P.SOURCE
+KIND_COLOR = P.KIND
 KIND_TEXT = {"identity": "信息错误", "report": "没有报道", "archive": "没有档案", "fees": "欠缴团费"}
 
 
@@ -221,7 +222,9 @@ class OrgManagePage(FluentPage):
         super().__init__("page-org-manage", parent)
         self.window_ref = window
         self.worker = None
+        self._workers: list = []
         self._branches: list[BranchNode] = []
+        self._stats_cache: dict = {}
         self._stats = {"local": 0, "system": 0, "both": 0}
         self._detail_code = ""
         self._search = ""  # 由主窗口标题栏的搜索框注入
@@ -234,13 +237,16 @@ class OrgManagePage(FluentPage):
         self.title_lbl = self.header.title_label
         self.stat_label = self.header.desc_label
 
-        self.crumb_home = TransparentPushButton(FIF.HOME, "组织管理")
+        self.crumb_home = TransparentPushButton("组织管理")
         set_tip(self.crumb_home, "返回支部列表")
         self.crumb_home.clicked.connect(self.back_to_feed)
         self.crumb_sep = IconWidget(FIF.CHEVRON_RIGHT_MED)
         self.crumb_sep.setFixedSize(14, 14)
         self.crumb_branch = StrongBodyLabel("")
-        theme_font(self.crumb_branch, 18, int(QFont.Weight.DemiBold))
+        # 面包屑两段统一字体样式（16 半粗），不带小图标
+        theme_font(self.crumb_home, 16, int(QFont.Weight.DemiBold))
+        theme_font(self.crumb_branch, 16, int(QFont.Weight.DemiBold))
+        self.crumb_branch.setTextColor(QColor("#6b7280"), QColor("#9ca3af"))
         self.crumb_box = QWidget()
         crumb_lay = QHBoxLayout(self.crumb_box)
         crumb_lay.setContentsMargins(0, 0, 0, 0)
@@ -364,23 +370,52 @@ class OrgManagePage(FluentPage):
         return groups
 
     def refresh(self):
+        """支部树与统计放到后台线程：memberCache 大时逐人跑检查不在界面线程卡顿。"""
+        from app.ui.page import CallbackWorker
+
+        self._stats_token = getattr(self, "_stats_token", 0) + 1
+        token = self._stats_token
+        worker = CallbackWorker(self._collect_tree, self)
+        worker.ok.connect(lambda data: token == self._stats_token
+                          and self._apply_refresh(data))
+        worker.fail.connect(lambda msg: InfoBar.warning("组织树刷新失败", msg,
+                                                        duration=4000, parent=self))
+        self._workers.append(worker)
+        worker.start()
+
+    def _collect_tree(self):
+        """后台线程：本地名单 + 系统缓存 → 支部树与每支部统计（纯计算）。"""
         local = self._load_local_rows()
         sys_groups = self._load_system_groups()
         sp = getattr(self.window_ref, "settings_page", None)
         rule = sp.org_rule() if sp else None
-        self._branches = build_branches(
+        branches = build_branches(
             local, sys_groups, store.load().get("secretaries", []), rule=rule)
+        stats = {b.code: self._branch_stats(b) for b in branches}
+        return branches, stats
+
+    def _apply_refresh(self, data):
+        import time
+
+        self._branches, stats = data
+        self._stats_cache = stats
         self._stats = {
             "local": sum(1 for b in self._branches for m in b.members if m.source in ("local", "both")),
             "system": sum(1 for b in self._branches for m in b.members if m.source in ("system", "both")),
             "both": sum(1 for b in self._branches for m in b.members if m.source == "both"),
         }
+        self._refreshed_at = time.monotonic()
         self._rebuild()
 
     def _branch_stats(self, b: BranchNode) -> dict:
         """支部统计：从成员缓存的系统记录离线计算，无网络请求。
 
-        异常只计错误级（职业未填等警告不算）；欠缴 = 未交总额>0 或未交月份>0。"""
+        异常只计错误级（职业未填等警告不算）；欠缴 = 未交总额>0 或未交月份>0。
+        refresh 已在后台算过的一轮直接命中缓存，不再逐次重算。"""
+        cache = getattr(self, "_stats_cache", None) or {}
+        cached = cache.get(b.code)
+        if cached is not None:
+            return cached
         recs = [m.system for m in b.members if m.system is not None]
         by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
         unpaid_amount = 0.0
@@ -455,13 +490,13 @@ class OrgManagePage(FluentPage):
     def _feed_card(self, b: BranchNode) -> QWidget:
         st = self._branch_stats(b)
         if not st["system"]:
-            accent = "#6b7280"
+            accent = P.MUTED
         elif st["abnormal"]:
-            accent = "#c62828"
+            accent = P.DANGER
         elif st["by_kind"]["fees"]:
-            accent = "#8e24aa"
+            accent = P.KIND["fees"]
         else:
-            accent = "#2e7d32"
+            accent = P.OK
 
         card = BranchCard(accent)
         card.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -485,9 +520,9 @@ class OrgManagePage(FluentPage):
 
         h.addLayout(self._metric(str(st["total"]), "团员"), 0)
         h.addLayout(self._metric(str(st["abnormal"]), "异常",
-                                 "#c62828" if st["abnormal"] else "#6b7280"), 0)
+                                 P.DANGER if st["abnormal"] else P.MUTED), 0)
         h.addLayout(self._metric(str(st["by_kind"]["fees"]), "欠缴",
-                                 "#8e24aa" if st["by_kind"]["fees"] else "#6b7280"), 0)
+                                 P.KIND["fees"] if st["by_kind"]["fees"] else P.MUTED), 0)
         h.addSpacing(24)  # 给自绘箭头留出位置
 
         for w in card.findChildren(QWidget):
@@ -496,7 +531,7 @@ class OrgManagePage(FluentPage):
         return card
 
     @staticmethod
-    def _metric(value: str, label: str, color: str = "#0078d4") -> QVBoxLayout:
+    def _metric(value: str, label: str, color: str = P.BRAND) -> QVBoxLayout:
         col = QVBoxLayout()
         col.setSpacing(1)
         col.setContentsMargins(12, 0, 12, 0)
@@ -535,7 +570,8 @@ class OrgManagePage(FluentPage):
         if not needle:
             return False
         if not self._branches:
-            self.refresh()
+            # 树还没建好（页面没显示过）：同步算一轮，保证立即能跳转
+            self._apply_refresh(self._collect_tree())
         node = next((b for b in self._branches if b.label == needle), None)
         if node is None:
             node = next((b for b in self._branches
@@ -556,7 +592,16 @@ class OrgManagePage(FluentPage):
         head_lay = QVBoxLayout(head)
         head_lay.setContentsMargins(2, 2, 2, 0)
         head_lay.setSpacing(4)
-        head_lay.addWidget(theme_font(StrongBodyLabel(b.label), 22, int(QFont.Weight.DemiBold)))
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+        title_row.addWidget(theme_font(StrongBodyLabel(b.label), 22, int(QFont.Weight.DemiBold)))
+        title_row.addStretch(1)
+        # 访问支部：高亮主按钮 + 浏览器图标，进入内置浏览器打开该支部账号
+        self.visit_btn = PrimaryPushButton(FIF.GLOBE, "访问支部")
+        set_tip(self.visit_btn, "在内置浏览器中打开这个支部的账号页面")
+        self.visit_btn.clicked.connect(lambda *_: self._visit_branch(b))
+        title_row.addWidget(self.visit_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        head_lay.addLayout(title_row)
         sub = b.secretary_text + (f" {b.grade}" if b.grade else "")
         head_lay.addWidget(note_label(" ".join(x for x in (sub, b.code) if x)))
         self.detail_lay.addWidget(head)
@@ -571,9 +616,9 @@ class OrgManagePage(FluentPage):
         nums.setSpacing(0)
         blocks = []
         for i, (num, label, color) in enumerate((
-            (st["total"], "团员总数", "#0078d4"),
-            (st["abnormal"], "异常团员", "#c62828"),
-            (st["by_kind"]["fees"], "欠缴团费", "#8e24aa"),
+            (st["total"], "团员总数", P.BRAND),
+            (st["abnormal"], "异常团员", P.DANGER),
+            (st["by_kind"]["fees"], "欠缴团费", P.KIND["fees"]),
         )):
             if i:
                 line = QWidget()
@@ -630,6 +675,22 @@ class OrgManagePage(FluentPage):
             lv.addWidget(wrap)
         self.detail_lay.addWidget(list_card)
 
+    def _visit_branch(self, b: BranchNode):
+        """访问支部：找到与这个支部对应的账号，交给内置浏览器打开。"""
+        user = ""
+        for a in self.window_ref.settings_page.accounts:
+            remark = (a.get("remark") or "").strip()
+            name = a.get("userName", "")
+            if remark == b.label or (b.code and name.endswith(b.code)):
+                user = name
+                break
+        if not user:
+            InfoBar.warning("没有对应账号",
+                            f"找不到「{b.label}」对应的团支部账号，先在系统配置添加",
+                            duration=4000, parent=self)
+            return
+        self.window_ref.open_browser(user)
+
     def back_to_feed(self, *_):
         if not self._detail_code:
             return
@@ -681,12 +742,16 @@ class OrgManagePage(FluentPage):
             detail.setVisible(False)
             v.addWidget(detail)
 
+        state = {"open": False}
+
         def _toggle(d=detail, t=toggle):
             if d is None:
                 return
-            expanded = not d.isVisible()
-            t.setIcon(chevron_icon(expanded))
-            animate_expand(d, expanded, duration=190)
+            # 状态机驱动而不是读 isVisible：动画进行中再点一次时，
+            # 可见性还没变，按可见性判断会连续两次都走同一个方向造成错位
+            state["open"] = not state["open"]
+            t.setIcon(chevron_icon(state["open"]))
+            animate_expand(d, state["open"], duration=190)
 
         if toggle is not None:
             toggle.clicked.connect(_toggle)

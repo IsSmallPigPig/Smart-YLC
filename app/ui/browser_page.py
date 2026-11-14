@@ -282,8 +282,10 @@ class BrowserWindow(FluentWindowBase):
         self.setMicaEffectEnabled(False)
         self.setStyleSheet("BrowserWindow{background: transparent}")
         cfg = store.load()
-        self._material = cfg.get("translucentMaterial") or (
-            "acrylic" if cfg.get("translucent") else "none")
+        from app.services.materials import normalize
+
+        self._material = normalize(cfg.get("translucentMaterial")
+                                   or ("acrylic" if cfg.get("translucent") else "none"))
         self._translucent = False
         self._material_applied = False
         self._auto_logins: dict[str, int] = {}
@@ -506,6 +508,15 @@ class BrowserWindow(FluentWindowBase):
         会被丢掉：结果就是又长出一条系统标题栏，窗口也不再和混合层合成——深色
         模式下窗口底色本身是全透明的，没画东西的地方就变成一块纯黑。
         """
+        if sys.platform == "win32":
+            # Windows：showNormal 同样会把 Fluent 的 Mica 效果打掉，显示后重挂
+            from app.services.materials import apply_windows_effect
+
+            self._material_applied = apply_windows_effect(self, self._material)
+            self._translucent = self._material_applied
+            self._apply_background()
+            self.update()
+            return
         if sys.platform != "darwin":
             self._material_applied = True
             return
@@ -550,9 +561,18 @@ class BrowserWindow(FluentWindowBase):
 
     def set_material(self, material: str):
         """与主窗口同一套毛玻璃开关：none 铺纯色底，其余挂混合层。"""
-        material = material if material in ("none", "acrylic", "sidebar", "hud") else "none"
+        from app.services.materials import apply_windows_effect, normalize
+
+        material = normalize(material)
         self._material = material
-        self._translucent = material != "none" and sys.platform == "darwin"
+        if sys.platform == "darwin":
+            self._translucent = material != "none"
+        elif sys.platform == "win32":
+            from app.services.materials import win11_mica_available
+
+            self._translucent = material != "none" and win11_mica_available()
+        else:
+            self._translucent = False
         self._apply_background()
         if sys.platform == "darwin":
             from app.services.mac_effect import disable_acrylic, enable_acrylic
@@ -562,6 +582,11 @@ class BrowserWindow(FluentWindowBase):
             else:
                 disable_acrylic(self)
                 self._material_applied = True
+        elif sys.platform == "win32" and self._translucent:
+            self._material_applied = apply_windows_effect(self, material)
+            if not self._material_applied:
+                self._translucent = False
+                self._apply_background()
         else:
             self._material_applied = True
         self.update()
@@ -570,7 +595,11 @@ class BrowserWindow(FluentWindowBase):
         if self._translucent:
             # 混合层只负责"透"，亮度由这层底色定：不铺就是桌面颜色，深色桌面下
             # 整窗发黑。浅色铺近白，深色铺中深灰，两层叠加才是毛玻璃的效果。
-            self.setCustomBackgroundColor(QColor(249, 249, 251, 200), QColor(44, 46, 50, 190))
+            # Windows 的 Mica 自带桌面取色，窗口底全透明即可，不再叠半透明层。
+            if sys.platform == "win32":
+                self.setCustomBackgroundColor(QColor(0, 0, 0, 0), QColor(0, 0, 0, 0))
+            else:
+                self.setCustomBackgroundColor(QColor(249, 249, 251, 200), QColor(44, 46, 50, 190))
         else:
             self.setCustomBackgroundColor(QColor(240, 244, 249), QColor(32, 32, 32))
 

@@ -17,6 +17,12 @@ MATERIALS = {
 }
 
 
+def _resolve(material: str) -> str:
+    # qframelesswindow 官方语义：MacWindowEffect.setMicaEffect 在 mac 上
+    # 就是转发 setAcrylicEffect（Popover 材质），mica 只有 Win11 有真实现
+    return "acrylic" if material == "mica" else material
+
+
 def _content_view(window):
     from qframelesswindow.utils.mac_utils import getNSWindow
 
@@ -28,7 +34,8 @@ def enable_acrylic(window, material: str = "acrylic") -> bool:
     """按官方默认参数插入混合层；窗口未就绪时返回 False，由 showEvent 重试。"""
     if sys.platform != "darwin":
         return False
-    key = material if material in MATERIALS else "acrylic"
+    key = _resolve(material)
+    key = key if key in MATERIALS else "acrylic"
     view = getattr(window, "_acrylic_view", None)
     if view is not None:
         if getattr(window, "_acrylic_material", None) == key:

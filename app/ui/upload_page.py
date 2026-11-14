@@ -38,7 +38,6 @@ from app.ui.page import CollapsibleCard, FluentPage, PageHeader, note_label, set
 from app.ui.widgets import StatusList
 
 TARGETS = (
-    ("压到 9.5MB", LIMITS["PDF_DEFAULT_TARGET_BYTES"]),
     ("压到 19.5MB", LIMITS["PDF_20MB_PRESET_BYTES"]),
 )
 MAX_BATCH = LIMITS["MAX_UPLOAD_PER_BATCH"]
@@ -242,8 +241,7 @@ class UploadPage(FluentPage):
             "上传档案", "先选择工作目录，里面的 PDF 会自动加入待处理")
         self.pick_btn = PushButton(FIF.FOLDER, "选择目录")
         self.pick_btn.clicked.connect(self._pick_dir)
-        self.rescan_btn = ToolButton(FIF.SYNC)
-        self.rescan_btn.setFixedSize(32, 32)
+        self.rescan_btn = PushButton(FIF.SYNC, "刷新目录")
         set_tip(self.rescan_btn, "重新检查工作目录")
         self.rescan_btn.clicked.connect(self.refresh)
         self.target_combo = ComboBox()
@@ -364,13 +362,18 @@ class UploadPage(FluentPage):
             meta = []
             if status.pages:
                 meta.append(f"{status.pages} 页")
-            if status.branch:
-                meta.append(status.branch)
             note = status.problem
             if not note and status.renamed_from:
                 note = f"原名 {status.renamed_from}，已自动改名"
             if not note:
                 note = status.notice
+            # 恢复「正常档案按班级支部组织」：可路由的档案明确标出目标团支部，
+            # 让「上传前按班级分流到对应账号」的逻辑重新可见，不再被「只通知错误」吞掉
+            if status.branch and not status.problem:
+                target = f"目标支部：{status.branch}"
+                note = f"{note}　{target}" if note else target
+            elif status.branch:
+                meta.append(status.branch)
             items.append({
                 "title": status.name,
                 "note": note,
@@ -433,7 +436,7 @@ class UploadPage(FluentPage):
             missing = sum(1 for s in statuses if s.usable and s.member == "missing")
             if missing:
                 tags.append((f"{missing} 缺团员", "orange"))
-            card = CollapsibleCard(name or branch, expanded=False, tags=tags)
+            card = CollapsibleCard(name or branch, expanded=True, tags=tags)
             rows = [{
                 "title": s.name,
                 "note": s.problem or s.notice or "",
