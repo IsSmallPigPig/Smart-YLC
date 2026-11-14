@@ -18,6 +18,8 @@ from pathlib import Path
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
 
+from app.ui.hidpi import canvas_pixmap, scale_to
+
 
 def assets_dir() -> Path:
     """资源目录：源码里是 app/assets，打包后在临时目录的 assets 下。"""
@@ -32,20 +34,20 @@ def icon_path(name: str) -> Path:
 
 
 def app_pixmap(size: int = 256) -> QPixmap:
-    """应用图标位图：优先用 PNG，其次渲染 SVG。"""
+    """应用图标位图：优先用 PNG，其次渲染 SVG。
+
+    按屏幕 dpr 栅格化（2× 屏出 2 倍像素），否则窗口/托盘图标会被放大发虚。"""
     png = icon_path("smart-ylc@512.png")
     if png.is_file():
         pm = QPixmap(str(png))
         if not pm.isNull():
-            return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
-                             Qt.TransformationMode.SmoothTransformation)
+            return scale_to(pm, size)
     svg = icon_path("smart-ylc-icon.svg")
     if svg.is_file():
         from PySide6.QtSvg import QSvgRenderer
 
         renderer = QSvgRenderer(str(svg))
-        pm = QPixmap(size, size)
-        pm.fill(Qt.GlobalColor.transparent)
+        pm = canvas_pixmap(size)
         painter = QPainter(pm)
         renderer.render(painter)
         painter.end()
@@ -59,11 +61,12 @@ def app_tile_pixmap(size: int = 64) -> QPixmap:
     app_pixmap 是完整图标（带投影与边距），适合当窗口/托盘图标；放进正文当 logo 时
     那圈留白会让方块缩进去，左缘和同一列的文字对不上（512 的图左边空了 54px）。
     """
-    pm = app_pixmap(512)
-    if pm.isNull():
-        return pm
+    png = icon_path("smart-ylc@512.png")
+    src = QPixmap(str(png)) if png.is_file() else app_pixmap(512)
+    if src.isNull():
+        return src
     # 缩到 128 再找不透明区：512 逐像素太慢，回到原尺寸的误差不到 1px
-    probe = pm.toImage().scaled(
+    probe = src.toImage().scaled(
         128, 128, Qt.AspectRatioMode.IgnoreAspectRatio,
         Qt.TransformationMode.SmoothTransformation
     ).convertToFormat(QImage.Format.Format_ARGB32)
@@ -75,12 +78,11 @@ def app_tile_pixmap(size: int = 64) -> QPixmap:
                 x0, y0 = min(x0, x), min(y0, y)
                 x1, y1 = max(x1, x), max(y1, y)
     if x1 < 0:
-        return pm
-    k = pm.width() / 128
+        return scale_to(src, size)
+    k = src.width() / 128
     crop = QRect(int(x0 * k), int(y0 * k),
                  int((x1 - x0 + 1) * k), int((y1 - y0 + 1) * k))
-    return pm.copy(crop).scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
-                                Qt.TransformationMode.SmoothTransformation)
+    return scale_to(src.copy(crop), size)
 
 
 def app_icon() -> QIcon:
@@ -94,8 +96,7 @@ def app_icon() -> QIcon:
 def mark_pixmap(size: int = 64) -> QPixmap:
     """透明底的团徽标记：欢迎页、标题栏这类地方用。"""
     svg = icon_path("smart-ylc-mark.svg")
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
+    pm = canvas_pixmap(size)
     if not svg.is_file():
         return pm
     try:
