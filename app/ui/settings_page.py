@@ -170,6 +170,8 @@ class SettingsPage(FluentPage):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("page-settings")
+        # 系统配置内容整体上移一点：顶部边距从 24 收到 14，卡片更贴近标题栏
+        self.vBoxLayout.setContentsMargins(32, 14, 32, 24)
         self.rosters: dict[str, Roster] = {}  # 学期 → 名单
         self._roster_paths: dict[str, str] = {}  # 学期 → xlsx 路径（持久化）
         self.roster: Roster | None = None  # 全部学期合并（供检查/上传用）
@@ -243,7 +245,7 @@ class SettingsPage(FluentPage):
         # 账号表：勾选框 + 账号 + 密码 + 备注 + 届别 + 状态 + 健康状态 + 最近检查
         self.table = TableWidget()
         self.table.setBorderVisible(True)
-        self.table.setBorderRadius(8)
+        self.table.setBorderRadius(10)  # 与卡片、窗口圆角同心
         self.table.setColumnCount(8)
         self._select_all_header = SelectAllHeader(self.table)
         self.table.setHorizontalHeader(self._select_all_header)
@@ -271,12 +273,6 @@ class SettingsPage(FluentPage):
         row(acc_card, table_block)
 
         # 一行放不下四个输入框，改成「添加账号」按钮打开表单弹窗
-        self.new_user = LineEdit()
-        self.new_user.setPlaceholderText("账号")
-        self.new_pwd = LineEdit()
-        self.new_pwd.setPlaceholderText("密码")
-        self.new_remark = LineEdit()
-        self.new_remark.setPlaceholderText("备注")
         self.add_open_btn = PushButton(FIF.ADD, "添加账号")
         set_tip(self.add_open_btn, "填账号与密码，确定后立刻测活")
         self.add_open_btn.clicked.connect(self._open_add_account)
@@ -317,6 +313,7 @@ class SettingsPage(FluentPage):
 
         self.roster_table = TableWidget()
         self.roster_table.setColumnCount(3)
+        self.roster_table.setBorderRadius(10)  # 与卡片、窗口圆角同心
         self.roster_table.setHorizontalHeaderLabels(["名单", "人数", "名单文件"])
         self.roster_table.setEditTriggers(self.roster_table.EditTrigger.NoEditTriggers)
         header = self.roster_table.horizontalHeader()
@@ -341,6 +338,7 @@ class SettingsPage(FluentPage):
         row(ros_card, self.sec_row)
         self.sec_table = TableWidget()
         self.sec_table.setColumnCount(3)
+        self.sec_table.setBorderRadius(10)  # 与卡片、窗口圆角同心
         self.sec_table.setHorizontalHeaderLabels(["支部", "团支书", "手机号码"])
         self.sec_table.setEditTriggers(self.sec_table.EditTrigger.NoEditTriggers)
         sec_block = FullRow()
@@ -400,12 +398,9 @@ class SettingsPage(FluentPage):
         self.ws_edit.setPlaceholderText("选择工作目录")
         self.ws_btn = PushButton(FIF.FOLDER, "选择目录")
         self.ws_btn.clicked.connect(self._pick_workspace)
-        self.ws_open_btn = PushButton(FIF.LINK, "打开目录")
-        set_tip(self.ws_open_btn, "在访达中打开当前工作目录")
-        self.ws_open_btn.clicked.connect(self._open_workspace_folder)
         self.workspace_row = SettingRow(
             "工作目录", desc="未选择目录", icon=FIF.FOLDER,
-            control=controls(self.ws_btn, self.ws_open_btn))
+            control=controls(self.ws_btn))
         row(ws_card, self.workspace_row)
 
         self.notify_mode = ComboBox()
@@ -418,9 +413,6 @@ class SettingsPage(FluentPage):
         self.notify_interval = ComboBox()
         for hours in notify_schedule.INTERVAL_CHOICES:
             self.notify_interval.addItem(f"每 {hours} 小时", userData=hours)
-        self.notify_test_btn = ToolButton(FIF.SEND)
-        set_tip(self.notify_test_btn, "立即发一条测试通知")
-        self.notify_test_btn.clicked.connect(self._test_notify)
         self.notify_more_btn = ToolButton(FIF.SETTING)
         set_tip(self.notify_more_btn, "发送时间、间隔与手动测试")
         self.notify_more_btn.clicked.connect(self._open_notify_dialog)
@@ -544,7 +536,6 @@ class SettingsPage(FluentPage):
         # 工作区
         ws_dir = cfg.get("workspaceDir", "")
         self.ws_edit.setText(ws_dir)
-        self.ws_open_btn.setEnabled(bool(ws_dir and os.path.isdir(ws_dir)))
         if ws_dir and os.path.isdir(ws_dir):
             self._setup_watcher(ws_dir)
         elif not ws_dir:
@@ -684,17 +675,18 @@ class SettingsPage(FluentPage):
         self._sync_notify_controls()
         self._save_config()
 
-    def _test_notify(self):
-        """手动发一条测试通知：osascript 不占 GUI 线程。"""
-        self.notify_test_btn.setEnabled(False)
+    def _test_notify(self, btn=None):
+        """手动发一条测试通知：osascript 不占 GUI 线程。
 
+        btn 为点击来源按钮（弹窗每次新建），发送期间置灰作反馈；不传则只发不置灰。"""
         def _send():
             from app.services.notify import send
 
             return send("团员情况（测试）", "通知通道正常，这是一条测试消息。")
 
         def _done(ok: bool):
-            self.notify_test_btn.setEnabled(True)
+            if btn is not None:
+                btn.setEnabled(True)
             if ok:
                 InfoBar.success("测试通知已发送", "没看到弹窗时检查系统通知权限",
                                 duration=4000, parent=self)
@@ -702,10 +694,12 @@ class SettingsPage(FluentPage):
                 InfoBar.warning("测试通知未送达", "当前平台不支持或系统拒绝了通知",
                                 duration=5000, parent=self)
 
+        if btn is not None:
+            btn.setEnabled(False)
         worker = CallbackWorker(_send, self)
         worker.ok.connect(_done)
         worker.fail.connect(lambda msg: (
-            self.notify_test_btn.setEnabled(True),
+            btn.setEnabled(True) if btn is not None else None,
             InfoBar.error("测试通知失败", msg, duration=5000, parent=self)))
         self._workers.append(worker)
         worker.start()
@@ -853,22 +847,38 @@ class SettingsPage(FluentPage):
         return ConfigDialog(title, self.window(), note, yes_text=yes_text)
 
     def _open_add_account(self):
-        """添加账号：四个输入框放进弹窗，行上只留一个四字按钮。"""
+        """添加账号：四个输入框放进弹窗，行上只留一个四字按钮。
+
+        输入框每次打开都新建并挂在弹窗自身之下（dialog.user_edit 等），
+        关窗时随弹窗一起销毁——不复用设置页上的持久控件，避免两次打开弹窗
+        时旧控件被反复 reparent 导致的渲染错位/穿透。"""
         from app.ui.dialogs import FormDialog
+        from qfluentwidgets import LineEdit
 
         dialog = FormDialog(
             "添加账号", self.window(),
             "账号与密码都填好再点确认；备注留空按编号规则推断",
-            on_submit=self._add_manual)
+            on_submit=lambda: self._add_manual(
+                user=dialog.user_edit.text().strip(),
+                pwd=dialog.pwd_edit.text(),
+                remark=dialog.remark_edit.text().strip(),
+            ),
+        )
         dialog.body.setSpacing(14)  # 四个输入框之间留出呼吸，不要挤成一块
-        for label, widget in (("团支部账号，如 ssfz12407", self.new_user),
-                              ("登录密码", self.new_pwd),
-                              ("备注，留空按编号规则推断", self.new_remark)):
+        dialog.user_edit = LineEdit(dialog)
+        dialog.user_edit.setPlaceholderText("团支部账号，如 ssfz12407")
+        dialog.pwd_edit = LineEdit(dialog)
+        dialog.pwd_edit.setPlaceholderText("登录密码")
+        dialog.remark_edit = LineEdit(dialog)
+        dialog.remark_edit.setPlaceholderText("备注，留空按编号规则推断")
+        for label, widget in (("团支部账号，如 ssfz12407", dialog.user_edit),
+                              ("登录密码", dialog.pwd_edit),
+                              ("备注，留空按编号规则推断", dialog.remark_edit)):
             widget.setMinimumHeight(36)
             dialog.add_field(label, widget)
         self._add_dialog = dialog
         dialog.show()
-        self.new_user.setFocus()
+        dialog.user_edit.setFocus()
 
     def _open_file_dialog(self):
         """账号文件：导入、模板、导出三个命令收在一个入口里。"""
@@ -877,31 +887,60 @@ class SettingsPage(FluentPage):
             dialog.add_row(widget)
         dialog.show()
 
-    def _open_workspace_folder(self):
-        """在访达中打开当前工作目录；未选择时提示先选目录。"""
-        d = self.ws_edit.text().strip()
-        if not d or not os.path.isdir(d):
-            InfoBar.warning("还未选择工作目录", "先点「选择目录」指定工作目录",
-                            duration=3000, parent=self)
-            return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(d))
-
     def _open_notify_dialog(self):
-        """通知频率：发送时间、间隔与手动测试。"""
-        dialog = self._config_dialog("通知设置", "每天一次按时间点推送；按间隔则从上次推送起算")
-        dialog.add_field("每天推送的时间点，如 08:00", self.notify_time_edit)
-        dialog.add_row(self.notify_interval, self.notify_test_btn)
-        dialog.show()
-        self._sync_notify_controls()  # 弹窗把控件 show() 了，按当前模式重新收放一次
+        """通知频率：发送时间、间隔与手动测试。
 
-    def _add_manual(self) -> bool:
-        """校验并添加。返回 False 时弹窗保持打开，错误用信息条提示。"""
-        user, pwd = self.new_user.text().strip(), self.new_pwd.text()
+        时间框与间隔框每次打开都新建并挂在弹窗下，关窗前写回持久属性
+        （_save_config 读的是这两个属性），避免两次打开复用控件导致的渲染异常。"""
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+        from qfluentwidgets import ComboBox, LineEdit, PushButton
+
+        from app.ui.page import note_label
+
+        dialog = self._config_dialog("通知设置", "每天一次按时间点推送；按间隔则从上次推送起算")
+        time_edit = LineEdit(dialog)
+        time_edit.setPlaceholderText("08:00")
+        time_edit.setClearButtonEnabled(False)
+        time_edit.setText(self.notify_time_edit.text())
+        dialog.add_field("每天推送的时间点，如 08:00", time_edit)
+        interval = ComboBox(dialog)
+        for hours in notify_schedule.INTERVAL_CHOICES:
+            interval.addItem(f"每 {hours} 小时", userData=hours)
+        idx = interval.findData(self.notify_interval.currentData())
+        interval.setCurrentIndex(idx if idx >= 0 else 0)
+        dialog.add_field("按间隔推送时，每隔多久发一次", interval)
+
+        # 手动测试：上方说明 label，按钮横向铺满弹窗
+        test_box = QWidget(dialog)
+        tl = QVBoxLayout(test_box)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(4)
+        tl.addWidget(note_label("点击下方按钮立即发一条测试通知，确认系统通知通道是否通畅"))
+        test_btn = PushButton(FIF.SEND, "发送测试通知")
+        test_btn.clicked.connect(lambda: self._test_notify(test_btn))
+        tl.addWidget(test_btn)
+        dialog.add(test_box)
+        dialog.show()
+
+        # 关窗前把弹窗里的值写回持久属性并落盘（deleteLater 是排队执行，
+        # finished 信号同步回调时控件仍存活，可安全读取）。
+        def _write_back():
+            self.notify_time_edit.setText(time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME)
+            self.notify_interval.setCurrentIndex(interval.currentIndex())
+            self._save_config()
+
+        dialog.finished.connect(_write_back)
+
+    def _add_manual(self, user: str, pwd: str, remark: str) -> bool:
+        """校验并添加。返回 False 时弹窗保持打开，错误用信息条提示。
+
+        user/pwd/remark 由弹窗内的输入框经闭包传入（每次打开都是全新控件）。"""
         if not user or not pwd:
             InfoBar.warning("账号或密码未填", "填写账号和密码", duration=2500, parent=self)
             return False
         year = ""  # 届别在表格里就地编辑，添加时不再问
-        remark = self.new_remark.text().strip() or describe_code(user, self.org_rule())
+        remark = remark or describe_code(user, self.org_rule())
         existing = next((a for a in self.accounts if a["userName"] == user), None)
         if existing and existing["password"] != pwd:
             # 冲突：非模态弹窗，选择后回调落账
@@ -932,9 +971,6 @@ class SettingsPage(FluentPage):
         if result != "kept":
             acc = next(a for a in self.accounts if a["userName"] == user)
             acc["graduateYear"] = year
-        self.new_user.clear()
-        self.new_pwd.clear()
-        self.new_remark.clear()
         self._after_accounts_changed()
         if result == "added":
             InfoBar.success("已添加", f"账号 {user}", duration=3000, parent=self)
@@ -1480,7 +1516,6 @@ class SettingsPage(FluentPage):
         if not d:
             return
         self.ws_edit.setText(d)
-        self.ws_open_btn.setEnabled(True)
         self._setup_watcher(d)
         self._save_config()
         # 立即扫一遍存量 PDF

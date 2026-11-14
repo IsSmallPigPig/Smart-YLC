@@ -410,7 +410,7 @@ class BrowserWindow(FluentWindowBase):
         title = theme_font(BodyLabel("还没有打开支部", box), 20, int(QFont.Weight.DemiBold))
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(title, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.welcome_hint = note_label("每个支部一个标签，各用独立存储，标签之间不会顶号")
+        self.welcome_hint = note_label("让我们拜访一下支部的同志们")
         self.welcome_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(self.welcome_hint, 0, Qt.AlignmentFlag.AlignHCenter)
         self.start_btn = PrimaryPushButton(FIF.GLOBE, "开始访问", box)
@@ -630,7 +630,7 @@ class BrowserWindow(FluentWindowBase):
                 else "支部账号状态都不正常，先到测活恢复，或在系统配置重新登录")
             self._raise_page("")
             return
-        self.welcome_hint.setText("每个支部一个标签，各用独立存储，标签之间不会顶号")
+        self.welcome_hint.setText("让我们拜访一下支部的同志们")
         pick_branch(usable, self, self._open, self._current)
 
     def _open(self, user: str):

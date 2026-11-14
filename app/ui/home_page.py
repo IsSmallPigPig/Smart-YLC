@@ -186,19 +186,11 @@ class HomePage(FluentPage):
 
         body = QWidget()
         body_lay = QVBoxLayout(body)
-        # 图标左边缘对齐到内容区左侧（侧边栏右缘），其余文字与卡片仍缩进 36px
+        # 整组内容都缩进 36px（图标也收进 inner 里，和欢迎文字同一根左边线），
+        # 只有 body 自身不缩进，让内容区铺满视口、由 inner 统一控制左右留白。
         body_lay.setContentsMargins(0, 0, 0, 0)
         body_lay.setSpacing(8)
         body_lay.addStretch(2)
-        from PySide6.QtWidgets import QLabel
-
-        from app.ui.brand import app_pixmap
-
-        logo = QLabel(body)
-        logo.setPixmap(app_pixmap(64))
-        logo.setFixedSize(64, 64)
-        body_lay.addWidget(logo, 0, Qt.AlignmentFlag.AlignLeft)
-        body_lay.addSpacing(6)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
         # 两行标题收在一个盒子里：默认布局会在它们之间留一整行空隙
@@ -209,11 +201,21 @@ class HomePage(FluentPage):
         greet_lay.addWidget(self.hello_label)
         greet_lay.addWidget(self.title_label)
 
-        # 图标以外的整组内容：保留原来的 36px 左右缩进，垂直间距与原来一致
+        # 图标与欢迎文字统一左对齐到同一根 36px 缩进线：之前图标单独顶到侧边栏
+        # 右缘、和文字错开一截，看着像没对齐。同时放大到与标题协调的尺寸。
         inner = QWidget()
         inner_lay = QVBoxLayout(inner)
         inner_lay.setContentsMargins(36, 0, 36, 0)
         inner_lay.setSpacing(8)
+        from PySide6.QtWidgets import QLabel
+
+        from app.ui.brand import app_pixmap
+
+        logo = QLabel(inner)
+        logo.setPixmap(app_pixmap(80))
+        logo.setFixedSize(80, 80)
+        inner_lay.addWidget(logo)
+        inner_lay.addSpacing(4)
         inner_lay.addWidget(greet)
         inner_lay.addSpacing(12)
 

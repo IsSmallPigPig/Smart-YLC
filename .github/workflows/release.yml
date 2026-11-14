@@ -10,7 +10,15 @@ permissions:
 
 jobs:
   build-macos:
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          # macos-14 是 Apple Silicon，macos-13 是最后一版 Intel 机器
+          - os: macos-14
+            arch: arm64
+          - os: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,14 +57,15 @@ jobs:
         run: |
           hdiutil create -volname "SmartYouth" \
             -srcfolder "dist/SmartYouth.app" \
-            -ov -format UDZO "dist/SmartYouth-macOS.dmg"
+            -ov -format UDZO "dist/SmartYouth-macOS-${{ matrix.arch }}.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SmartYouth-macOS
-          path: dist/SmartYouth-macOS.dmg
+          name: SmartYouth-macOS-${{ matrix.arch }}
+          path: dist/SmartYouth-macOS-${{ matrix.arch }}.dmg
 
   build-windows:
+    # windows-latest 自带 x86_64（Intel/AMD 64 位）工具链，打出的就是 x86 版
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,10 +89,13 @@ jobs:
             --add-data "app/assets;assets" `
             main.py
 
+      - name: 重命名 exe 标明架构
+        run: Move-Item dist/SmartYouth.exe dist/SmartYouth-Windows-x64.exe
+
       - uses: actions/upload-artifact@v4
         with:
           name: SmartYouth-Windows
-          path: dist/SmartYouth.exe
+          path: dist/SmartYouth-Windows-x64.exe
 
   release:
     needs: [build-macos, build-windows]
@@ -100,8 +112,12 @@ jobs:
           generate_release_notes: true
           body: |
             ## 下载
-            - **macOS**：`SmartYouth-macOS.dmg`（拖入 Applications 即可安装）
-            - **Windows**：`SmartYouth-Windows.exe`（单文件版，双击运行）
+            - **macOS（Apple Silicon / M 系列）**：`SmartYouth-macOS-arm64.dmg`
+            - **macOS（Intel）**：`SmartYouth-macOS-x86_64.dmg`
+            - **Windows（64 位）**：`SmartYouth-Windows-x64.exe`（单文件版，双击运行）
+
+            拿不准 Mac 的芯片型号时，点左上角苹果菜单 →「关于本机」：
+            「芯片」显示 Apple M 系列选 arm64，显示处理器（Intel）选 x86_64。
 
             ## 首次运行说明
             - **macOS**：应用未做签名与公证，首次打开若提示「无法验证开发者」，
@@ -112,5 +128,6 @@ jobs:
 
             完整变更列表见下方自动生成的更新日志（由 GitHub bot 生成）。
           files: |
-            artifacts/SmartYouth-macOS/SmartYouth-macOS.dmg
-            artifacts/SmartYouth-Windows/SmartYouth.exe
+            artifacts/SmartYouth-macOS-arm64/SmartYouth-macOS-arm64.dmg
+            artifacts/SmartYouth-macOS-x86_64/SmartYouth-macOS-x86_64.dmg
+            artifacts/SmartYouth-Windows/SmartYouth-Windows-x64.exe

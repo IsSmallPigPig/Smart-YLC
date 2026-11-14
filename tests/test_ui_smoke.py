@@ -130,7 +130,7 @@ def test_upload_branch_cards_use_tags(app, isolated_store):
     assert len(cards) == 1
     card = cards[0]
     assert card.title_label.text() == "高三十二班"
-    assert [p.text() for p in card._tags] == ["普通高中", "2 份", "1 缺团员"]
+    assert [p.text() for p in card._tags] == ["普通高中", "2 份", "缺团员 1"]
     assert "·" not in card.title_label.text()
     assert "缺团员" in upload.summary.text()
 
@@ -246,21 +246,27 @@ def test_cross_fade_applies_work_and_cleans_effect(app, isolated_store):
 
 
 def test_upload_search_filters_rows(app, isolated_store):
+    """搜索只过滤下方按支部折叠的卡片：匹配不到的支部整体不出现。"""
     from app.ui.upload_page import UploadPage
+    from app.domain.upload_inspect import FileStatus
 
     upload = UploadPage(FakeWindow())
-    upload._items_all = [
-        {"title": "张三.pdf", "note": "", "tone": "ok", "status": "正常",
-         "meta": ["4 页", "普通高中高一7班"]},
-        {"title": "李四.pdf", "note": "页数不符", "tone": "error", "status": "异常",
-         "meta": ["2 页", "初中部初三十班"]},
+    upload.statuses = [
+        FileStatus(path="/a/张三.pdf", name="张三.pdf", pages=4,
+                   branch="普通高中高一7班", account="acc1", naming="ok", member="ok"),
+        FileStatus(path="/a/李四.pdf", name="李四.pdf", pages=2,
+                   branch="初中部初三十班", account="acc2",
+                   naming="error", problem="页数不符"),
     ]
-    upload._apply_filter()
-    assert upload.status_list.count() == 2
+    upload._rebuild_branches()
+    assert len(upload._branch_rows) == 2  # 无搜索：两份都在
+
     upload.set_search("高一7班")
-    assert upload.status_list.count() == 1
+    assert len(upload._branch_rows) == 1  # 只保留匹配到的那个支部
+    assert "/a/张三.pdf" in upload._branch_rows
+
     upload.set_search("")
-    assert upload.status_list.count() == 2
+    assert len(upload._branch_rows) == 2  # 清空搜索后两份恢复
 
 
 def test_theme_switch_fades_then_applies(app, isolated_store):
@@ -331,8 +337,94 @@ def test_add_account_lives_in_one_row(app, isolated_store):
             break
         holder = holder.parentWidget()
     assert page.add_open_btn.text() == "添加账号"
-    # 四个输入框不在页面上，只在弹窗里
-    assert not page.new_user.isVisible()
+    # 输入框不再常驻页面；打开弹窗时才随弹窗新建，并挂在弹窗自身之下
+    assert not hasattr(page, "new_user")
+    page._open_add_account()
+    dialog = page._add_dialog
+    assert dialog is not None
+    from qfluentwidgets import LineEdit
+
+    assert isinstance(dialog.user_edit, LineEdit)
+    # 输入框是弹窗内容树的一部分，而不是页面的持久控件
+    assert dialog.user_edit.parentWidget() is not None
+    dialog.reject()
+
+
+def test_add_account_dialog_fresh_per_open(app, isolated_store):
+    """回归：添加账号弹窗每次打开都用全新输入框，连开两次不串控件、不残留。
+
+    旧实现复用页面上的持久 LineEdit，跨两次弹窗 reparent 会留下渲染错位/穿透。"""
+    from qfluentwidgets import LineEdit
+
+    from app.ui.settings_page import SettingsPage
+
+    page = SettingsPage()
+    page.window_ref = None  # 提交链里 refresh_all 走空，不连真实服务
+
+    # 第一次打开
+    page._open_add_account()
+    d1 = page._add_dialog
+    assert isinstance(d1.user_edit, LineEdit)
+    assert d1.user_edit.parentWidget() is not None
+    first_id = id(d1.user_edit)
+
+    # 填好提交：账号入库，弹窗关闭
+    d1.user_edit.setText("ssfz24101")
+    d1.pwd_edit.setText("secret")
+    assert page._add_manual(user="ssfz24101", pwd="secret", remark="") is True
+    assert any(a["userName"] == "ssfz24101" for a in page.accounts)
+    # 关闭后输入框随弹窗销毁，不再挂在页面上
+    assert not hasattr(page, "new_user")
+
+    # 第二次打开：必须是另一批全新控件，而不是第一次那批
+    page._open_add_account()
+    d2 = page._add_dialog
+    assert d2 is not d1
+    assert id(d2.user_edit) != first_id
+    assert isinstance(d2.user_edit, LineEdit)
+    assert d2.user_edit.parentWidget() is not None
+    d2.reject()
+
+
+def test_notify_dialog_fresh_per_open_and_writeback(app, isolated_store):
+    """回归：通知弹窗每次打开用全新控件，关窗把时间/间隔写回持久属性。
+
+    旧实现复用页面上的持久 time_edit/interval 控件，两次打开会重复 reparent
+    导致渲染错位；且改动不会落回 _save_config 读取的属性。"""
+    from PySide6.QtWidgets import QApplication
+
+    from qfluentwidgets import ComboBox
+
+    from app.ui.settings_page import SettingsPage
+
+    page = SettingsPage()
+    # isolated_store 默认 notifyInterval=4
+    assert page.notify_interval.currentData() == 4
+
+    captured = []
+    orig = page._config_dialog
+    page._config_dialog = lambda *a, **k: captured.append(orig(*a, **k)) or captured[-1]
+
+    page._open_notify_dialog()
+    dlg = captured[-1]
+    combo = dlg.findChild(ComboBox)
+    assert combo is not None
+    assert combo is not page.notify_interval  # 弹窗里是全新控件，不是页面持久控件
+
+    idx = combo.findData(2)
+    combo.setCurrentIndex(idx)
+    dlg.accept()
+    QApplication.processEvents()  # 让 deleteLater / 回调落地
+    # 值已写回持久属性并落盘
+    assert page.notify_interval.currentData() == 2
+
+    # 再次打开：又是一批全新控件，且读到的仍是上次写回的 2 小时
+    page._open_notify_dialog()
+    dlg2 = captured[-1]
+    combo2 = dlg2.findChild(ComboBox)
+    assert combo2 is not None and combo2 is not page.notify_interval
+    assert page.notify_interval.currentData() == 2
+    dlg2.reject()
 
 
 def test_open_web_uses_browser_window(app, isolated_store):

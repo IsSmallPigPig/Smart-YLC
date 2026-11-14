@@ -257,6 +257,8 @@ class CollapsibleCard(CardWidget):
     def __init__(self, title: str, expanded: bool = True,
                  tags: list[tuple[str, str]] | None = None, parent=None):
         super().__init__(parent)
+        # 圆角与窗口圆角一致（约 10px），卡片四角与窗口四角同心，视觉更整
+        self.setBorderRadius(10)
         self._expanded = bool(expanded)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 12, 20, 12)

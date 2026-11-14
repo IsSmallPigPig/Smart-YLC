@@ -42,7 +42,7 @@ class SplashScreen(QWidget):
         lay.addWidget(self.title)
         lay.addSpacing(8)
 
-        self.desc = CaptionLabel("正在加载概览数据…", self)
+        self.desc = CaptionLabel("正在联络各个支部的同志", self)
         self.desc.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(self.desc)
         lay.addSpacing(22)

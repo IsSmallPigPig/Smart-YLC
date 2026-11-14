@@ -355,7 +355,7 @@ class MainWindow(MSFluentWindow):
         self.back_slot.setFixedSize(30, 30)
         # 空槽位本身不接收鼠标事件，否则会挡住下面的拖拽
         self.back_slot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.back_btn = TransparentToolButton(FIF.RETURN, self.back_slot)
+        self.back_btn = TransparentToolButton(FIF.CARE_LEFT_SOLID, self.back_slot)
         set_tip(self.back_btn, "返回上一页")
         self.back_btn.setFixedSize(30, 30)
         self.back_btn.move(0, 0)
@@ -378,8 +378,8 @@ class MainWindow(MSFluentWindow):
         tb.insertWidget(0, self.back_slot, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         tb.insertWidget(tb.indexOf(self.titleBar.titleLabel), self.logo, 0,
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        # 图标与标题文字之间留一格，两者的关系和参考图一致
-        tb.insertSpacing(tb.indexOf(self.titleBar.titleLabel), 8)
+        # 图标紧贴标题文字（仅留 4px 呼吸位），两者垂直居中、左缘对齐
+        tb.insertSpacing(tb.indexOf(self.titleBar.titleLabel), 4)
         # 标题文字按同一基线居中，否则图标与文字看着不在一行
         self.titleBar.titleLabel.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -492,9 +492,11 @@ class MainWindow(MSFluentWindow):
         if idx >= 0:
             tb.takeAt(idx)
         # 参考 Fluent Gallery：返回键、图标、标题文字紧凑排在标题栏最左，
-        # 整组左边缘固定在 12px，不随返回历史出现与否移动。
-        tb.insertSpacing(0, 12)
+        # 整组左边缘固定在 10px，不随返回历史出现与否移动。
+        tb.insertSpacing(0, 10)
         tb.insertWidget(1, self.back_slot, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # 返回箭头与图标之间只留 4px：logo 更靠左，又不和 30px 返回键粘在一起
+        tb.insertSpacing(2, 4)
         self.titleBar.titleLabel.setText(self.windowTitle())
         self.titleBar.titleLabel.adjustSize()
         self._place_search()

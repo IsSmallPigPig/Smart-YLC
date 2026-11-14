@@ -10,12 +10,13 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 
-from PySide6.QtCore import Qt, QRectF, QThread, Signal
+from PySide6.QtCore import QSize, Qt, QRectF, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
+    BreadcrumbBar,
     CardWidget,
     FluentIcon as FIF,
     IconWidget,
@@ -25,7 +26,6 @@ from qfluentwidgets import (
     StrongBodyLabel,
     ToggleToolButton,
     ToolButton,
-    TransparentPushButton,
     TransparentToolButton,
     isDarkTheme,
     qconfig,
@@ -137,6 +137,23 @@ class ClickRow(CardRow):
         self.clicked.emit()
 
 
+class CrumbBar(BreadcrumbBar):
+    """官方面包屑导航：横向放在标题栏槽位里，按内容取宽。
+
+    qfluentwidgets 的 BreadcrumbBar 没重写 sizeHint、也只在 resizeEvent 里重排节点；
+    放进横向布局会被压成 0 宽、且首次显示时宽度还没就绪会把首节点收进省略按钮。
+    这里补 sizeHint 给偏好宽度，并在显示后强制重排一次。"""
+
+    def sizeHint(self):
+        w = sum(i.width() for i in self.items) + 4
+        h = max((i.height() for i in self.items), default=20)
+        return QSize(w, h)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.updateGeometry()
+
+
 class MemberSyncWorker(QThread):
     """同步系统数据：用已保存的会话拉取各支部成员，逐账号写 memberCache。
 
@@ -237,24 +254,11 @@ class OrgManagePage(FluentPage):
         self.title_lbl = self.header.title_label
         self.stat_label = self.header.desc_label
 
-        self.crumb_home = TransparentPushButton("组织管理")
-        set_tip(self.crumb_home, "返回支部列表")
-        self.crumb_home.clicked.connect(self.back_to_feed)
-        self.crumb_sep = IconWidget(FIF.CHEVRON_RIGHT_MED)
-        self.crumb_sep.setFixedSize(14, 14)
-        self.crumb_branch = StrongBodyLabel("")
-        # 面包屑两段统一字体样式（16 半粗），不带小图标
-        theme_font(self.crumb_home, 16, int(QFont.Weight.DemiBold))
-        theme_font(self.crumb_branch, 16, int(QFont.Weight.DemiBold))
-        self.crumb_branch.setTextColor(QColor("#6b7280"), QColor("#9ca3af"))
-        self.crumb_box = QWidget()
-        crumb_lay = QHBoxLayout(self.crumb_box)
-        crumb_lay.setContentsMargins(0, 0, 0, 0)
-        crumb_lay.setSpacing(8)
-        for w in (self.crumb_home, self.crumb_sep, self.crumb_branch):
-            crumb_lay.addWidget(w)
-        self.header.slot.addWidget(self.crumb_box)
-        self.crumb_box.setVisible(False)
+        # 官方面包屑导航：组织管理 › 支部名，点「组织管理」返回支部列表
+        self.crumb_bar = CrumbBar(self.header)
+        self.crumb_bar.currentItemChanged.connect(self._on_crumb)
+        self.header.slot.addWidget(self.crumb_bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.crumb_bar.setVisible(False)
 
         # 显示全部：只有图标，常亮即「看全部团员」，灭掉只看系统名单
         self.sys_only = ToggleToolButton(FIF.TILES)
@@ -334,7 +338,22 @@ class OrgManagePage(FluentPage):
 
     def _set_nav(self, detail: bool):
         self.title_lbl.setVisible(not detail)
-        self.crumb_box.setVisible(detail)
+        self.crumb_bar.setVisible(detail)
+
+    def _set_crumb(self, branch_label: str):
+        """重建面包屑为「组织管理 › 支部名」。
+
+        用 blockSignals 包住重建：BreadcrumbBar.addItem 会自动选中并触发
+        currentItemChanged，否则程序化重建会误触发返回。"""
+        self.crumb_bar.blockSignals(True)
+        self.crumb_bar.clear()
+        self.crumb_bar.addItem("home", "组织管理")
+        self.crumb_bar.addItem("branch", branch_label)
+        self.crumb_bar.blockSignals(False)
+
+    def _on_crumb(self, route_key: str):
+        if route_key == "home":
+            self.back_to_feed()
         # 详情里已有大标题和三列统计，工具条不再重复一遍人数
         self.stat_label.setVisible(not detail)
         self.sys_only.setVisible(not detail)
@@ -583,7 +602,7 @@ class OrgManagePage(FluentPage):
 
     def _build_detail(self, b: BranchNode, animate: bool = True):
         self._clear(self.detail_lay)
-        self.crumb_branch.setText(b.label)
+        self._set_crumb(b.label)
         st = self._branch_stats(b)
         self.stat_label.setText(
             f"{b.label}，团员 {st['total']} 人，系统在册 {st['system']} 人")
@@ -729,6 +748,8 @@ class OrgManagePage(FluentPage):
             toggle = TransparentToolButton()
             set_tip(toggle, "展开系统信息")
             toggle.setFixedSize(28, 28)
+            # 初始就显示收起态的 chevron，否则没点过的行没有箭头、渲染上「有的有箭头有的没有」
+            toggle.setIcon(chevron_icon(False))
             h.addWidget(toggle)
 
         wrap = QWidget()
