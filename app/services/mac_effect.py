@@ -17,6 +17,14 @@ MATERIALS = {
     "hud": "NSVisualEffectMaterialHUDWindow",  # 注意大写：HUD 全大写
 }
 
+# 材质整体透明度（NSView alpha）：Popover 材质本身偏实，压到 0.8 让壁纸
+# 隐约透出来；sidebar/hud 保持材质原味（sidebar 本来就更透，hud 要沉）
+MATERIAL_ALPHA = {
+    "acrylic": 0.8,
+    "sidebar": 1.0,
+    "hud": 1.0,
+}
+
 
 def enable_acrylic(window, material: str = "acrylic") -> None:
     """在窗口下方插入混合层；已开启同材质时无副作用，换材质时重建。"""
@@ -38,6 +46,7 @@ def enable_acrylic(window, material: str = "acrylic") -> None:
     view.setState_(Cocoa.NSVisualEffectStateActive)
     view.setMaterial_(getattr(Cocoa, MATERIALS[key]))
     view.setBlendingMode_(Cocoa.NSVisualEffectBlendingModeBehindWindow)
+    view.setAlphaValue_(MATERIAL_ALPHA.get(key, 1.0))
 
     ns_window = getNSWindow(window.winId())
     content = ns_window.contentView()
