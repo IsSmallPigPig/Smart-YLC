@@ -1,15 +1,14 @@
-"""工具首页：头图铺满顶部（渐变过渡到背景）+ 欢迎大字 + 居中两个入口按钮。
+"""工具首页：头图铺满顶部并柔和融进窗口底色，欢迎大字 + 右下两个入口按钮。
 
-字重体系：标题类文字用重字重（Black/Bold），说明类用小号常规字重。
-头图在「系统配置」设置，持久化到配置文件 headerImage 键，未设置时显示同色系占位渐变。
+头图在系统配置设置，持久化到配置文件 headerImage 键，未设置时显示同色系占位渐变。
 """
 
 from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QColor, QFont, QPainter, QLinearGradient, QPainterPath, QPixmap
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import FluentIcon as FIF
@@ -27,7 +26,7 @@ BANNER_RATIO = 0.40  # 头图占视口高度的比例，铺满上方页面
 
 
 def page_bg_color() -> QColor:
-    """首页实际渲染出来的窗口背景色（窗口底色与 StackedWidget 半透明白叠加后）。"""
+    """关闭材质时窗口绘制用的底色（窗口底色与 StackedWidget 半透明白叠加后）。"""
     base = QColor(32, 32, 32) if isDarkTheme() else QColor(240, 244, 249)
     overlay = QColor(255, 255, 255, 8 if isDarkTheme() else 128)
     return QColor(
@@ -38,7 +37,11 @@ def page_bg_color() -> QColor:
 
 
 class Banner(QWidget):
-    """头图：铺满整个宽度、直角贴边，图片 cover 铺满，底部渐隐到页面背景色；未设图时显示同色渐变占位。"""
+    """头图：通栏贴顶，图片 cover 铺满，下沿按 alpha 渐隐到全透明。
+
+    不再把图片压到某个猜出来的背景色上，而是让它直接淡出到真实窗口底色
+    （纯色、毛玻璃、明暗主题都一致），交界处因此没有颜色对不上的硬切线。
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -52,31 +55,40 @@ class Banner(QWidget):
         self.update()
 
     def paintEvent(self, e):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-
-        bg = page_bg_color()
         w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+
+        layer = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+        layer.fill(Qt.GlobalColor.transparent)
+        p = QPainter(layer)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+
         if self._pixmap and not self._pixmap.isNull():
-            # cover 铺满：等比缩放到覆盖后居中裁剪
             pm = self._pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                      Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap((pm.width() - w) // 2 * -1, (pm.height() - h) // 2 * -1, pm)
+            p.drawPixmap((pm.width() - w) // 2 * -1, (pm.height() - h) // 2 * -1, pm)
         else:
-            # 占位：从略亮到背景色的柔和渐变
-            lighter = QColor(bg.red() + 12, bg.green() + 12, bg.blue() + 14)
-            grad = QLinearGradient(0, 0, 0, h)
-            grad.setColorAt(0, lighter)
-            grad.setColorAt(1, bg)
-            painter.fillRect(self.rect(), grad)
+            top = QColor(38, 84, 140) if isDarkTheme() else QColor(166, 199, 235)
+            bottom = QColor(24, 42, 68) if isDarkTheme() else QColor(214, 230, 246)
+            grad = QLinearGradient(0, 0, w * 0.35, h)
+            grad.setColorAt(0, top)
+            grad.setColorAt(1, bottom)
+            p.fillRect(layer.rect(), grad)
 
-        # 底部 40% 渐隐到页面背景，与下方内容自然衔接
-        fade = QLinearGradient(0, h * 0.60, 0, h)
-        top = QColor(bg.red(), bg.green(), bg.blue(), 0)
-        fade.setColorAt(0, top)
-        fade.setColorAt(1, bg)
-        painter.fillRect(QRectF(0, h * 0.60, w, h * 0.40), fade)
+        # DestinationIn 只改 alpha：下沿拉长渐隐，头图自然化进窗口底色
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        fade = QLinearGradient(0, 0, 0, h)
+        fade.setColorAt(0, QColor(0, 0, 0, 255))
+        fade.setColorAt(0.66, QColor(0, 0, 0, 255))
+        fade.setColorAt(0.84, QColor(0, 0, 0, 170))
+        fade.setColorAt(1, QColor(0, 0, 0, 0))
+        p.fillRect(layer.rect(), fade)
+        p.end()
+
+        painter = QPainter(self)
+        painter.drawImage(0, 0, layer)
 
 
 class HomePage(FluentPage):
@@ -85,14 +97,12 @@ class HomePage(FluentPage):
         self.window_ref = window
         lay = self.vBoxLayout
         # 头图叠加在页面底层（不占布局），正文铺满整页：欢迎块以整个视口垂直居中，
-        # 有头图时正好落在头图与下方背景的交界处
+        # 正好落在头图与下方背景的交界处
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        # 首页内容固定刚好一屏：不出现滚动条
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # 头图横幅（通栏，贴顶，无圆角；叠加层，几何在 resizeEvent 里维护）
         self.banner = Banner(self.scrollWidget)
         self.banner.lower()
 
@@ -100,8 +110,6 @@ class HomePage(FluentPage):
         body_lay = QVBoxLayout(body)
         body_lay.setContentsMargins(36, 0, 36, 0)
         body_lay.setSpacing(8)
-
-        # 欢迎大字块在整页视口内垂直居中
         body_lay.addStretch(1)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
@@ -109,7 +117,6 @@ class HomePage(FluentPage):
         body_lay.addWidget(self.title_label)
         body_lay.addStretch(1)
 
-        # 两个入口按钮：贴页面底部
         row = QHBoxLayout()
         row.setContentsMargins(36, 0, 36, 28)
         upload_btn = PrimaryPushButton(FIF.CLOUD, "上传档案")
@@ -128,32 +135,35 @@ class HomePage(FluentPage):
         self._apply_font()
         self._load_header()
 
-    # ---------- 头图持久化（设置入口在「系统配置」） ----------
+    # ---------- 头图持久化（设置入口在系统配置） ----------
 
     def _load_header(self):
         from app.services import store
 
         self.banner.set_image_path(store.load().get("headerImage", ""))
 
-    # ---------- 字重与缩放 ----------
+    # ---------- 字号与字重 ----------
 
     def _apply_font(self):
-        """大字随窗口高度缩放：团委管理员约 0.14 倍视口高、Black 字重；欢迎 Bold 略小。"""
+        """保留原来的大字构图，只把字重收轻、字距放松，去掉 Black 的笨重感。"""
         vh = max(420, self.viewport().height())
         title_px = max(40, int(vh * 0.14))
         hello_px = max(32, int(vh * 0.105))
+
         f = self.title_label.font()
         f.setPixelSize(title_px)
-        f.setWeight(QFont.Weight.Black)
+        f.setWeight(QFont.Weight.Bold)
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.0)
         self.title_label.setFont(f)
+
         f2 = self.hello_label.font()
         f2.setPixelSize(hello_px)
-        f2.setWeight(QFont.Weight.Bold)
+        f2.setWeight(QFont.Weight.Medium)
+        f2.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
         self.hello_label.setFont(f2)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        # 头图铺满上方 40% 视口、通栏贴顶；正文铺满整页在其上层
         self.banner.setFixedSize(self.scrollWidget.width(),
                                  max(200, int(self.viewport().height() * BANNER_RATIO)))
         self.banner.move(0, 0)

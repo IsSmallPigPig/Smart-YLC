@@ -12,8 +12,6 @@ from dataclasses import dataclass, field
 from app.domain.check_rules import MemberRecord
 from app.domain.org_rule import OrgRule, parse_class_code
 
-GRADE_ORDER = {"高一": 0, "高二": 1, "高三": 2, "初一": 0, "初二": 1, "初三": 2, "已毕业": 3}
-
 SOURCE_LABEL = {"local": "仅本地", "system": "仅系统", "both": "本地+系统"}
 
 # 系统端展示的全部字段（label, MemberRecord 字段名）
@@ -143,13 +141,12 @@ def build_branches(
                 node.secretary = s
                 break
 
+    order = (rule or OrgRule()).grade_order()
+
     def sort_key(n: BranchNode):
-        g = GRADE_ORDER.get(n.grade, 9)
-        try:
-            no = int("".join(ch for ch in n.code if ch.isdigit())[-2:]) if n.code else 0
-        except (ValueError, IndexError):
-            no = 0
-        return (n.dept == "其他", n.dept, g, no, n.label)
+        info = parse_class_code(n.code, rule, now) if n.code else None
+        return (n.dept == "其他", n.dept, order.get(n.grade, 9),
+                info.class_no if info else 0, n.label)
 
     return sorted(branches.values(), key=sort_key)
 

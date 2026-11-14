@@ -38,7 +38,7 @@ from app.domain.check_rules import (
 from app.services.api import SiteClient
 
 KIND_LABEL = {"identity": "报到身份", "report": "报到情况", "fees": "团员缴费"}
-ALL_ROSTER = "全部名单（合并各学期）"
+ALL_ROSTER = "全部名单"
 ALL_ORG = "全部支部"
 READONLY_FLAGS = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
 
@@ -135,21 +135,17 @@ class CheckPage(FluentPage):
         self._errors: list[tuple[str, str]] = []  # (user, error)，账号失败行
         lay = self.vBoxLayout
 
-        # 范围选择：名单（学期）+ 支部
+        # 三个下拉用各自的首项说明用途，靠等宽排列表达层级，不再加行内标签
         row0 = QHBoxLayout()
-        row0.addWidget(BodyLabel("名单"))
+        row0.setSpacing(12)
         self.roster_combo = ComboBox()
         row0.addWidget(self.roster_combo, 1)
-        row0.addSpacing(12)
-        row0.addWidget(BodyLabel("支部"))
         self.org_combo = ComboBox()
         row0.addWidget(self.org_combo, 1)
-        row0.addSpacing(12)
-        row0.addWidget(BodyLabel("显示"))
         self.level_combo = ComboBox()
-        self.level_combo.addItems(["全部", "仅错误", "仅警告"])
+        self.level_combo.addItems(["全部结果", "仅错误", "仅警告"])
         self.level_combo.currentIndexChanged.connect(self._apply_level_filter)
-        row0.addWidget(self.level_combo)
+        row0.addWidget(self.level_combo, 1)
         lay.addLayout(row0)
 
         row = QHBoxLayout()
@@ -157,7 +153,7 @@ class CheckPage(FluentPage):
         self.kind_combo.addItems(["报到身份", "报到情况", "团员缴费", "全部"])
         self.scan_btn = PrimaryPushButton(FIF.SEARCH, "开始检查")
         self.scan_btn.clicked.connect(self._start)
-        self.export_btn = PushButton(FIF.SAVE, "导出异常清单 xlsx")
+        self.export_btn = PushButton(FIF.SAVE, "导出清单")
         self.export_btn.setEnabled(False)
         self.export_btn.clicked.connect(self._export)
         self.clear_btn = PushButton(FIF.DELETE, "清除结果")
@@ -168,7 +164,7 @@ class CheckPage(FluentPage):
         row.addWidget(self.clear_btn)
         lay.addLayout(row)
 
-        self.stat = BodyLabel("名单选学期即对照该学期名单；支部选单个团支部或全部；只读查询，不修改数据")
+        self.stat = BodyLabel("")
         lay.addWidget(self.stat)
 
         self.table = TableWidget()
@@ -227,7 +223,7 @@ class CheckPage(FluentPage):
         accounts = self._selected_accounts()
         _, excluded = split_accounts(self.window_ref.settings_page.accounts)
         if not accounts:
-            hint = f"其余账号均被标记为异常（{excluded_note(excluded)}）" if excluded else "请先到「系统配置」添加团支部账号"
+            hint = f"其余账号均被标记为异常（{excluded_note(excluded)}）" if excluded else "先在系统配置添加团支部账号"
             InfoBar.warning("没有可检查的支部", hint, duration=6000, parent=self)
             return
         if excluded:
@@ -240,7 +236,7 @@ class CheckPage(FluentPage):
         self.table.setRowCount(0)
         self.results = []
         scope = self.org_combo.currentText()
-        self.stat.setText(f"正在检查 {scope}（{len(accounts)} 个账号，并发进行）…")
+        self.stat.setText(f"正在检查 {scope}，{len(accounts)} 个账号")
         self.worker = CheckWorker(accounts, self._selected_roster())
         self.worker.account_done.connect(self._on_account_done)
         self.worker.done.connect(self._on_done)
@@ -249,7 +245,7 @@ class CheckPage(FluentPage):
     def _append_error_row(self, user: str, msg: str):
         r = self.table.rowCount()
         self.table.setRowCount(r + 1)
-        row = [f"{user or '（空）'}　⚠ {msg}", "-", "-", "-", "-", "-"]
+        row = [f"{user or '未标注'} {msg}", "-", "-", "-", "-", "-"]
         for col, v in enumerate(row):
             item = QTableWidgetItem(v)
             item.setFlags(READONLY_FLAGS)
@@ -281,10 +277,10 @@ class CheckPage(FluentPage):
         cross_msg = cross.message if cross else "无名单对照"
         n_err = sum(1 for r in results if r.is_error)
         n_warn = len(results) - n_err
-        warn_msg = f"；另有 {n_warn} 条警告" if n_warn else ""
+        warn_msg = f"，另有 {n_warn} 条警告" if n_warn else ""
         self.stat.setText(
-            f"{cross_msg}；错误 {n_err} 条{warn_msg}"
-            + (f"（另有 {len(diags)} 条解析诊断）" if diags else "")
+            f"{cross_msg}，错误 {n_err} 条{warn_msg}"
+            + (f"，另有 {len(diags)} 条解析诊断" if diags else "")
         )
         InfoBar.success("检查完成", f"错误 {n_err} 条{warn_msg}，{cross_msg}", duration=4000, parent=self)
 
@@ -325,7 +321,7 @@ class CheckPage(FluentPage):
         self._all_results = []
         self._errors = []
         self.export_btn.setEnabled(False)
-        self.stat.setText("名单选学期即对照该学期名单；支部选单个团支部或全部；只读查询，不修改数据")
+        self.stat.setText("")
 
     def _export(self):
         path, _ = QFileDialog.getSaveFileName(self, "导出异常清单", "异常清单.xlsx", "Excel (*.xlsx)")

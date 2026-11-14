@@ -19,15 +19,18 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QHBoxLayout,
+    QHeaderView,
+    QStyle,
+    QStyleOptionButton,
     QVBoxLayout,
     QTableWidgetItem,
-    QTreeWidgetItem,
     QWidget,
 )
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from qfluentwidgets import (
+    CheckBox,
     ComboBox,
     EditableComboBox,
     FluentIcon as FIF,
@@ -35,16 +38,15 @@ from qfluentwidgets import (
     LineEdit,
     PrimaryPushButton,
     PushButton,
-    SearchLineEdit,
-    SubtitleLabel,
     TableWidget,
-    TreeWidget,
+    ToolButton,
 )
 
 from app.ui import dialogs
 from app.ui.page import CallbackWorker, CollapsibleCard, FluentPage, FullRow, SettingRow, fit_table_columns, note_label
+from app.ui.rule_dialog import RuleDialog
 from app.domain.naming import Roster
-from app.domain.org_rule import OrgRule, describe_code, parse_class_code
+from app.domain.org_rule import OrgRule, RuleError, describe_code, explain_code, sample_codes
 from app.domain.transfer import is_graduated
 from app.services import store
 from app.domain.account_health import HEALTH_COLOR, HEALTH_LABEL
@@ -56,6 +58,37 @@ THEME_INDEX = {"auto": 0, "light": 1, "dark": 2}
 def guess_semester() -> str:
     now = datetime.now()
     return f"{now.year}秋" if now.month >= 7 else f"{now.year}春"
+
+
+class SelectAllHeader(QHeaderView):
+    """账号表表头：第 0 列居中放全选勾选框，位置随列宽与横向滚动更新。"""
+
+    def __init__(self, table):
+        super().__init__(Qt.Orientation.Horizontal, table)
+        self.box = CheckBox(self)
+        self.box.setTristate(True)
+        self.box.setFixedSize(22, 22)
+        self.box.setToolTip("全选")
+        self.setHighlightSections(False)
+        for sig in (self.sectionResized, self.sectionMoved, self.geometriesChanged):
+            sig.connect(self._place_box)
+        table.horizontalScrollBar().valueChanged.connect(self._place_box)
+
+    def _place_box(self, *_):
+        # 行内勾选框由 fluent delegate 固定在单元格 x+15；表头对齐同一条竖线
+        opt = QStyleOptionButton()
+        opt.initFrom(self.box)
+        dx = self.box.style().subElementRect(QStyle.SE_CheckBoxIndicator, opt, self.box).left()
+        x = self.sectionViewportPosition(0) + 15 - dx
+        self.box.move(x, (self.height() - self.box.height()) // 2)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_box()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._place_box()
 
 
 class HealthWorker(QThread):
@@ -178,35 +211,17 @@ class SettingsPage(FluentPage):
         self._ws_known: set[str] = set()
         self.home_page = None  # 由 MainWindow 注入，头图设置后即时生效
         self.window_ref = None  # 由 MainWindow 注入，毛玻璃开关生效用
-        self._filter_label = ""  # 当前团支部筛选（完整备注名，空 = 不筛选）
+        self._rule = OrgRule()  # 学校自定义编号规则，_load_config 时从配置恢复
 
         lay = self.vBoxLayout
 
-        # 搜索只按设置项名称过滤；命中的分组自动展开，不用提示文字占位
-        self.search_edit = SearchLineEdit()
-        self.search_edit.setPlaceholderText("搜索设置")
-        self.search_edit.setFixedWidth(240)
-        self.search_edit.textChanged.connect(self._filter_settings)
-        search_bar = QHBoxLayout()
-        search_bar.addStretch(1)
-        search_bar.addWidget(self.search_edit)
-        search_bar.addStretch(1)
-        lay.addLayout(search_bar)
-        lay.addSpacing(6)
-
-        self._cards: list[CollapsibleCard] = []
-        self._rows: list[tuple[CollapsibleCard, QWidget, str]] = []
-        self._search_state: list[bool] | None = None
-
         def group(title: str, expanded: bool) -> CollapsibleCard:
             card = CollapsibleCard(title, expanded=expanded)
-            self._cards.append(card)
             lay.addWidget(card)
             return card
 
-        def row(card: CollapsibleCard, widget, *keywords, last: bool = False):
+        def row(card: CollapsibleCard, widget, *, last: bool = False):
             widget.set_separator(not last)
-            self._rows.append((card, widget, " ".join(keywords).lower()))
             card.body_lay.addWidget(widget)
 
         def controls(*widgets, spacing: int = 8) -> QWidget:
@@ -224,36 +239,34 @@ class SettingsPage(FluentPage):
         self.active_combo.setFixedWidth(190)
         self.active_combo.currentTextChanged.connect(self._on_active_changed)
         self.web_btn = PushButton(FIF.GLOBE, "打开网页端")
-        self.web_btn.setToolTip("打开勾选账号的网页端（未勾选时打开当前账号）；\n账号按 Arc / Safari 分配，两浏览器各保持一个账号登录")
+        self.web_btn.setToolTip("打开勾选账号的网页端，未勾选时打开当前账号")
         self.web_btn.clicked.connect(self._open_web)
         row(acc_card, SettingRow("当前账号", icon=FIF.PEOPLE,
-                                 control=controls(self.active_combo, self.web_btn), control_width=340),
-            "当前账号 网页端 切换 使用 activeUser")
+                                 control=controls(self.active_combo, self.web_btn), control_width=340))
 
         self.health_btn = PushButton(FIF.SYNC, "全部测活")
-        self.health_btn.clicked.connect(self.start_health_check)
+        self.health_btn.clicked.connect(lambda: self.start_health_check(force=True))
         self.refresh_all_btn = PrimaryPushButton(FIF.SYNC, "刷新所有数据")
-        self.refresh_all_btn.setToolTip("成员缓存 → 站内信 → 组织状况，全部在工作线程串行刷新")
+        self.refresh_all_btn.setToolTip("依次刷新成员缓存、站内信、组织状况")
         self.refresh_all_btn.clicked.connect(self._refresh_all_clicked)
         row(acc_card, SettingRow("测活与刷新", icon=FIF.SYNC,
-                                 control=controls(self.health_btn, self.refresh_all_btn), control_width=340),
-            "测活 刷新 数据同步 成员缓存 站内信 组织状况 健康")
+                                 control=controls(self.health_btn, self.refresh_all_btn), control_width=340))
 
-        self.sel_all_btn = PushButton("全选")
-        self.sel_all_btn.clicked.connect(self._toggle_select_all)
-        self.del_checked_btn = PushButton(FIF.DELETE, "删除勾选")
+        self.del_checked_btn = ToolButton(FIF.DELETE)
+        self.del_checked_btn.setToolTip("删除勾选")
         self.del_checked_btn.clicked.connect(self._delete_checked)
-        self.filter_btn = PushButton(FIF.FILTER, "筛选")
-        self.filter_btn.setToolTip("按团支部筛选（树状：学部 → 年级 → 班级）")
-        self.filter_btn.clicked.connect(self._show_filter_menu)
-        self.filter_note = note_label("")
-        self.filter_note.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.refresh_btn = ToolButton(FIF.UPDATE)
+        self.refresh_btn.setToolTip("刷新所选账号")
+        self.refresh_btn.clicked.connect(self._refresh_selected)
 
         # 账号表：勾选框 + 账号 + 密码 + 备注 + 届别 + 状态 + 健康状态 + 最近检查
         self.table = TableWidget()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(8)
         self.table.setColumnCount(8)
+        self._select_all_header = SelectAllHeader(self.table)
+        self.table.setHorizontalHeader(self._select_all_header)
+        self._select_all_header.box.clicked.connect(self._on_select_all_clicked)
         self.table.setHorizontalHeaderLabels(["", "账号", "密码", "备注", "届别", "状态", "健康状态", "最近检查"])
         self.table.setColumnWidth(0, 46)
         self.table.setMinimumHeight(180)
@@ -262,17 +275,16 @@ class SettingsPage(FluentPage):
         header.setSectionResizeMode(0, header.ResizeMode.Fixed)
         header.setSectionResizeMode(7, header.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._on_item_changed)
+        self.table.itemSelectionChanged.connect(self._sync_active_from_selection)
         self.table.itemDelegate().closeEditor.connect(self._on_editor_closed)
         table_block = FullRow()
         tools = QHBoxLayout()
-        tools.addWidget(self.sel_all_btn)
         tools.addWidget(self.del_checked_btn)
-        tools.addWidget(self.filter_btn)
+        tools.addWidget(self.refresh_btn)
         tools.addStretch(1)
-        tools.addWidget(self.filter_note)
         table_block.lay.addLayout(tools)
         table_block.lay.addWidget(self.table)
-        row(acc_card, table_block, "账号列表 表格 全选 删除 筛选 密码 备注 届别 健康状态")
+        row(acc_card, table_block)
 
         self.new_user = LineEdit()
         self.new_user.setPlaceholderText("账号")
@@ -291,21 +303,19 @@ class SettingsPage(FluentPage):
         row(acc_card, SettingRow("添加账号", icon=FIF.ADD,
                                  control=controls(self.new_user, self.new_pwd, self.new_remark,
                                                   self.new_year, self.add_btn, spacing=6),
-                                 control_width=540),
-            "添加账号 密码 备注 届别 去重")
+                                 control_width=540))
 
         self.import_btn = PushButton(FIF.DOCUMENT, "批量导入")
         self.import_btn.clicked.connect(self._import_accounts)
         self.tpl_btn = PushButton(FIF.DOWNLOAD, "下载账号模板")
-        self.tpl_btn.setToolTip("下载账号导入模板（备注 / 账号 / 密码）")
+        self.tpl_btn.setToolTip("下载账号导入模板")
         self.tpl_btn.clicked.connect(self._download_account_template)
         self.export_cfg_btn = PushButton(FIF.SHARE, "导出配置 JSON")
-        self.export_cfg_btn.setToolTip("导出系统配置为 JSON 文件（完整备份，含账号密码）")
+        self.export_cfg_btn.setToolTip("导出系统配置")
         self.export_cfg_btn.clicked.connect(self._export_config_json)
         row(acc_card, SettingRow("账号文件", icon=FIF.DOCUMENT,
                                  control=controls(self.import_btn, self.tpl_btn, self.export_cfg_btn),
-                                 control_width=420),
-            "批量导入 模板 导出 配置 JSON 备份", last=True)
+                                 control_width=420), last=True)
 
         # ── 名单导入 ──
         ros_card = group("名单导入", True)
@@ -316,19 +326,18 @@ class SettingsPage(FluentPage):
         self.semester_combo.setFixedWidth(150)
         self.semester_combo.currentTextChanged.connect(self._on_semester_changed)
         self.new_sem_btn = PushButton(FIF.ADD, "新建学期")
-        self.new_sem_btn.setToolTip("按学期框里的名字新建一个空学期，之后再导入名单")
+        self.new_sem_btn.setToolTip("按学期名新建空学期")
         self.new_sem_btn.clicked.connect(self._create_semester)
         self.roster_btn = PrimaryPushButton("导入到该学期")
         self.roster_btn.clicked.connect(self._import_roster)
         row(ros_card, SettingRow("团员名单", icon=FIF.DOCUMENT,
                                  control=controls(self.semester_combo, self.new_sem_btn, self.roster_btn),
-                                 control_width=430),
-            "团员名单 学期 导入 分流 班级 xlsx")
+                                 control_width=430))
 
         self.template_btn = PushButton(FIF.DOWNLOAD, "下载名单模板")
         self.template_btn.clicked.connect(self._download_template)
         self.roster_del_btn = PushButton(FIF.DELETE, "删除所选学期名单")
-        self.roster_del_btn.setToolTip("从配置中移除该学期名单（不删除磁盘上的 xlsx 文件）")
+        self.roster_del_btn.setToolTip("从配置移除该学期名单")
         self.roster_del_btn.clicked.connect(self._delete_selected_roster)
         self.roster_table = TableWidget()
         self.roster_table.setColumnCount(3)
@@ -344,7 +353,7 @@ class SettingsPage(FluentPage):
         roster_tools.addWidget(self.roster_del_btn)
         roster_tools.addStretch(1)
         roster_block.lay.addLayout(roster_tools)
-        row(ros_card, roster_block, "名单列表 学期 人数 文件 模板 删除")
+        row(ros_card, roster_block)
 
         self.sec_btn = PushButton(FIF.DOCUMENT, "导入团支书名单")
         self.sec_btn.clicked.connect(self._import_secretaries)
@@ -354,40 +363,32 @@ class SettingsPage(FluentPage):
         self.sec_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         row(ros_card, SettingRow("团支书名单", icon=FIF.PEOPLE,
                                  control=controls(self.sec_btn, self.sec_del_btn, self.sec_status),
-                                 control_width=430),
-            "团支书 支部 名单 导入 替换")
+                                 control_width=430))
         self.sec_table = TableWidget()
         self.sec_table.setColumnCount(3)
         self.sec_table.setHorizontalHeaderLabels(["支部", "团支书", "手机号码"])
         self.sec_table.setEditTriggers(self.sec_table.EditTrigger.NoEditTriggers)
         sec_block = FullRow()
         sec_block.lay.addWidget(self.sec_table)
-        row(ros_card, sec_block, "团支书列表 表格 支部 姓名 手机号码", last=True)
+        row(ros_card, sec_block, last=True)
 
         # ── 检查与编号规则 ──
         rule_card = group("检查与编号规则", False)
-        self.rule_prefix_edit = LineEdit()
-        self.rule_prefix_edit.setPlaceholderText("如 1 或 2")
-        self.rule_prefix_edit.setFixedWidth(160)
-        self.rule_prefix_edit.editingFinished.connect(self._on_rule_changed)
-        row(rule_card, SettingRow("学部前缀", icon=FIF.EDUCATION, control=self.rule_prefix_edit),
-            "学部前缀 编号规则 年级 班级")
-        self.rule_noprefix_edit = LineEdit()
-        self.rule_noprefix_edit.setPlaceholderText("初中部")
-        self.rule_noprefix_edit.setFixedWidth(160)
-        self.rule_noprefix_edit.editingFinished.connect(self._on_rule_changed)
-        row(rule_card, SettingRow("无前缀学部", icon=FIF.TAG, control=self.rule_noprefix_edit),
-            "无前缀学部 四位编号 初中部")
+        self.rule_state = note_label("")
+        self.rule_btn = PushButton(FIF.EDIT, "编辑规则")
+        self.rule_btn.clicked.connect(self._open_rule_dialog)
+        row(rule_card, SettingRow("编号规则", icon=FIF.EDUCATION,
+                                 control=controls(self.rule_state, self.rule_btn),
+                                 control_width=300))
         self.expected_pages_edit = LineEdit()
         self.expected_pages_edit.setPlaceholderText("如 4")
         self.expected_pages_edit.setFixedWidth(160)
         self.expected_pages_edit.editingFinished.connect(self._save_config)
-        row(rule_card, SettingRow("预期页数", icon=FIF.DOCUMENT, control=self.expected_pages_edit),
-            "预期页数 文档检查 PDF 页数核对")
+        row(rule_card, SettingRow("预期页数", icon=FIF.DOCUMENT, control=self.expected_pages_edit))
         self.rule_preview = note_label("")
         preview = FullRow()
         preview.lay.addWidget(self.rule_preview)
-        row(rule_card, preview, "编号预览 解析 示例", last=True)
+        row(rule_card, preview, last=True)
 
         # ── 外观 ──
         look_card = group("外观", False)
@@ -396,8 +397,7 @@ class SettingsPage(FluentPage):
             self.theme_combo.addItem(label)
         self.theme_combo.setCurrentIndex(THEME_INDEX.get(store.load().get("themeMode", "auto"), 0))
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        row(look_card, SettingRow("明暗模式", icon=FIF.BRIGHTNESS, control=self.theme_combo),
-            "明暗模式 主题 浅色 暗色 跟随系统 外观")
+        row(look_card, SettingRow("明暗模式", icon=FIF.BRIGHTNESS, control=self.theme_combo))
         self.material_combo = ComboBox()
         for label in ("关闭", "Acrylic 毛玻璃", "Sidebar 浅毛玻璃", "HudWindow 深色毛玻璃"):
             self.material_combo.addItem(label)
@@ -405,16 +405,14 @@ class SettingsPage(FluentPage):
         _material = _cfg.get("translucentMaterial") or ("acrylic" if _cfg.get("translucent") else "none")
         self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "sidebar": 2, "hud": 3}.get(_material, 0))
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
-        row(look_card, SettingRow("窗口背景", icon=FIF.TILES, control=self.material_combo),
-            "窗口背景 透明 材质 毛玻璃 acrylic sidebar hud")
+        row(look_card, SettingRow("窗口背景", icon=FIF.TILES, control=self.material_combo))
         self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
         self.header_pick_btn.clicked.connect(self._pick_header_image)
         self.header_clear_btn = PushButton(FIF.DELETE, "清除头图")
         self.header_clear_btn.clicked.connect(self._clear_header_image)
         row(look_card, SettingRow("首页头图", icon=FIF.PHOTO,
                                   control=controls(self.header_pick_btn, self.header_clear_btn),
-                                  control_width=300),
-            "首页头图 图片 背景 清除", last=True)
+                                  control_width=300), last=True)
 
         # ── 工作区与通知 ──
         ws_card = group("工作区与通知", False)
@@ -431,18 +429,19 @@ class SettingsPage(FluentPage):
         wv.setSpacing(4)
         wv.addWidget(controls(self.ws_edit, self.ws_btn))
         wv.addWidget(self.ws_status, 0, Qt.AlignmentFlag.AlignRight)
-        row(ws_card, SettingRow("工作区", icon=FIF.FOLDER, control=ws_ctrl, control_width=340),
-            "工作区 目录 监听 PDF 自动命名 压缩 上传")
+        row(ws_card, SettingRow("工作区", icon=FIF.FOLDER, control=ws_ctrl, control_width=340))
         self.notify_time_edit = LineEdit()
         self.notify_time_edit.setFixedWidth(90)
         self.notify_time_edit.setPlaceholderText("08:00")
         self.notify_time_edit.setClearButtonEnabled(False)
-        row(ws_card, SettingRow("每日通知", icon=FIF.DATE_TIME, control=self.notify_time_edit),
-            "每日通知 时间 系统通知 推送")
+        row(ws_card, SettingRow("每日通知", icon=FIF.DATE_TIME, control=self.notify_time_edit))
         self.autostart_btn = PushButton()
         self.autostart_btn.clicked.connect(self._toggle_autostart)
-        row(ws_card, SettingRow("开机自启动", icon=FIF.POWER_BUTTON, control=self.autostart_btn),
-            "开机自启动 后台 托盘 静默", last=True)
+        row(ws_card, SettingRow("开机自启动", icon=FIF.POWER_BUTTON, control=self.autostart_btn), last=True)
+
+        from app.ui.about_card import AboutCard
+
+        lay.addWidget(AboutCard(self))
 
         self._watcher = None
         self._scan_timer = QTimer(self)
@@ -453,7 +452,7 @@ class SettingsPage(FluentPage):
         self._load_config()
         self._refresh_table()
 
-        # 后台定时健康检查：每 15 分钟
+        # 刷新登录状态：每 15 分钟轮询一次到期账号，各账号 4 小时内不重复刷新
         self._timer = QTimer(self)
         self._timer.setInterval(15 * 60 * 1000)
         self._timer.timeout.connect(self.start_health_check)
@@ -461,48 +460,20 @@ class SettingsPage(FluentPage):
             self._timer.start()
             self.start_health_check()
 
-    def _filter_settings(self, text: str):
-        """按设置项名称过滤：命中的分组自动展开，清空后恢复搜索前的折叠状态。"""
-        kw = text.strip().lower()
-        if kw and self._search_state is None:
-            self._search_state = [card._expanded for card in self._cards]
-        visible: dict[int, list] = {}
-        for card, widget, keys in self._rows:
-            hit = not kw or kw in keys
-            widget.setVisible(hit)
-            if hit:
-                visible.setdefault(id(card), []).append(widget)
-        for card in self._cards:
-            rows = visible.get(id(card), [])
-            for i, widget in enumerate(rows):
-                widget.set_separator(i < len(rows) - 1)
-            if kw:
-                card.setVisible(bool(rows))
-                card.set_expanded(bool(rows))
-            else:
-                card.setVisible(True)
-        if not kw and self._search_state is not None:
-            for card, expanded in zip(self._cards, self._search_state):
-                card.set_expanded(expanded)
-            self._search_state = None
-
     # ---------- 配置持久化 ----------
 
-    def _repair_remarks(self, cfg: dict) -> int:
-        """历史遗留修复：备注为空或误填成账号号的账号，按编号规则重新生成备注
-        （如 ssfz12601 → 普通高中高一一班）。规则解析不出（编号无效）保持原样。"""
-        o = cfg.get("orgRule") or {}
-        rule = OrgRule(
-            prefixes=o.get("prefixes") or {"1": "普通高中", "2": "国际高中"},
-            no_prefix=o.get("noPrefix") or "初中部",
-        )
+    def _repair_remarks(self, previous: OrgRule | None = None) -> int:
+        """补上为空或误填成账号号的备注；换规则时同步旧规则自动生成的备注。
+
+        手填备注一律保留；新规则解析不出时保留原备注，不丢已有信息。"""
         fixed = 0
         for acc in self.accounts:
             user = acc.get("userName", "")
             remark = (acc.get("remark") or "").strip()
             if remark and remark != user:
-                continue
-            label = describe_code(user, rule)
+                if previous is None or remark != describe_code(user, previous):
+                    continue  # 不是旧规则自动生成的
+            label = describe_code(user, self._rule)
             if label and label != remark:
                 acc["remark"] = label
                 fixed += 1
@@ -512,8 +483,13 @@ class SettingsPage(FluentPage):
 
     def _load_config(self):
         cfg = store.load()
+        try:
+            self._rule = OrgRule.from_config(cfg)
+        except RuleError as e:
+            self._rule = OrgRule()
+            InfoBar.error("编号规则无法读取", str(e), duration=10000, parent=self)
         self.accounts = list(cfg.get("accounts") or [])
-        self._repair_remarks(cfg)
+        self._repair_remarks()
         self.active_user = cfg.get("activeUser") or (self.accounts[0]["userName"] if self.accounts else "")
         self.notify_time_edit.setText(store.notify_time(cfg))
         self._refresh_autostart_btn()
@@ -564,10 +540,6 @@ class SettingsPage(FluentPage):
         self.expected_pages_edit.setText(str(pages) if pages else "")
 
         # 团支部编号规则
-        r = cfg.get("orgRule") or {}
-        prefixes = r.get("prefixes") or {"1": "普通高中", "2": "国际高中"}
-        self.rule_prefix_edit.setText(OrgRule.prefix_text(prefixes))
-        self.rule_noprefix_edit.setText(r.get("noPrefix") or "初中部")
         self._update_rule_preview()
 
         # 团支书名单状态
@@ -576,100 +548,28 @@ class SettingsPage(FluentPage):
     # ---------- 团支部编号规则 ----------
 
     def org_rule(self) -> OrgRule:
-        prefixes = OrgRule.parse_prefix_text(self.rule_prefix_edit.text())
-        return OrgRule(
-            prefixes=prefixes or {"1": "普通高中", "2": "国际高中"},
-            no_prefix=self.rule_noprefix_edit.text().strip() or "初中部",
-        )
+        return self._rule
 
     def _update_rule_preview(self):
         r = self.org_rule()
-        a, b = describe_code("12407", r), describe_code("2407", r)
-        self.rule_preview.setText(f"预览：12407 → {a or '无法解析'}；2407 → {b or '无法解析'}")
+        self.rule_state.setText(f"{len(r.effective_patterns())} 条规则")
+        parts = []
+        for code in sample_codes(r):
+            info, why = explain_code(code, r)
+            parts.append(f"{code}  {info.label if info else why}")
+        self.rule_preview.setText("，".join(parts))
 
-    def _on_rule_changed(self):
-        self._save_config()
-        self._update_rule_preview()
-        if self._filter_label:
-            self._clear_filter()  # 规则变了，旧筛选可能失效
-
-    # ---------- 账号筛选（树状：学部 → 年级 → 班级） ----------
-
-    def _show_filter_menu(self):
-        """筛选弹窗：fluent TreeWidget 树状（学部 → 年级 → 班级），点班级生效并关闭。"""
-        rule = self.org_rule()
-        tree: dict[str, dict[str, dict[str, str]]] = {}
-        for a in self.accounts:
-            info = parse_class_code(a["userName"], rule)
-            if info:
-                tree.setdefault(info.dept, {}).setdefault(info.grade, {})[str(info.class_no)] = info.label
-
-        dlg = dialogs.FluentPanelDialog(self.window())
-        dlg.subtitle = SubtitleLabel("按团支部筛选", dlg.widget)
-        dlg.viewLayout.addWidget(dlg.subtitle)
-
-        tw = TreeWidget(dlg.widget)
-        tw.setHeaderHidden(True)
-        tw.setMinimumHeight(300)
-
-        def _add(text: str, label: str | None, parent_item=None) -> QTreeWidgetItem:
-            # 顶层节点必须以 tree 为父构造（自动挂树）；label=None 表示纯展开节点
-            item = (QTreeWidgetItem(parent_item, [text]) if parent_item is not None
-                    else QTreeWidgetItem(tw, [text]))
-            if label is not None:
-                item.setData(0, Qt.ItemDataRole.UserRole, label)
-            return item
-
-        _add("显示全部", "")  # 顶层；label="" 表示清除筛选
-        if not tree:
-            empty = _add("（没有能按规则解析的账号）", None)
-            empty.setDisabled(True)
-        for dept in sorted(tree):
-            d = _add(dept, None)
-            for grade in sorted(tree[dept]):
-                g = _add(grade, None, d)
-                for cls in sorted(tree[dept][grade], key=int):
-                    _add(f"{cls} 班", tree[dept][grade][cls], g)
-        tw.expandAll()
-        def _on_clicked(item: QTreeWidgetItem, _col: int):
-            label = item.data(0, Qt.ItemDataRole.UserRole)
-            if label is None:  # 学部/年级节点：单击切换展开
-                item.setExpanded(not item.isExpanded())
-                return
-            if label == "":
-                self._clear_filter()
-            else:
-                self._apply_filter(label)
-            dlg.accept()
-
-        tw.itemClicked.connect(_on_clicked)
-        dlg.viewLayout.addWidget(tw)
-
-        dlg.widget.setMinimumWidth(420)
-        dlg.yesButton.setText("关闭")
-        dlg.hideCancelButton()
-        dlg.finished.connect(dlg.deleteLater)  # 非模态：关闭后清理
+    def _open_rule_dialog(self):
+        dlg = RuleDialog(self.org_rule(), self.window())
+        dlg.rule_saved.connect(self._on_rule_saved)
         dlg.show()
 
-    def _apply_filter(self, label: str):
-        self._filter_label = label
-        self._apply_row_visibility()
-
-    def _clear_filter(self):
-        self._filter_label = ""
-        self._apply_row_visibility()
-
-    def _apply_row_visibility(self):
-        n = 0
-        for i, acc in enumerate(self.accounts):
-            info = parse_class_code(acc["userName"], self.org_rule())
-            match = (not self._filter_label) or (info.label == self._filter_label)
-            self.table.setRowHidden(i, not match)
-            n += match
-        if self._filter_label:
-            self.filter_note.setText(f"筛选：{self._filter_label}（{n} 个账号）")
-        else:
-            self.filter_note.setText("")
+    def _on_rule_saved(self, rule: OrgRule):
+        previous, self._rule = self._rule, rule
+        if self._repair_remarks(previous):
+            self._refresh_table()
+        self._save_config()
+        self._update_rule_preview()
 
     def expected_pages(self) -> int:
         """文档检查的预期页数；未填或非法时返回 0（不核对页数）。"""
@@ -688,7 +588,7 @@ class SettingsPage(FluentPage):
                 "workspaceDir": self.ws_edit.text().strip(),
                 "notifyTime": self.notify_time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME,
                 "expectedPages": self.expected_pages(),
-                "orgRule": {"prefixes": self.org_rule().prefixes, "noPrefix": self.org_rule().no_prefix},
+                "orgRule": self.org_rule().to_config(),
             })
 
         # 拿最新配置再改：工作线程刚写入的 memberCache/messagesCache 不会被旧快照覆盖
@@ -754,7 +654,7 @@ class SettingsPage(FluentPage):
         if autostart.is_installed():
             self.autostart_btn.setText("关闭开机自启动")
         else:
-            self.autostart_btn.setText("开启开机自启动（后台静默）")
+            self.autostart_btn.setText("开启开机自启动")
 
     def _toggle_autostart(self):
         from app.services import autostart
@@ -764,7 +664,7 @@ class SettingsPage(FluentPage):
             InfoBar.info("已关闭自启动", "后台托盘不再开机运行", duration=3000, parent=self)
         else:
             if not self.accounts:
-                InfoBar.warning("先配置账号", "自启动的后台模式每天要检查团员情况，请先在上方添加账号", duration=4000, parent=self)
+                InfoBar.warning("先配置账号", "先添加团支部账号", duration=4000, parent=self)
                 return
             path = autostart.install()
             InfoBar.success("已开启自启动", f"LaunchAgent：{path}", duration=4000, parent=self)
@@ -790,7 +690,7 @@ class SettingsPage(FluentPage):
         self.import_btn.setEnabled(True)
         if not rows:
             InfoBar.warning("没有读到账号",
-                            "每行应为：账号 密码（备注、届别可空）；xlsx 需有「账号」「密码」列",
+                            "账号与密码两列，备注和届别可空",
                             duration=4000, parent=self)
             return
         # 异步冲突链：遇到密码冲突弹非模态确认，选完回调继续处理队列
@@ -823,7 +723,7 @@ class SettingsPage(FluentPage):
             dialogs.confirm(
                 self.window(), "账号密码冲突",
                 f"账号 {user} 已存在，但密码与现存的（备注：{existing.get('remark') or '无'}）不一致。\n"
-                "点击「覆盖」用新密码替换；点击「保留原密码」跳过这一条。",
+                "覆盖会替换密码，保留原密码会跳过这一条",
                 yes="覆盖", cancel="保留原密码",
                 on_result=lambda ov, u=user, p=pwd, r=remark, y=year:
                     self._on_conflict_resolved("overwritten" if ov else "kept", u, p, r, y),
@@ -877,7 +777,7 @@ class SettingsPage(FluentPage):
     def _after_accounts_changed(self):
         self._save_config()
         self._refresh_table()
-        self.start_health_check()
+        self.start_health_check(force=True)  # 新增账号要立刻定状态，不受 4 小时节流
         # 新账号进入后自动刷新所有数据（成员缓存、站内信、组织状况）
         if self.window_ref is not None:
             self.window_ref.refresh_all(silent=True)
@@ -885,14 +785,14 @@ class SettingsPage(FluentPage):
     def _add_manual(self):
         user, pwd = self.new_user.text().strip(), self.new_pwd.text()
         if not user or not pwd:
-            InfoBar.warning("账号或密码未填", "两栏都填好再点添加", duration=2500, parent=self)
+            InfoBar.warning("账号或密码未填", "填写账号和密码", duration=2500, parent=self)
             return
         year = self.new_year.text().strip()
         if year:
             from app.domain.transfer import parse_graduate_year
 
             if parse_graduate_year(year) is None:
-                InfoBar.warning("届别无效", "届别请填毕业年份（如 2023），或留空", duration=3000, parent=self)
+                InfoBar.warning("届别无效", "届别填毕业年份，如 2023，可留空", duration=3000, parent=self)
                 return
         remark = self.new_remark.text().strip() or describe_code(user, self.org_rule())
         existing = next((a for a in self.accounts if a["userName"] == user), None)
@@ -901,7 +801,7 @@ class SettingsPage(FluentPage):
             dialogs.confirm(
                 self.window(), "账号密码冲突",
                 f"账号 {user} 已存在，但密码与现存的（备注：{existing.get('remark') or '无'}）不一致。\n"
-                "点击「覆盖」用新密码替换；点击「保留原密码」跳过这一条。",
+                "覆盖会替换密码，保留原密码会跳过这一条",
                 yes="覆盖", cancel="保留原密码",
                 on_result=lambda ov, u=user, p=pwd, r=remark, y=year:
                     self._add_manual_finish(u, p, r, y, "overwritten" if ov else "kept"),
@@ -946,6 +846,7 @@ class SettingsPage(FluentPage):
 
         from app.domain.org_rule import parse_account_row
 
+        account_re = self.org_rule().account_row_re()
         rows: list[tuple[str, str, str, str]] = []
         if path.lower().endswith((".xlsx", ".xlsm")):
             from openpyxl import load_workbook
@@ -974,13 +875,13 @@ class SettingsPage(FluentPage):
                 for raw in data:
                     if not raw:
                         continue
-                    parsed = parse_account_row([c for c in raw])
+                    parsed = parse_account_row([c for c in raw], account_re)
                     if parsed:
                         rows.append((*parsed, ""))
         else:
             with open(path, encoding="utf-8", errors="replace") as f:
                 for line in f:
-                    parsed = parse_account_row(_re.split(r"[,;\s]+", line.strip()))
+                    parsed = parse_account_row(_re.split(r"[,;\s]+", line.strip()), account_re)
                     if parsed:
                         rows.append((*parsed, ""))
         return rows
@@ -997,7 +898,7 @@ class SettingsPage(FluentPage):
         from app.services.excel import save_account_template
 
         n = save_account_template(path)
-        InfoBar.success("模板已保存", f"{path}（{n} 行示例，可直接改后批量导入）", duration=5000, parent=self)
+        InfoBar.success("模板已保存", f"{path}，{n} 行示例", duration=5000, parent=self)
 
     def _export_config_json(self):
         """导出当前系统配置为 JSON 文件（config.json 的完整快照，含账号密码）。"""
@@ -1027,7 +928,7 @@ class SettingsPage(FluentPage):
     def _remove_accounts(self, rows: list[int]):
         users = [self.accounts[r]["userName"] for r in rows if 0 <= r < len(self.accounts)]
         if not users:
-            InfoBar.warning("未选择", "勾选要删除的账号，或点行内的删除按钮", duration=2500, parent=self)
+            InfoBar.warning("未选择", "先勾选要删除的账号", duration=2500, parent=self)
             return
         dialogs.confirm(
             self.window(), "删除账号",
@@ -1044,23 +945,74 @@ class SettingsPage(FluentPage):
         self._after_accounts_changed()
         InfoBar.success("已删除", f"移除 {len(users)} 个账号", duration=3000, parent=self)
 
-    def _toggle_select_all(self):
-        """有未勾选的就全选，否则全部取消（只动可见行，被筛选隐藏的行不碰）。"""
-        rows = [i for i in range(self.table.rowCount()) if not self.table.isRowHidden(i)]
-        any_unchecked = any(
-            self.table.item(i, 0) and self.table.item(i, 0).checkState() != Qt.CheckState.Checked
-            for i in rows
-        )
+    # ---------- 账号选择 ----------
+
+    def _checked_rows(self) -> list[int]:
+        return [i for i in range(self.table.rowCount())
+                if self.table.item(i, 0)
+                and self.table.item(i, 0).checkState() == Qt.CheckState.Checked]
+
+    def _selected_rows(self) -> list[int]:
+        """勾选优先；未勾选用表格选中的行；都没选时用当前账号。"""
+        checked = self._checked_rows()
+        if checked:
+            return checked
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
+        if rows:
+            return rows
+        idx = next((i for i, a in enumerate(self.accounts)
+                    if a["userName"] == self.active_user), -1)
+        return [idx] if idx >= 0 else []
+
+    def _update_select_all_box(self):
+        states = [self.table.item(i, 0).checkState() for i in range(self.table.rowCount())
+                  if self.table.item(i, 0)]
+        if states and all(st == Qt.CheckState.Checked for st in states):
+            state = Qt.CheckState.Checked
+        elif states and any(st != Qt.CheckState.Unchecked for st in states):
+            state = Qt.CheckState.PartiallyChecked
+        else:
+            state = Qt.CheckState.Unchecked
+        box = self._select_all_header.box
+        box.blockSignals(True)
+        box.setCheckState(state)
+        box.blockSignals(False)
+
+    def _on_select_all_clicked(self):
+        """有未勾选的就全选，否则全部取消；表头勾选框反映整体状态。"""
+        rows = [i for i in range(self.table.rowCount()) if self.table.item(i, 0)]
+        any_unchecked = any(self.table.item(i, 0).checkState() != Qt.CheckState.Checked
+                            for i in rows)
         state = Qt.CheckState.Checked if any_unchecked else Qt.CheckState.Unchecked
+        self.table.blockSignals(True)
         for i in rows:
-            if self.table.item(i, 0):
-                self.table.item(i, 0).setCheckState(state)
+            self.table.item(i, 0).setCheckState(state)
+        self.table.blockSignals(False)
+        self._update_select_all_box()
+        self._sync_active_from_selection()
+
+    def _sync_active_from_selection(self):
+        """只选中一个账号时，当前账号跟随切换。"""
+        checked = self._checked_rows()
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
+        picked = checked or rows
+        if len(picked) != 1 or not (0 <= picked[0] < len(self.accounts)):
+            return
+        user = self.accounts[picked[0]]["userName"]
+        if user != self.active_user:
+            self.active_combo.setCurrentText(user)
+
+    def _refresh_selected(self):
+        """刷新所选账号的登录状态与健康状态；未选时刷新当前账号。"""
+        users = [self.accounts[i]["userName"] for i in self._selected_rows()
+                 if 0 <= i < len(self.accounts)]
+        if not users:
+            InfoBar.warning("没有账号", "先添加团支部账号", duration=2500, parent=self)
+            return
+        self.start_health_check(force=True, users=users)
 
     def _delete_checked(self):
-        rows = [i for i in range(self.table.rowCount())
-                if not self.table.isRowHidden(i)
-                and self.table.item(i, 0) and self.table.item(i, 0).checkState() == Qt.CheckState.Checked]
-        self._remove_accounts(rows)
+        self._remove_accounts(self._checked_rows())
 
     # ---------- 表格 / 当前账号 ----------
 
@@ -1075,6 +1027,8 @@ class SettingsPage(FluentPage):
             self._table_refresh_pending = True
             return
         self._table_refresh_pending = False
+        checked_users = {self.accounts[i]["userName"] for i in self._checked_rows()
+                         if 0 <= i < len(self.accounts)}
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.accounts))
         for i, acc in enumerate(self.accounts):
@@ -1083,7 +1037,8 @@ class SettingsPage(FluentPage):
             # delegate Python override，PySide6 6.12 下会 shiboken 崩溃
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            chk.setCheckState(Qt.CheckState.Unchecked)
+            chk.setCheckState(Qt.CheckState.Checked if acc["userName"] in checked_users
+                              else Qt.CheckState.Unchecked)
             self.table.setItem(i, 0, chk)
             # 可编辑列：账号 / 密码 / 备注 / 届别
             for col, key in self.EDITABLE_COLS.items():
@@ -1091,7 +1046,7 @@ class SettingsPage(FluentPage):
             # 状态列：按届别自动判定毕业应转出
             graduated = is_graduated(acc)
             gy = acc.get("graduateYear")
-            status_text = f"{gy} 届 · 毕业应转出" if graduated else ("在读" if gy else "—")
+            status_text = f"{gy} 届毕业应转出" if graduated else ("在读" if gy else "")
             status_item = QTableWidgetItem(status_text)
             status_item.setFlags(self.READONLY_FLAGS)
             if graduated:
@@ -1105,11 +1060,11 @@ class SettingsPage(FluentPage):
             health_item.setForeground(QColor(HEALTH_COLOR.get(status, "#9e9e9e")))
             self.table.setItem(i, 6, health_item)
             checked = h.get("checkedAt", "")
-            check_item = QTableWidgetItem(checked.replace("T", " ")[:19] if checked else "—")
+            check_item = QTableWidgetItem(checked.replace("T", " ")[:19] if checked else "")
             check_item.setFlags(self.READONLY_FLAGS)
             self.table.setItem(i, 7, check_item)
         self.table.blockSignals(False)
-        self._apply_row_visibility()  # 应用当前团支部筛选
+        self._update_select_all_box()
         # 健康状态文案很长，列宽上限压到 180，否则「最近检查」列会被挤成 30px
         fit_table_columns(self.table, stretch_last=True, skip_cols={0}, max_col_width=180)
         # 当前使用下拉
@@ -1126,6 +1081,10 @@ class SettingsPage(FluentPage):
     def _on_item_changed(self, item: QTableWidgetItem):
         """表格内编辑账号/密码/备注后回写配置；无效改动回退。"""
         row, col = item.row(), item.column()
+        if col == 0:
+            self._update_select_all_box()
+            self._sync_active_from_selection()
+            return
         if col not in self.EDITABLE_COLS or not (0 <= row < len(self.accounts)):
             return
         acc = self.accounts[row]
@@ -1155,7 +1114,7 @@ class SettingsPage(FluentPage):
                 self.table.blockSignals(True)
                 item.setText(str(acc.get("graduateYear", "") or ""))
                 self.table.blockSignals(False)
-                InfoBar.warning("届别无效", "届别请填毕业年份（如 2023），或留空表示在读未定", duration=3000, parent=self)
+                InfoBar.warning("届别无效", "届别填毕业年份，如 2023，可留空", duration=3000, parent=self)
                 return
 
         changed = acc.get(key, "") != new_value
@@ -1172,7 +1131,7 @@ class SettingsPage(FluentPage):
                 self.active_user = new_value
             self._refresh_combo_only()
         if key in ("userName", "password"):
-            self.start_health_check()
+            self.start_health_check(force=True)  # 改账号密码后立即验证，不受 4 小时节流
 
     def _on_editor_closed(self, editor, hint):
         if getattr(self, "_table_refresh_pending", False):
@@ -1191,15 +1150,47 @@ class SettingsPage(FluentPage):
             self._client = None
             self._save_config()
 
-    def start_health_check(self):
+    def start_health_check(self, force: bool = False, users: list[str] | None = None):
+        """刷新登录状态，与「同步系统数据」是独立操作。
+
+        自动触发按每个账号 health.checkedAt 做 4 小时节流：最后刷新时间
+        距今未超 4 小时就不再测活、探测或登录。网页端正在使用的账号也
+        跳过自动测活，避免重新登录顶掉浏览器会话。手动点按钮、新增账号、
+        改账号密码都是显式修正入口，force=True 全量刷新并收回网页占用。
+        异常账号不享受节流，要留着让验证码/风控冷却结束后自动恢复。
+        数据同步由主窗口 30 秒定时链负责，不受这里影响。"""
         if not self.accounts:
             return
         if self._worker and self._worker.isRunning():
             return
+        from app.services import login_gate
+
+        accounts = [dict(a) for a in self.accounts]
+        if users is not None:
+            picked = set(users)
+            accounts = [a for a in accounts if a.get("userName") in picked]
+        if force:
+            if users is None:
+                if login_gate.active_browser_sessions():
+                    login_gate.clear_browser_sessions()
+            else:
+                login_gate.clear_browser_sessions(users)
+        else:
+            accounts = [a for a in accounts if not login_gate.status_fresh(a)]
+            busy = login_gate.active_browser_sessions()
+            accounts = [a for a in accounts if a.get("userName") not in busy]
+        if not accounts:
+            return
         self.health_btn.setEnabled(False)
-        self._worker = HealthWorker([dict(a) for a in self.accounts])
+        self.refresh_btn.setEnabled(False)
+
+        def _enable_buttons():
+            self.health_btn.setEnabled(True)
+            self.refresh_btn.setEnabled(True)
+
+        self._worker = HealthWorker(accounts)
         self._worker.account_checked.connect(self._on_account_checked)
-        self._worker.finished.connect(lambda: self.health_btn.setEnabled(True))
+        self._worker.finished.connect(_enable_buttons)
         self._worker.finished.connect(self._flush_health_results)  # 兜底：突发结束后必有一次落盘
         self._worker.start()
 
@@ -1218,9 +1209,7 @@ class SettingsPage(FluentPage):
             return
         if self._web_worker and self._web_worker.isRunning():
             return
-        checked = [i for i in range(self.table.rowCount())
-                   if not self.table.isRowHidden(i)
-                   and self.table.item(i, 0) and self.table.item(i, 0).checkState() == Qt.CheckState.Checked]
+        checked = self._checked_rows()
         if checked:
             targets = [self.accounts[i] for i in checked if 0 <= i < len(self.accounts)]
         else:
@@ -1297,7 +1286,7 @@ class SettingsPage(FluentPage):
             return
         sem = self.semester_combo.currentText().strip()
         if not sem:
-            InfoBar.warning("学期为空", "在学期框选择已有学期，或直接输入新学期名（如 2027春）", duration=3000, parent=self)
+            InfoBar.warning("学期为空", "选择已有学期或输入新学期名", duration=3000, parent=self)
             return
         self.roster_btn.setEnabled(False)
         w = CallbackWorker(lambda: self._parse_roster(path), self)
@@ -1327,7 +1316,7 @@ class SettingsPage(FluentPage):
         """按学期框里的名字新建空学期（不用先导入名单）。"""
         sem = self.semester_combo.currentText().strip()
         if not sem:
-            InfoBar.warning("学期为空", "在学期框输入学期名（如 2027春）再点新建", duration=3000, parent=self)
+            InfoBar.warning("学期为空", "输入学期名再新建", duration=3000, parent=self)
             return
         if sem in self.rosters:
             InfoBar.info("学期已存在", f"{sem} 已在列表中，可直接导入名单", duration=3000, parent=self)
@@ -1340,7 +1329,7 @@ class SettingsPage(FluentPage):
         self.semester_combo.setCurrentText(sem)
         self._refresh_roster()
         self._save_config()
-        InfoBar.success("学期已新建", f"{sem}：选择名单文件后导入到该学期", duration=3000, parent=self)
+        InfoBar.success("学期已新建", f"{sem} 已新建，选择名单文件后导入", duration=3000, parent=self)
 
     def _download_template(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -1420,7 +1409,7 @@ class SettingsPage(FluentPage):
         store.update(lambda cfg: cfg.__setitem__("headerImage", ""))
         if self.home_page:
             self.home_page.banner.set_image_path("")
-        InfoBar.info("头图已清除", "工具首页恢复占位渐变", duration=2500, parent=self)
+        InfoBar.info("头图已清除", "首页恢复默认头图", duration=2500, parent=self)
 
     # ---------- 外观（明暗模式 + 毛玻璃） ----------
 
@@ -1434,7 +1423,7 @@ class SettingsPage(FluentPage):
         store.update(lambda cfg: cfg.__setitem__("themeMode", mode))
         if self.window_ref is not None:
             self.window_ref.on_theme_changed()
-        InfoBar.success("明暗模式已切换", ("跟随系统" if index == 0 else "已切换，界面即时生效"),
+        InfoBar.success("明暗模式已切换", ("跟随系统" if index == 0 else "已生效"),
                         duration=2500, parent=self)
 
     def _on_material_changed(self, index: int):
@@ -1458,7 +1447,7 @@ class SettingsPage(FluentPage):
             return
         store.update(lambda cfg: cfg.__setitem__("secretaries", rows))
         self._refresh_secretary_status(rows)
-        InfoBar.success("团支书名单已导入", f"{len(rows)} 个支部（在「组织管理」展示）", duration=4000, parent=self)
+        InfoBar.success("团支书名单已导入", f"{len(rows)} 个支部", duration=4000, parent=self)
         if self.window_ref is not None:
             self.window_ref.org_manage_page.refresh()
 

@@ -1,35 +1,32 @@
 """携带登录态打开站点网页。
 
-原理：不再向页面伪造 cookie。会话 cookie（SESSION）由 tuanapi.12355.net 以
-HttpOnly 下发，此前从 tuan 页面写 domain 级 cookie 会被浏览器里残留的
-tuanapi 主机级旧 SESSION 遮蔽（同名主机 cookie 在请求中排在前面，服务端
-先读到旧会话 →「登录已超4小时/已在其他设备登录」）。HttpOnly 主机 cookie
-无法用 JS 覆盖，伪造方案天然失效。
+站点是单账号单会话：同账号再次登录会让之前的 SESSION 立刻失效，网页端会弹
+「您的登录状态已失效，原因：登录已超4小时无进行操作或已在其他设备登录」。
 
-改用浏览器原生登录：让真实浏览器访问登录 GET 接口
-tuanapi.12355.net/login/adminLogin?userName=&password=md5(md5(明文))&…
-（与网页端登录是同一个请求，密码只出现双重 md5，不泄露明文）。服务器对
-这个真实浏览器请求 Set-Cookie，覆盖旧的主机级 SESSION；随后打开
-tuan.12355.net/bg/index_main.html，即为完整登录态。
+两个叠加原因：
+1. 浏览器里残留 .12355.net 域级 SESSION（早期 JS 写入方案留下，非 HttpOnly，
+   可以用 JS 删除）。它与 tuanapi.12355.net 主机级 HttpOnly SESSION 同名，
+   业务请求会同时带上两条，服务端读到先到达的旧值就判定失效。打开前先在
+   tuan.12355.net 页面删掉域级那条，浏览器原生登录下发的主机级 SESSION
+   就成了唯一值。
+2. 后台自动链若对同一账号重新登录，会顶掉浏览器刚拿到的会话。30 秒数据链
+   只取数不登录，自动测活跳过网页占用账号；网页打开成功后由 login_gate
+   记录占用，手动操作会收回。
+
+流程：tuan 页面清残留 cookie → 浏览器访问登录 GET 接口 → 服务端 Set-Cookie
+覆盖主机级 SESSION → 导航回首页 → 读页面文本确认没有失效弹窗。登录接口与
+网页端登录是同一个请求，密码只出现双重 md5，不泄露明文。
 
 平台差异：
-- macOS：AppleScript 控制 Arc/Safari，打开登录 URL → 等响应 → 导航回
-  首页并校验（最终停在 index_main 才算成功）。Arc 与 Safari 的 Cookie
-  互相独立，各保持一个账号登录，多账号按浏览器轮流分配。
-- Windows/Linux：系统默认浏览器（webbrowser.open）。先开登录 URL，
-  等 3 秒再开首页标签——同一浏览器共享 Cookie，第二个标签即是登录态；
-  登录接口的 JSON 响应页（status:ok）会留在浏览器里，需手动关闭。
-  浏览器只有一个 Cookie 空间，同时只能保持一个账号登录。
+- macOS：AppleScript 控制 Arc/Safari。Arc 与 Safari 的 Cookie 互相独立，
+  各保持一个账号登录，多账号按浏览器轮流分配。Safari 需开启开发菜单里的
+  「允许来自苹果事件的 JavaScript」才能清残留 cookie。
+- Windows/Linux：系统默认浏览器两步打开，没有执行 JS 的通道；若浏览器里
+  也有域级残留 cookie，需要先在站点退出登录一次。
 
 导航带回首页采用「设置 URL → 校验 → 未到位再设」的循环：登录接口的响应
 是 JSON 正文（status:ok），先跳走过早会取消登录请求、卡在响应页则说明
 上一次导航没执行；循环保证最终停在首页而不是 JSON 页。
-
-浏览器与多账号：优先 Arc，未安装才用 Safari；打开失败不换浏览器重试
-（此前 Arc 脚本中途报错回退 Safari，会同时拉起两个浏览器）。Arc 与 Safari
-的 Cookie 互相独立，各自只能保持一个账号的登录态——同一浏览器里打开
-第二个账号会顶掉第一个的 SESSION（服务端按主机 cookie 识别会话），
-多账号打开时由调用方按账号轮流分配浏览器。
 """
 
 from __future__ import annotations
@@ -38,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import os
+import time
 import webbrowser
 from urllib.parse import urlencode
 
@@ -47,6 +45,26 @@ from app.domain.login_protocol import LOGIN_PATH, build_login_query
 SITE_HOME = f"{SITE_BASE_URL}/bg/index_main.html"
 
 ARC_APP = "/Applications/Arc.app"
+
+# 域级残留是旧方案用 JS 写的，非 HttpOnly，可以再用 JS 删掉。
+# 主机级 HttpOnly 那条删不掉，但会被原生登录的 Set-Cookie 覆盖。
+CLEAR_COOKIE_JS = (
+    "document.cookie='SESSION=; domain=.12355.net; path=/; max-age=0';"
+    "document.cookie='SESSION=; path=/; max-age=0';"
+    "'cleared'"
+)
+
+# 站点把失效提示渲染在页面 DOM 里，读文本比只看 URL 更能确认登录态。
+CHECK_LOGIN_JS = (
+    "(function(){var b=document.body;if(!b)return 'nobody';"
+    "var t=b.innerText||'';"
+    "return t.indexOf('登录状态已失效')>=0?'expired':'ok'})()"
+)
+
+
+def _as_escape(s: str) -> str:
+    """AppleScript 双引号字符串转义。"""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def build_login_url(user_name: str, plain_password: str, login_valid_code: str = "") -> str:
@@ -69,14 +87,13 @@ def _open_default_browser(login_url: str) -> tuple[bool, str]:
     """Windows/Linux：默认浏览器两步打开。"""
     if not webbrowser.open(login_url):
         return False, "系统默认浏览器打开失败"
-    import time
 
     time.sleep(3)  # 等登录接口响应完成 Set-Cookie
     webbrowser.open(SITE_HOME)
     return True, "已在默认浏览器打开（浏览器原生登录）；登录接口的 JSON 响应页可手动关闭"
 
 
-def _run_applescript(script: str, timeout: int = 30) -> tuple[bool, str]:
+def _run_applescript(script: str, timeout: int = 20) -> tuple[bool, str]:
     """AppleScript 写临时文件执行（避免 shell 转义问题）。"""
     fd, path = tempfile.mkstemp(suffix=".applescript", text=True)
     try:
@@ -85,7 +102,7 @@ def _run_applescript(script: str, timeout: int = 30) -> tuple[bool, str]:
         try:
             p = subprocess.run(["osascript", path], capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            return False, "AppleScript 等待超时（多半是 macOS 正在等你点「允许」控制浏览器的授权框）"
+            return False, "AppleScript 等待超时（多半是 macOS 正在等你授权控制浏览器）"
         if p.returncode == 0:
             return True, p.stdout.strip()
         return False, (p.stderr or "").strip()
@@ -93,14 +110,32 @@ def _run_applescript(script: str, timeout: int = 30) -> tuple[bool, str]:
         os.unlink(path)
 
 
-def _arc_script(login_url: str) -> str:
-    # 实测：Arc 只支持应用作用域的 window 1 / active tab 导航；
-    # 捕获 make new tab 返回的引用无法用于后续 set URL（-1700）。
-    return (
+def _clean(out: str) -> str:
+    """Arc/Safari 的字符串结果可能带一层双引号。"""
+    return (out or "").strip().strip('"').strip()
+
+
+def _arc_scripts(login_url: str) -> tuple[str, str, str]:
+    """分三段执行：清残留 cookie、原生登录回首页、确认页面状态。
+
+    实测把三段塞进一个 osascript 进程会偶发卡住；分段后每段都能在数秒内
+    返回，失败也能明确落在具体环节。Arc 只支持应用作用域的 window 1 /
+    active tab 导航与执行 JS，捕获 make new tab 的返回值无法用于后续 set URL。"""
+    clear_js = _as_escape(CLEAR_COOKIE_JS)
+    check_js = _as_escape(CHECK_LOGIN_JS)
+    prepare = (
         'tell application "Arc"\n'
         "  activate\n"
         "  if (count of windows) = 0 then make new window\n"
-        f'  tell window 1 to make new tab with properties {{URL:"{login_url}"}}\n'
+        f'  tell window 1 to make new tab with properties {{URL:"{SITE_HOME}"}}\n'
+        "  delay 1\n"
+        f'  set cleared to execute window 1\'s active tab javascript "{clear_js}"\n'
+        "  return cleared as text\n"
+        "end tell"
+    )
+    sign_in = (
+        'tell application "Arc"\n'
+        f'  set URL of active tab of window 1 to "{login_url}"\n'
         "  delay 3\n"
         f'  set URL of active tab of window 1 to "{SITE_HOME}"\n'
         "  repeat 3 times\n"
@@ -111,13 +146,31 @@ def _arc_script(login_url: str) -> str:
         "  return URL of active tab of window 1\n"
         "end tell"
     )
+    verify = (
+        'tell application "Arc"\n'
+        "  delay 2\n"
+        f'  set state to execute window 1\'s active tab javascript "{check_js}"\n'
+        "  return state as text\n"
+        "end tell"
+    )
+    return prepare, sign_in, verify
 
 
-def _safari_script(login_url: str) -> str:
-    return (
+def _safari_scripts(login_url: str) -> tuple[str, str, str]:
+    clear_js = _as_escape(CLEAR_COOKIE_JS)
+    check_js = _as_escape(CHECK_LOGIN_JS)
+    prepare = (
         'tell application "Safari"\n'
         "  activate\n"
-        f'  make new document with properties {{URL:"{login_url}"}}\n'
+        f'  make new document with properties {{URL:"{SITE_HOME}"}}\n'
+        "  delay 1\n"
+        f'  set cleared to do JavaScript "{clear_js}" in front document\n'
+        "  return cleared as text\n"
+        "end tell"
+    )
+    sign_in = (
+        'tell application "Safari"\n'
+        f'  set URL of front document to "{login_url}"\n'
         "  delay 3\n"
         f'  set URL of front document to "{SITE_HOME}"\n'
         "  repeat 3 times\n"
@@ -128,33 +181,59 @@ def _safari_script(login_url: str) -> str:
         "  return URL of front document\n"
         "end tell"
     )
+    verify = (
+        'tell application "Safari"\n'
+        "  delay 2\n"
+        f'  set state to do JavaScript "{check_js}" in front document\n'
+        "  return state as text\n"
+        "end tell"
+    )
+    return prepare, sign_in, verify
 
 
 def open_logged_in(client, browser: str = "Arc") -> tuple[bool, str]:
-    """确保会话有效后，用指定浏览器原生登录并打开站点。返回 (成功, 说明)。
+    """用浏览器原生登录并打开站点。返回 (成功, 说明)。
 
-    先恢复上次保存的会话探测，有效就不登录；失效才走程序化登录
-    （浏览器侧始终走原生登录，保证浏览器里的 SESSION 是本账号的）。
-    browser 参数仅在 macOS 上生效；其他平台一律用系统默认浏览器。"""
-    from app.services import login_gate
+    浏览器是这次操作唯一的登录者：Python 端不再先登录一次，避免刚生成的
+    会话立刻被浏览器顶掉。成功后登记网页会话占用，让自动链不再抢登录。"""
+    user, pwd = client.user_name, client.password
+    if not user or not pwd:
+        return False, "账号或密码为空"
 
-    login_gate.restore_session(client)
-    probe = client.session_account()
-    if not probe.ok:
-        verdict = client.login()
-        if not verdict.ok:
-            return False, f"登录失败：{verdict.message}"
-    login_url = build_login_url(client.user_name, client.password)
+    login_url = build_login_url(user, pwd)
     if sys.platform != "darwin":
-        return _open_default_browser(login_url)
-    script = _arc_script(login_url) if browser == "Arc" else _safari_script(login_url)
-    ok, final_url = _run_applescript(script)
-    if ok and "index_main" in final_url:
-        return True, f"已在 {browser} 打开（浏览器原生登录）"
+        ok, msg = _open_default_browser(login_url)
+        browser = "默认浏览器"
+    else:
+        scripts = _arc_scripts(login_url) if browser == "Arc" else _safari_scripts(login_url)
+        labels = ("清理残留 cookie", "浏览器原生登录", "确认页面状态")
+        results = []
+        for label, script in zip(labels, scripts):
+            run_ok, out = _run_applescript(script)
+            if not run_ok:
+                hint = ""
+                low = out.lower()
+                if "not allowed" in low or "allow" in low:
+                    hint = "（请在系统设置允许控制浏览器）"
+                if browser == "Safari" and ("javascript" in low or "允许来自苹果事件" in out):
+                    hint = "（请在 Safari 开发菜单开启允许来自苹果事件的 JavaScript）"
+                return False, f"{browser} {label}失败：{out}{hint}"
+            results.append(_clean(out))
+
+        cleared, final_url, state = results
+        if "index_main" not in final_url:
+            return False, f"{browser} 未跳转回首页（最终停在 {final_url or '未知页面'}），登录态可能不完整"
+        if cleared != "cleared":
+            return False, f"{browser} 未能清除域级残留 cookie（{cleared or '无返回'}），网页端可能提示登录已失效"
+        if state == "expired":
+            return False, (f"{browser} 已打开首页，但站点仍提示登录状态已失效；"
+                           "该账号可能需要验证码或密码有误，请先在网页端手动登录一次")
+        if state != "ok":
+            return False, f"{browser} 未能确认页面登录状态（{state or '无返回'}）"
+        ok, msg = True, f"已在 {browser} 打开，后台自动刷新已让路"
+
     if ok:
-        # 脚本跑完但没停在首页：登录响应页没有被替换掉，导航环节出了问题
-        return False, f"{browser} 未跳转回首页（最终停在 {final_url or '未知页面'}），登录态可能不完整"
-    hint = ""
-    if "not allowed" in final_url.lower() or "allow" in final_url.lower():
-        hint = "（浏览器拒绝了 AppleScript 控制，请在系统设置允许）"
-    return False, f"{browser} 打开失败：{final_url}{hint}"
+        from app.services import login_gate
+
+        login_gate.mark_browser_session(user, browser)
+    return ok, msg

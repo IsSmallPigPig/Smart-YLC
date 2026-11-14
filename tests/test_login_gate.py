@@ -1,4 +1,4 @@
-"""登录闸门：会话复用、验证码/风控冷却、数据新鲜跳过。"""
+"""登录闸门：会话复用、验证码/风控冷却、登录状态 4 小时节流。"""
 
 import os
 import sys
@@ -95,26 +95,21 @@ def test_probe_network_failure_no_login(gate_env):
     assert kind == "network" and c.login_calls == 0  # 网络问题不触发登录也不记失败
 
 
-def test_fresh_skip_rules(gate_env):
-    gate, store = gate_env
+def test_status_fresh_rules(gate_env):
+    """刷新登录状态按每个账号的最后刷新时间节流，数据同步不参与。"""
+    gate, _ = gate_env
 
-    def _cache(hours_ago):
-        ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
-        store.save({"memberCache": {"u1": {"fetchedAt": ts}}})
+    def _acc(hours_ago, status="ok"):
+        ts = (datetime.now() - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
+        return {"userName": "u1", "health": {"status": status, "checkedAt": ts}}
 
-    acc_ok = {"userName": "u1", "health": {"status": "ok"}}
-    acc_bad = {"userName": "u1", "health": {"status": "captcha"}}
-
-    _cache(1)
-    assert gate.fresh_skip(acc_ok, "memberCache")  # 正常 + 1h 前 → 跳过
-    assert not gate.fresh_skip(acc_bad, "memberCache")  # 状态非正常 → 仍刷新
-
-    _cache(5)
-    assert not gate.fresh_skip(acc_ok, "memberCache")  # 超 4 小时 → 刷新
-
-    _cache(1)
-    store.save({"memberCache": {}})  # 没有缓存记录 → 刷新
-    assert not gate.fresh_skip(acc_ok, "memberCache")
+    assert gate.status_fresh(_acc(1))                   # 正常 + 1 小时前刷过 → 跳过
+    assert not gate.status_fresh(_acc(5))               # 超 4 小时 → 刷新
+    assert not gate.status_fresh(_acc(1, "captcha"))    # 异常账号不节流，留待冷却恢复
+    assert not gate.status_fresh(_acc(1, "failed"))
+    blank = {"userName": "u1", "health": {"status": "ok", "checkedAt": ""}}
+    assert not gate.status_fresh(blank)                 # 没记录最后刷新时间 → 刷新
+    assert not gate.status_fresh({"userName": "u1"})    # 没测过 → 刷新
 
 
 def test_risk_keyword_variants(gate_env):

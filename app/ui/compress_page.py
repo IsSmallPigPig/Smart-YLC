@@ -75,7 +75,7 @@ class CompressPage(FluentPage):
 
         row = QHBoxLayout()
         self.dir_edit = LineEdit()
-        self.dir_edit.setPlaceholderText("选择包含 PDF 的文件夹（原地输出压缩副本到 压缩结果 子目录）")
+        self.dir_edit.setPlaceholderText("选择包含 PDF 的文件夹")
         self.dir_btn = ToolButton(FIF.FOLDER)
         self.dir_btn.clicked.connect(self._pick_dir)
         row.addWidget(self.dir_edit, 1)
@@ -84,7 +84,7 @@ class CompressPage(FluentPage):
 
         row2 = QHBoxLayout()
         self.target_combo = ComboBox()
-        self.target_combo.addItems(["压到 9.5MB 以下（站点硬限 10MB）", "压到 19.5MB 以下"])
+        self.target_combo.addItems(["压到 9.5MB 以下", "压到 19.5MB 以下"])
         self.start_btn = PrimaryPushButton(FIF.ZOOM, "开始压缩")
         self.start_btn.clicked.connect(self._start)
         self.stop_btn = PushButton(FIF.PAUSE, "停止")
@@ -101,7 +101,7 @@ class CompressPage(FluentPage):
         row2.addWidget(self.clear_btn)
         lay.addLayout(row2)
 
-        self.stat = BodyLabel("待开始")
+        self.stat = BodyLabel("")
         lay.addWidget(self.stat)
 
         self.table = TableWidget()
@@ -113,11 +113,11 @@ class CompressPage(FluentPage):
 
     def _clear_results(self):
         if self.worker is not None and self.worker.isRunning():
-            InfoBar.warning("压缩进行中", "等当前批次结束或先点「停止」再清除", duration=3000, parent=self)
+            InfoBar.warning("压缩进行中", "等当前批次结束或先停止", duration=3000, parent=self)
             return
         self.table.setRowCount(0)
         self.ring.setValue(0)
-        self.stat.setText("待开始")
+        self.stat.setText("")
 
     def _pick_dir(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")
@@ -145,7 +145,7 @@ class CompressPage(FluentPage):
             self.table.setItem(i, 0, QTableWidgetItem(os.path.basename(p)))
             self.table.setItem(i, 1, QTableWidgetItem(human_size(os.path.getsize(p))))
             for col in (2, 3, 4, 5):
-                self.table.setItem(i, col, QTableWidgetItem("…"))
+                self.table.setItem(i, col, QTableWidgetItem("处理中"))
         fit_table_columns(self.table)
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -177,7 +177,7 @@ class CompressPage(FluentPage):
         self.table.setItem(i, 2, QTableWidgetItem(human_size(dst_size)))
         self.table.setItem(i, 3, QTableWidgetItem(verdict))
         self.table.item(i, 3).setForeground(color)
-        self.table.setItem(i, 4, QTableWidgetItem(f"{r['dpi']}dpi/q{r['quality']} ×{r['iterations']} {ratio}"))
+        self.table.setItem(i, 4, QTableWidgetItem(f"{r['dpi']}dpi q{r['quality']} {r['iterations']} 次 {ratio}"))
         self.table.setItem(i, 5, QTableWidgetItem(os.path.join(os.path.dirname(self.worker.files[i]), "压缩结果", r["name"])))
         done = i + 1
         self.ring.setValue(int(done / max(1, self.table.rowCount()) * 100))
@@ -191,10 +191,10 @@ class CompressPage(FluentPage):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.ring.setValue(100)
-        self.stat.setText(f"完成：{ok}/{total} 个文件已输出到「压缩结果」子目录")
+        self.stat.setText(f"完成 {ok}/{total} 个文件")
         dialogs.confirm(
             self.window(), "压缩完成",
-            f"{ok}/{total} 个文件已完成，输出到「压缩结果」子目录。\n{self.out_dir}",
+            f"完成 {ok}/{total} 个文件\n{self.out_dir}",
             yes="打开目录", cancel="我知道了",
             on_result=lambda open_it: QDesktopServices.openUrl(QUrl.fromLocalFile(self.out_dir))
             if open_it and self.out_dir and os.path.isdir(self.out_dir) else None,
