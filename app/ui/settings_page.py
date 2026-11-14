@@ -175,6 +175,7 @@ class SettingsPage(FluentPage):
         self._ws_worker: WorkspaceWorker | None = None
         self._web_worker: WebOpenWorker | None = None
         self._ws_known: set[str] = set()
+        self.home_page = None  # 由 MainWindow 注入，头图设置后即时生效
 
         lay = self.vBoxLayout
 
@@ -314,6 +315,24 @@ class SettingsPage(FluentPage):
         row6.addStretch(1)
         doc_lay.addLayout(row6)
         lay.addWidget(doc)
+
+        # 首页头图
+        header = CardWidget()
+        header_lay = QVBoxLayout(header)
+        header_lay.setContentsMargins(20, 16, 20, 16)
+        header_lay.addWidget(StrongBodyLabel("首页头图"))
+        header_lay.addWidget(note_label("图片会铺满工具首页顶部并自然过渡到背景；清除后显示占位渐变"))
+        header_lay.addSpacing(4)
+        row7 = QHBoxLayout()
+        self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
+        self.header_pick_btn.clicked.connect(self._pick_header_image)
+        self.header_clear_btn = PushButton(FIF.DELETE, "清除头图")
+        self.header_clear_btn.clicked.connect(self._clear_header_image)
+        row7.addWidget(self.header_pick_btn)
+        row7.addWidget(self.header_clear_btn)
+        row7.addStretch(1)
+        header_lay.addLayout(row7)
+        lay.addWidget(header)
 
         # 工作区卡片
         ws = CardWidget()
@@ -885,6 +904,28 @@ class SettingsPage(FluentPage):
             InfoBar.success(f"工作区：{name}", message, duration=4000, parent=self.window_ref)
         else:
             InfoBar.warning(f"工作区：{name}", message, duration=6000, parent=self.window_ref)
+
+    # ---------- 首页头图（设置入口在此，生效于工具首页） ----------
+
+    def _pick_header_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择头图", "", "图片 (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if not path:
+            return
+        cfg = store.load()
+        cfg["headerImage"] = path
+        store.save(cfg)
+        if self.home_page:
+            self.home_page.banner.set_image_path(path)
+        InfoBar.success("头图已设置", os.path.basename(path), duration=2500, parent=self)
+
+    def _clear_header_image(self):
+        cfg = store.load()
+        cfg["headerImage"] = ""
+        store.save(cfg)
+        if self.home_page:
+            self.home_page.banner.set_image_path("")
+        InfoBar.info("头图已清除", "工具首页恢复占位渐变", duration=2500, parent=self)
 
     # ---------- 对外提供 ----------
 
