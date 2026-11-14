@@ -371,6 +371,7 @@ class OrgManagePage(FluentPage):
             b.secretary_text + (f"　·　{b.grade}" if b.grade else "") + f"　·　{b.code}"))
 
         # 统计卡：三个大数字 + 异常分类条形图
+        self.detail_lay.addWidget(section_title("支部概览"))
         stat_card = CardWidget()
         sv = QVBoxLayout(stat_card)
         sv.setContentsMargins(20, 16, 20, 16)
