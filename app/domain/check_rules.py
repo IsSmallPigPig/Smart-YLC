@@ -179,7 +179,7 @@ def _occupation_conflict_diff(m: MemberRecord) -> FieldDiff | None:
     if not unit or not any(k in unit for k in SCHOOL_UNIT_MARKS):
         return None
     occ = (m.occupation or "").strip()
-    if not occ or "学生" in occ:
+    if not occ or "学生" in occ or "教职工" in occ or "教师" in occ:
         return None
     return FieldDiff(
         "occupation", "职业", "学生", occ,

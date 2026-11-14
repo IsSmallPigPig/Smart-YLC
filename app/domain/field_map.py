@@ -19,6 +19,17 @@ VOLUNTEER_BOOK_STATUS_NAME = {
     "0": "-", "1": "不通过", "2": "通过", "3": "修改待审核", "4": "未上传", "5": "已上传",
 }
 ECARD_PHOTO_STATUS_NAME = {"0": "上传待审核", "1": "修改待审核", "2": "审核通过", "3": "审核不通过"}
+DEGREE_OF_EDUCATION_NAME = {
+    "1": "初中", "2": "高中", "3": "大专", "4": "本科", "5": "硕士", "6": "博士",
+    "7": "中职", "8": "中职中专在读", "9": "初中在读", "10": "高中在读",
+    "11": "大专在读", "12": "本科在读", "13": "硕士在读", "14": "博士在读", "15": "小学",
+}
+OCCUPATION_NAME = {
+    "1": "国有企业职工", "2": "非公企业职工", "3": "机关事业单位职工", "4": "社会组织员工",
+    "5": "农民", "6": "学生", "7": "自由职业者", "8": "公办高校教职工", "9": "公办中学教职工",
+    "10": "公办中职教职工", "11": "民办高校教职工", "12": "民办中学教职工",
+    "13": "民办中职教职工", "14": "其他",
+}
 
 ALIASES: dict[str, list[str]] = {
     "member_id": ["mid", "memberId", "id", "userId", "编号"],
@@ -54,6 +65,8 @@ _ENUM_FIELDS = {
     "report_data_status": AUDIT_STATUS_NAME,
     "ebook_status": VOLUNTEER_BOOK_STATUS_NAME,
     "ecard_photo_status": ECARD_PHOTO_STATUS_NAME,
+    "full_time_education": DEGREE_OF_EDUCATION_NAME,
+    "occupation": OCCUPATION_NAME,
 }
 
 
@@ -148,8 +161,8 @@ def parse_member(raw: dict, oid: str = "") -> tuple[MemberRecord, list[Diagnosti
         id_type=_str(get("id_type")),
         real_name_status=get_translated("real_name_status"),
         political_status=_str(get("political_status")),
-        full_time_education=_str(get("full_time_education")),
-        occupation=_str(get("occupation")),
+        full_time_education=get_translated("full_time_education"),
+        occupation=get_translated("occupation"),
         income=_str(get("income")),
         work_unit=_str(get("work_unit")),
         join_date=_ms_to_date(get("join_date")),
