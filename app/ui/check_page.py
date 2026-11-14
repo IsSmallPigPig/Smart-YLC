@@ -1,10 +1,17 @@
-"""批量检查页：报到身份 / 报到情况 / 团员缴费 三项核对 + 异常导出 xlsx。"""
+"""批量检查页：报到身份 / 报到情况 / 团员缴费 三项核对 + 异常导出 xlsx。
+
+范围选择：
+- 名单：下拉选学期（对照该学期名单交叉校验）或全部名单（合并）
+- 支部：下拉选单个团支部账号，或全部支部（并发逐账号检查）
+"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QThread, Signal
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QTableWidgetItem
+from PySide6.QtWidgets import QFileDialog, QTableWidgetItem
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -27,8 +34,12 @@ from app.domain.check_rules import (
     build_report_results,
     cross_check_roster,
 )
+from app.services.api import SiteClient
 
 KIND_LABEL = {"identity": "报到身份", "report": "报到情况", "fees": "团员缴费"}
+ALL_ROSTER = "全部名单（合并各学期）"
+ALL_ORG = "全部支部"
+READONLY_FLAGS = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
 
 
 def default_identity_template() -> CheckTemplate:
@@ -48,32 +59,69 @@ def default_report_template() -> CheckTemplate:
 
 
 class CheckWorker(QThread):
-    progress = Signal(int, int, str)
-    done = Signal(object, object)  # results, cross
-    failed = Signal(str)
+    """并发逐账号检查：会话探测 → 失效才登录 → 拉取团员 → 三项核对。
 
-    def __init__(self, client, scope_oid: str, roster):
+    单账号失败（密码/网络）只影响它自己，其余账号照常出结果；
+    全部完成后用合并的团员列表对照名单做交叉校验。"""
+
+    account_done = Signal(str, list, str)  # userName, results, error
+    done = Signal(object, object, object)  # all_results, diags, cross
+    MAX_WORKERS = 4
+
+    def __init__(self, accounts: list[dict], roster):
         super().__init__()
-        self.client = client
-        self.scope_oid = scope_oid
+        self.accounts = accounts
         self.roster = roster
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def _check_one(self, acc: dict) -> tuple[str, list, list, list, str]:
+        """返回 (user, members, results, diags, error)。"""
+        user, pwd = acc.get("userName", ""), acc.get("password", "")
+        if not user or not pwd:
+            return user, [], [], [], "账号或密码为空"
+        try:
+            client = SiteClient(user, pwd)
+            probe = client.session_account()
+            if not probe.ok and not client.logged_in:
+                verdict = client.login()
+                if not verdict.ok:
+                    return user, [], [], [], verdict.message
+            members, diags = client.get_all_members()
+            results: list[CheckResult] = []
+            results += build_identity_results(members, default_identity_template())
+            results += build_report_results(members, default_report_template())
+            results += build_fee_results(members)
+            return user, members, results, diags, ""
+        except Exception as e:
+            return user, [], [], [], str(e)
 
     def run(self):
-        try:
-            members, diags = self.client.get_all_members(
-                self.scope_oid,
-                progress=lambda done, total: self.progress.emit(done, total, "拉取团员列表"),
-            )
-        except Exception as e:
-            self.failed.emit(str(e))
+        all_results: list[CheckResult] = []
+        all_diags: list = []
+        all_members: list = []
+        with ThreadPoolExecutor(max_workers=min(self.MAX_WORKERS, max(1, len(self.accounts)))) as pool:
+            futures = [pool.submit(self._check_one, dict(a)) for a in self.accounts]
+            for fut in as_completed(futures):
+                if self._stop:
+                    break
+                try:
+                    user, members, results, diags, err = fut.result()
+                except Exception as e:
+                    self.account_done.emit("", [], f"检查线程异常：{e}")
+                    continue
+                self.account_done.emit(user, results, err)
+                if err:
+                    continue
+                all_members.extend(members)
+                all_results.extend(results)
+                all_diags.extend(diags or [])
+        if self._stop:
             return
-        results: list[CheckResult] = []
-        results += build_identity_results(members, default_identity_template())
-        results += build_report_results(members, default_report_template())
-        results += build_fee_results(members)
-        scope_oids = [self.scope_oid] if self.scope_oid else []
-        cross = cross_check_roster(members, self.roster, "specified" if scope_oids else "all", scope_oids)
-        self.done.emit((results, diags), cross)
+        cross = cross_check_roster(all_members, self.roster, "all", []) if all_members else None
+        self.done.emit(all_results, all_diags, cross)
 
 
 class CheckPage(FluentPage):
@@ -81,7 +129,19 @@ class CheckPage(FluentPage):
         super().__init__('page-check', parent)
         self.window_ref = window
         self.results: list[CheckResult] = []
+        self._errors: list[tuple[str, str]] = []  # (user, error)，账号失败行
         lay = self.vBoxLayout
+
+        # 范围选择：名单（学期）+ 支部
+        row0 = QHBoxLayout()
+        row0.addWidget(BodyLabel("名单"))
+        self.roster_combo = ComboBox()
+        row0.addWidget(self.roster_combo, 1)
+        row0.addSpacing(12)
+        row0.addWidget(BodyLabel("支部"))
+        self.org_combo = ComboBox()
+        row0.addWidget(self.org_combo, 1)
+        lay.addLayout(row0)
 
         row = QHBoxLayout()
         self.kind_combo = ComboBox()
@@ -96,7 +156,7 @@ class CheckPage(FluentPage):
         row.addWidget(self.export_btn)
         lay.addLayout(row)
 
-        self.stat = BodyLabel("登录账号来自「系统配置」；拉取的是只读查询接口，不会修改任何数据")
+        self.stat = BodyLabel("名单选学期即对照该学期名单；支部选单个团支部或全部；只读查询，不修改数据")
         lay.addWidget(self.stat)
 
         self.table = TableWidget()
@@ -107,57 +167,112 @@ class CheckPage(FluentPage):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.add_table(self.table, 1)
 
+    # ---------- 范围下拉 ----------
+
+    def _refresh_scope(self):
+        """开始检查前按系统配置刷新两个下拉，尽量保留当前选择。"""
+        sp = self.window_ref.settings_page
+        cur_roster, cur_org = self.roster_combo.currentText(), self.org_combo.currentText()
+
+        sems = sorted(sp.rosters)
+        self.roster_combo.blockSignals(True)
+        self.roster_combo.clear()
+        self.roster_combo.addItems([ALL_ROSTER] + sems)
+        if cur_roster in ([ALL_ROSTER] + sems):
+            self.roster_combo.setCurrentText(cur_roster)
+        self.roster_combo.blockSignals(False)
+
+        labels = [f"{a['userName']}" + (f"（{a.get('remark')}）" if a.get("remark") else "")
+                  for a in sp.accounts]
+        self.org_combo.blockSignals(True)
+        self.org_combo.clear()
+        self.org_combo.addItems([ALL_ORG] + labels)
+        if cur_org in ([ALL_ORG] + labels):
+            self.org_combo.setCurrentText(cur_org)
+        self.org_combo.blockSignals(False)
+
+    def _selected_accounts(self) -> list[dict]:
+        sp = self.window_ref.settings_page
+        org = self.org_combo.currentText()
+        if org == ALL_ORG or not org:
+            return [dict(a) for a in sp.accounts]
+        user = org.split("（")[0]
+        return [dict(a) for a in sp.accounts if a["userName"] == user]
+
+    def _selected_roster(self):
+        sp = self.window_ref.settings_page
+        sem = self.roster_combo.currentText()
+        if sem == ALL_ROSTER or not sem:
+            return sp.roster  # 合并名单
+        return sp.rosters.get(sem)  # 该学期名单；未导入则 None
+
+    # ---------- 检查流程 ----------
+
     def _start(self):
-        client = self.window_ref.settings_page.client()
-        if client is None:
-            InfoBar.error("未配置账号", "请先到「系统配置」填写团支部账号", duration=3000, parent=self)
+        self._refresh_scope()
+        accounts = self._selected_accounts()
+        if not accounts:
+            InfoBar.warning("没有可检查的支部", "请先到「系统配置」添加团支部账号", duration=3000, parent=self)
             return
-        verdict = client.session_account()
-        if not verdict.ok and not client.logged_in:
-            verdict = client.login()
-            if not verdict.ok:
-                InfoBar.error("登录失败", verdict.message, duration=4000, parent=self)
-                return
         self.scan_btn.setEnabled(False)
-        self.stat.setText("正在拉取团员列表…")
-        scope_oid = self.window_ref.settings_page.scope_oid()
-        self.worker = CheckWorker(client, scope_oid, self.window_ref.settings_page.roster)
-        self.worker.progress.connect(
-            lambda done, total, tag: self.stat.setText(f"{tag} {done}/{total or '…'}"))
+        self.export_btn.setEnabled(False)
+        self._errors: list[tuple[str, str]] = []
+        self.table.setRowCount(0)
+        self.results = []
+        scope = self.org_combo.currentText()
+        self.stat.setText(f"正在检查 {scope}（{len(accounts)} 个账号，并发进行）…")
+        self.worker = CheckWorker(accounts, self._selected_roster())
+        self.worker.account_done.connect(self._on_account_done)
         self.worker.done.connect(self._on_done)
-        self.worker.failed.connect(self._on_failed)
         self.worker.start()
 
-    def _on_failed(self, msg: str):
-        self.scan_btn.setEnabled(True)
-        self.stat.setText(f"检查失败：{msg}")
-        InfoBar.error("检查失败", msg, duration=5000, parent=self)
+    def _append_error_row(self, user: str, msg: str):
+        r = self.table.rowCount()
+        self.table.setRowCount(r + 1)
+        row = [f"{user or '（空）'}　⚠ {msg}", "-", "-", "-", "-", "-"]
+        for col, v in enumerate(row):
+            item = QTableWidgetItem(v)
+            item.setFlags(READONLY_FLAGS)
+            if col == 0:
+                item.setForeground(QColor("#c62828"))
+            self.table.setItem(r, col, item)
 
-    def _on_done(self, payload, cross):
+    def _on_account_done(self, user: str, results: list, error: str):
+        if error:
+            self._errors.append((user, error))
+            self._append_error_row(user, error)
+
+    def _on_done(self, results, diags, cross):
         self.scan_btn.setEnabled(True)
-        results, diags = payload
         kind_idx = self.kind_combo.currentIndex()
         if kind_idx < 3:
             key = ("identity", "report", "fees")[kind_idx]
             results = [r for r in results if r.kind == key]
         self.results = results
-        self.table.setRowCount(len(results))
+        # 重绘：先错误行（账号失败），再异常结果
+        self.table.setRowCount(0)
+        for user, err in self._errors:
+            self._append_error_row(user, err)
+        self._fill_results(results)
+        self.export_btn.setEnabled(bool(results))
+        cross_msg = cross.message if cross else "无名单对照"
+        self.stat.setText(
+            f"{cross_msg}；异常 {len(results)} 条"
+            + (f"（另有 {len(diags)} 条解析诊断）" if diags else "")
+        )
+        InfoBar.success("检查完成", f"异常 {len(results)} 条，{cross_msg}", duration=4000, parent=self)
+
+    def _fill_results(self, results):
         for i, r in enumerate(results):
             m = r.member
             point = "；".join(d.reason for d in r.diffs) or (r.basis if r.kind == "fees" else "")
-            self.table.setItem(i, 0, QTableWidgetItem(KIND_LABEL[r.kind]))
-            self.table.setItem(i, 1, QTableWidgetItem(m.name))
-            self.table.setItem(i, 2, QTableWidgetItem(m.mobile))
-            self.table.setItem(i, 3, QTableWidgetItem(m.org_name or m.oid or "-"))
-            self.table.setItem(i, 4, QTableWidgetItem(point))
-            self.table.setItem(i, 5, QTableWidgetItem(r.basis or "与模板不一致"))
-            self.table.item(i, 0).setForeground(QColor("#c62828"))
-        self.export_btn.setEnabled(bool(results))
-        self.stat.setText(
-            f"{cross.message}；异常 {len(results)} 条"
-            + (f"（另有 {len(diags)} 条解析诊断）" if diags else "")
-        )
-        InfoBar.success("检查完成", f"异常 {len(results)} 条，{cross.message}", duration=4000, parent=self)
+            row = [KIND_LABEL[r.kind], m.name, m.mobile, m.org_name or m.oid or "-", point, r.basis or "与模板不一致"]
+            for col, v in enumerate(row):
+                item = QTableWidgetItem(v)
+                item.setFlags(READONLY_FLAGS)
+                if col == 0:
+                    item.setForeground(QColor("#c62828"))
+                self.table.setItem(i, col, item)
 
     def _export(self):
         path, _ = QFileDialog.getSaveFileName(self, "导出异常清单", "异常清单.xlsx", "Excel (*.xlsx)")
