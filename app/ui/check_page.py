@@ -44,11 +44,12 @@ READONLY_FLAGS = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
 
 def default_identity_template() -> CheckTemplate:
     # 判定词对照站点真实枚举：isRealName→通过。
-    # 站点语义：团员证照片未上传不算异常（站点自身显示「无异常」），志愿书状态只用于上传进度；
-    # 职业未填按站点惯例只提示（警告级），不计入信息错误。
+    # 站点语义：团员证照片未上传不算异常（站点自身显示「无异常」），志愿书状态只用于上传进度。
+    # 职业检查在 check_rules._occupation_diff（未填→警告，非学生→错误）；
+    # 这里只放收入一致性：收入应为「职业为学生无收入」，不一致（含为空）→ 错误。
     return CheckTemplate("identity", "报到身份", [
         TemplateField("real_name_status", "实名认证", "通过", "contains", True, "error"),
-        TemplateField("occupation", "职业", "", "notEmpty", True, "warning"),
+        TemplateField("income", "收入", "学生无收入", "contains", True, "error"),
     ])
 
 
@@ -129,6 +130,7 @@ class CheckPage(FluentPage):
         super().__init__('page-check', parent)
         self.window_ref = window
         self.results: list[CheckResult] = []
+        self._all_results: list[CheckResult] = []  # 当前检查项的全量结果（未按级别过滤）
         self._errors: list[tuple[str, str]] = []  # (user, error)，账号失败行
         lay = self.vBoxLayout
 
@@ -141,6 +143,12 @@ class CheckPage(FluentPage):
         row0.addWidget(BodyLabel("支部"))
         self.org_combo = ComboBox()
         row0.addWidget(self.org_combo, 1)
+        row0.addSpacing(12)
+        row0.addWidget(BodyLabel("显示"))
+        self.level_combo = ComboBox()
+        self.level_combo.addItems(["全部", "仅错误", "仅警告"])
+        self.level_combo.currentIndexChanged.connect(self._apply_level_filter)
+        row0.addWidget(self.level_combo)
         lay.addLayout(row0)
 
         row = QHBoxLayout()
@@ -248,24 +256,36 @@ class CheckPage(FluentPage):
         if kind_idx < 3:
             key = ("identity", "report", "fees")[kind_idx]
             results = [r for r in results if r.kind == key]
-        self.results = results
-        # 重绘：先错误行（账号失败），再异常结果
-        self.table.setRowCount(0)
-        for user, err in self._errors:
-            self._append_error_row(user, err)
-        self._fill_results(results)
-        self.export_btn.setEnabled(bool(results))
+        self._all_results = results
+        self._apply_level_filter()
         cross_msg = cross.message if cross else "无名单对照"
         n_err = sum(1 for r in results if r.is_error)
         n_warn = len(results) - n_err
-        warn_msg = f"；另有 {n_warn} 条警告（不计入异常）" if n_warn else ""
+        warn_msg = f"；另有 {n_warn} 条警告" if n_warn else ""
         self.stat.setText(
             f"{cross_msg}；错误 {n_err} 条{warn_msg}"
             + (f"（另有 {len(diags)} 条解析诊断）" if diags else "")
         )
         InfoBar.success("检查完成", f"错误 {n_err} 条{warn_msg}，{cross_msg}", duration=4000, parent=self)
 
+    def _apply_level_filter(self, *_):
+        """按级别下拉重建表格（账号错误行始终保留）。"""
+        results = self._all_results
+        idx = self.level_combo.currentIndex()
+        if idx == 1:
+            results = [r for r in results if r.is_error]
+        elif idx == 2:
+            results = [r for r in results if not r.is_error]
+        self.results = results
+        self.table.setRowCount(0)
+        for user, err in self._errors:
+            self._append_error_row(user, err)
+        self._fill_results(results)
+        self.export_btn.setEnabled(bool(results))
+
     def _fill_results(self, results):
+        # 必须先扩行：QTableWidget 对超出 rowCount 的 setItem 会静默丢弃
+        self.table.setRowCount(len(results))
         for i, r in enumerate(results):
             m = r.member
             point = "；".join(d.reason for d in r.diffs) or (r.basis if r.kind == "fees" else "")
@@ -287,10 +307,11 @@ class CheckPage(FluentPage):
         wb = Workbook()
         ws = wb.active
         ws.title = "异常清单"
-        ws.append(["检查项", "姓名", "手机号", "团支部", "异常点", "判定依据"])
+        ws.append(["检查项", "姓名", "手机号", "团支部", "级别", "异常点", "判定依据"])
         for r in self.results:
             m = r.member
             point = "；".join(d.reason for d in r.diffs) or (r.basis if r.kind == "fees" else "")
-            ws.append([KIND_LABEL[r.kind], m.name, m.mobile, m.org_name or m.oid, point, r.basis or "与模板不一致"])
+            level = "错误" if r.is_error else "警告"
+            ws.append([KIND_LABEL[r.kind], m.name, m.mobile, m.org_name or m.oid, level, point, r.basis or "与模板不一致"])
         wb.save(path)
         InfoBar.success("导出完成", path, duration=4000, parent=self)
