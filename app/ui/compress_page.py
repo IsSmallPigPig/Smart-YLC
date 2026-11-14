@@ -184,9 +184,10 @@ class CompressPage(FluentPage):
         self.stop_btn.setEnabled(False)
         self.ring.setValue(100)
         self.stat.setText(f"完成：{ok}/{total} 个文件已输出到「压缩结果」子目录")
-        if dialogs.confirm(
+        dialogs.confirm(
             self.window(), "压缩完成",
             f"{ok}/{total} 个文件已完成，输出到「压缩结果」子目录。\n{self.out_dir}",
             yes="打开目录", cancel="我知道了",
-        ) and self.out_dir and os.path.isdir(self.out_dir):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(self.out_dir))
+            on_result=lambda open_it: QDesktopServices.openUrl(QUrl.fromLocalFile(self.out_dir))
+            if open_it and self.out_dir and os.path.isdir(self.out_dir) else None,
+        )

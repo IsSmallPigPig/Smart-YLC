@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QTransform
 from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
-from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, ScrollArea, StrongBodyLabel, TransparentToolButton, qconfig
+from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, ScrollArea, StrongBodyLabel, TransparentToolButton, qconfig
 
 PAGE_MARGINS = (36, 28, 36, 28)
 
@@ -48,16 +48,21 @@ def sub_title(text: str) -> StrongBodyLabel:
 
 
 class SettingRow(QWidget):
-    """仿 Ghost Downloader 的设置行：左侧标题 + 灰色说明，右侧控件右对齐垂直居中。
+    """仿 Ghost Downloader 设置行：左图标 + 标题/说明两行文字，右侧控件右对齐。
 
-    用法：row = SettingRow("明暗模式", "更改应用的外观", combo)；
+    用法：row = SettingRow("明暗模式", "更改应用的外观", combo, icon=FIF.BRIGHTNESS)；
     control 也可以是先包好的 QWidget（多个控件时）。"""
 
-    def __init__(self, title: str, desc: str = "", control: QWidget | None = None, parent=None):
+    def __init__(self, title: str, desc: str = "", control: QWidget | None = None,
+                 icon: FIF | None = None, parent=None):
         super().__init__(parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 2, 0, 2)
-        lay.setSpacing(16)
+        lay.setContentsMargins(0, 6, 0, 6)
+        lay.setSpacing(14)
+        if icon is not None:
+            ic = IconWidget(icon)
+            ic.setFixedSize(18, 18)
+            lay.addWidget(ic, 0, Qt.AlignmentFlag.AlignVCenter)
         text_lay = QVBoxLayout()
         text_lay.setContentsMargins(0, 0, 0, 0)
         text_lay.setSpacing(3)

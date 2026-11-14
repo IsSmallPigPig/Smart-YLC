@@ -352,15 +352,15 @@ class SettingsPage(FluentPage):
         self.rule_prefix_edit.setPlaceholderText("如 1 或 2")
         self.rule_prefix_edit.setFixedWidth(160)
         r2.addWidget(SettingRow(
-            "学部前缀",
-            "编号 = 学部前缀（1 位）+ 入学年份后两位（2 位）+ 班号（2 位）；年级按当前学年自动推算"
-            "（如 24 级今年是高三/初三）。用于导入账号时预填备注和账号筛选",
-            self.rule_prefix_edit))
+            "学部前缀", icon=FIF.EDUCATION,
+            desc="编号 = 学部前缀（1 位）+ 入学年份后两位（2 位）+ 班号（2 位）；年级按当前学年自动推算"
+                 "（如 24 级今年是高三/初三）。用于导入账号时预填备注和账号筛选",
+            control=self.rule_prefix_edit))
         self.rule_noprefix_edit = LineEdit()
         self.rule_noprefix_edit.setPlaceholderText("初中部")
         self.rule_noprefix_edit.setFixedWidth(160)
         r2.addWidget(SettingRow(
-            "无前缀学部", "无前缀的 4 位编号归「无前缀学部」", self.rule_noprefix_edit))
+            "无前缀学部", "无前缀的 4 位编号归「无前缀学部」", self.rule_noprefix_edit, icon=FIF.TAG))
         self.rule_preview = note_label("")
         r2.addWidget(self.rule_preview)
         self.rule_prefix_edit.editingFinished.connect(self._on_rule_changed)
@@ -371,8 +371,9 @@ class SettingsPage(FluentPage):
         self.expected_pages_edit.setFixedWidth(160)
         self.expected_pages_edit.editingFinished.connect(self._save_config)
         r2.addWidget(SettingRow(
-            "预期页数", "「文档检查」页除命名外，还核对 PDF 总页数是否等于预期页数；留空则不核对页数",
-            self.expected_pages_edit))
+            "预期页数", icon=FIF.DOCUMENT,
+            desc="「文档检查」页除命名外，还核对 PDF 总页数是否等于预期页数；留空则不核对页数",
+            control=self.expected_pages_edit))
         lay.addWidget(rule_card)
 
         # ── 卡片四：外观（明暗模式 / 毛玻璃 / 首页头图，默认收起） ──
@@ -383,7 +384,7 @@ class SettingsPage(FluentPage):
             self.theme_combo.addItem(label)
         self.theme_combo.setCurrentIndex(THEME_INDEX.get(store.load().get("themeMode", "auto"), 0))
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        r3.addWidget(SettingRow("明暗模式", "更改应用的外观，选完即时生效", self.theme_combo))
+        r3.addWidget(SettingRow("明暗模式", "更改应用的外观，选完即时生效", self.theme_combo, icon=FIF.BRIGHTNESS))
         self.material_combo = ComboBox()
         for label in ("关闭", "Acrylic 毛玻璃", "Sidebar 浅毛玻璃", "HudWindow 深色毛玻璃"):
             self.material_combo.addItem(label)
@@ -392,7 +393,7 @@ class SettingsPage(FluentPage):
         self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "sidebar": 2, "hud": 3}.get(_material, 0))
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
         r3.addWidget(SettingRow(
-            "窗口背景透明材质", "为窗口背景加系统混合层毛玻璃效果；选「关闭」恢复纯色底", self.material_combo))
+            "窗口背景透明材质", "为窗口背景加系统混合层毛玻璃效果；选「关闭」恢复纯色底", self.material_combo, icon=FIF.TILES))
         header_btns = QWidget()
         hb = QHBoxLayout(header_btns)
         hb.setContentsMargins(0, 0, 0, 0)
@@ -404,7 +405,8 @@ class SettingsPage(FluentPage):
         hb.addWidget(self.header_pick_btn)
         hb.addWidget(self.header_clear_btn)
         r3.addWidget(SettingRow(
-            "首页头图", "图片会铺满工具首页顶部并自然过渡到背景；清除后显示占位渐变", header_btns))
+            "首页头图", icon=FIF.PHOTO,
+            desc="图片会铺满工具首页顶部并自然过渡到背景；清除后显示占位渐变", control=header_btns))
         lay.addWidget(look_card)
 
         # ── 卡片五：工作区与通知（默认收起） ──
@@ -422,8 +424,9 @@ class SettingsPage(FluentPage):
         wb.addWidget(self.ws_edit)
         wb.addWidget(self.ws_btn)
         r4.addWidget(SettingRow(
-            "工作区", "目录里出现新 PDF 时自动：命名检查并改名 → 超过 9.5MB 自动压缩 → 加入批量上传列表",
-            ws_ctrl))
+            "工作区", icon=FIF.FOLDER,
+            desc="目录里出现新 PDF 时自动：命名检查并改名 → 超过 9.5MB 自动压缩 → 加入批量上传列表",
+            control=ws_ctrl))
         self.ws_status = note_label("未监听")
         r4.addWidget(self.ws_status)
         notify_ctrl = QWidget()
@@ -435,10 +438,10 @@ class SettingsPage(FluentPage):
         self.notify_time_edit.setPlaceholderText("08:00")
         self.notify_time_edit.setClearButtonEnabled(False)
         nb.addWidget(self.notify_time_edit)
-        r4.addWidget(SettingRow("每日通知", "每天这个时间通过系统通知推送团员情况", notify_ctrl))
+        r4.addWidget(SettingRow("每日通知", "每天这个时间通过系统通知推送团员情况", notify_ctrl, icon=FIF.DATE_TIME))
         self.autostart_btn = PushButton()
         self.autostart_btn.clicked.connect(self._toggle_autostart)
-        r4.addWidget(SettingRow("开机自启动", "开启后开机即在后台运行，每天自动检查团员情况", self.autostart_btn))
+        r4.addWidget(SettingRow("开机自启动", "开启后开机即在后台运行，每天自动检查团员情况", self.autostart_btn, icon=FIF.POWER_BUTTON))
         lay.addWidget(ws_card)
 
         self._watcher = None
@@ -611,7 +614,8 @@ class SettingsPage(FluentPage):
         dlg.widget.setMinimumWidth(420)
         dlg.yesButton.setText("关闭")
         dlg.hideCancelButton()
-        dlg.exec()
+        dlg.finished.connect(dlg.deleteLater)  # 非模态：关闭后清理
+        dlg.show()
 
     def _apply_filter(self, label: str):
         self._filter_label = label
@@ -689,9 +693,12 @@ class SettingsPage(FluentPage):
             return
         sem = self.roster_table.item(row, 0).text()
         n = len(self.rosters[sem].rows)
-        if not dialogs.confirm(self, "删除学期名单",
-                               f"删除 {sem} 的名单（{n} 人）？磁盘上的 xlsx 文件不会被删除。"):
-            return
+        dialogs.confirm(
+            self.window(), "删除学期名单",
+            f"删除 {sem} 的名单（{n} 人）？磁盘上的 xlsx 文件不会被删除。",
+            on_result=lambda ok, sem=sem: ok and self._do_delete_roster(sem))
+
+    def _do_delete_roster(self, sem: str):
         self.rosters.pop(sem, None)
         self._roster_paths.pop(sem, None)
         idx = self.semester_combo.findText(sem)
@@ -728,33 +735,92 @@ class SettingsPage(FluentPage):
 
     # ---------- 账号增删 / 去重 / 冲突 ----------
 
-    def _resolve_conflict(self, user: str, existing: dict) -> str:
-        if not dialogs.confirm(
-            self.window(), "账号密码冲突",
-            f"账号 {user} 已存在，但密码与现存的（备注：{existing.get('remark') or '无'}）不一致。\n"
-            "点击「覆盖」用新密码替换；点击「保留原密码」跳过这一条。",
-            yes="覆盖", cancel="保留原密码",
-        ):
-            return "keep"
-        return "overwrite"
+    def _import_accounts(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择账号文件", "", "表格或文本 (*.xlsx *.xlsm *.txt *.csv)")
+        if not path:
+            return
+        rows = self._read_account_file(path)
+        if not rows:
+            InfoBar.warning("没有读到账号",
+                            "每行应为：账号 密码（备注、届别可空）；xlsx 需有「账号」「密码」列",
+                            duration=4000, parent=self)
+            return
+        # 异步冲突链：遇到密码冲突弹非模态确认，选完回调继续处理队列
+        self._import_ctx = {
+            "queue": list(rows),
+            "stat": {"added": 0, "dedup": 0, "overwritten": 0, "kept": 0},
+            "prefilled": 0,
+            "bad_years": [],
+        }
+        self._import_step()
 
-    def _upsert_account(self, user: str, pwd: str, remark: str = "") -> str:
-        user = user.strip()
-        existing = next((a for a in self.accounts if a["userName"] == user), None)
-        if existing:
+    def _import_step(self):
+        ctx = self._import_ctx
+        rule = self.org_rule()
+        while ctx["queue"]:
+            account, pwd, remark, year = ctx["queue"].pop(0)
+            if not remark or remark.strip() == account:
+                # 备注留空或误填成账号号 → 按编号规则预填（如 ssfz12601 → 普通高中高一一班）
+                remark = describe_code(account, rule)
+                ctx["prefilled"] += 1 if remark else 0
+            user = account.strip()
+            existing = next((a for a in self.accounts if a["userName"] == user), None)
+            if existing is None:
+                self._apply_import_row("added", user, pwd, remark, year)
+                continue
             if existing["password"] == pwd:
-                return "dedup"
-            if self._resolve_conflict(user, existing) == "overwrite":
-                existing["password"] = pwd
-                existing["remark"] = remark or existing.get("remark", "")
-                existing["health"] = {"status": "unknown", "message": "", "checkedAt": ""}
-                return "overwritten"
-            return "kept"
-        self.accounts.append({
-            "userName": user, "password": pwd, "remark": remark,
-            "health": {"status": "unknown", "message": "", "checkedAt": ""},
-        })
-        return "added"
+                self._apply_import_row("dedup", user, pwd, remark, year)
+                continue
+            # 密码冲突：非模态弹窗，用户选择后回调继续队列
+            dialogs.confirm(
+                self.window(), "账号密码冲突",
+                f"账号 {user} 已存在，但密码与现存的（备注：{existing.get('remark') or '无'}）不一致。\n"
+                "点击「覆盖」用新密码替换；点击「保留原密码」跳过这一条。",
+                yes="覆盖", cancel="保留原密码",
+                on_result=lambda ov, u=user, p=pwd, r=remark, y=year:
+                    self._on_conflict_resolved("overwritten" if ov else "kept", u, p, r, y),
+            )
+            return
+        self._finish_import()
+
+    def _on_conflict_resolved(self, decision, user, pwd, remark, year):
+        self._apply_import_row(decision, user, pwd, remark, year)
+        self._import_step()
+
+    def _apply_import_row(self, decision, user, pwd, remark, year):
+        stat = self._import_ctx["stat"]
+        existing = next((a for a in self.accounts if a["userName"] == user), None)
+        if decision == "added":
+            self.accounts.append({
+                "userName": user, "password": pwd, "remark": remark,
+                "health": {"status": "unknown", "message": "", "checkedAt": ""},
+            })
+        elif decision == "overwritten":
+            existing["password"] = pwd
+            existing["remark"] = remark or existing.get("remark", "")
+            existing["health"] = {"status": "unknown", "message": "", "checkedAt": ""}
+        stat[decision] += 1
+        if year:
+            from app.domain.transfer import parse_graduate_year
+
+            if parse_graduate_year(year) is None:
+                self._import_ctx["bad_years"].append(user)
+                return
+            target = existing or next(a for a in self.accounts if a["userName"] == user)
+            target["graduateYear"] = year
+
+    def _finish_import(self):
+        ctx = self._import_ctx
+        self._after_accounts_changed()
+        msg = (f"新增 {ctx['stat']['added']}，去重跳过 {ctx['stat']['dedup']}，"
+               f"覆盖 {ctx['stat']['overwritten']}，冲突保留 {ctx['stat']['kept']}")
+        if ctx["prefilled"]:
+            msg += f"；按编号规则预填备注 {ctx['prefilled']} 个"
+        if ctx["bad_years"]:
+            msg += f"；届别无效未设置：{'、'.join(ctx['bad_years'][:5])}"
+        InfoBar.success("导入完成", msg, duration=5000, parent=self)
+        self._import_ctx = None
 
     def _refresh_all_clicked(self):
         if self.window_ref is None:
@@ -782,7 +848,32 @@ class SettingsPage(FluentPage):
                 InfoBar.warning("届别无效", "届别请填毕业年份（如 2023），或留空", duration=3000, parent=self)
                 return
         remark = self.new_remark.text().strip() or describe_code(user, self.org_rule())
-        result = self._upsert_account(user, pwd, remark)
+        existing = next((a for a in self.accounts if a["userName"] == user), None)
+        if existing and existing["password"] != pwd:
+            # 冲突：非模态弹窗，选择后回调落账
+            dialogs.confirm(
+                self.window(), "账号密码冲突",
+                f"账号 {user} 已存在，但密码与现存的（备注：{existing.get('remark') or '无'}）不一致。\n"
+                "点击「覆盖」用新密码替换；点击「保留原密码」跳过这一条。",
+                yes="覆盖", cancel="保留原密码",
+                on_result=lambda ov, u=user, p=pwd, r=remark, y=year:
+                    self._add_manual_finish(u, p, r, y, "overwritten" if ov else "kept"),
+            )
+            return
+        self._add_manual_finish(user, pwd, remark, year,
+                                "dedup" if existing else "added")
+
+    def _add_manual_finish(self, user, pwd, remark, year, result):
+        if result == "overwritten":
+            existing = next(a for a in self.accounts if a["userName"] == user)
+            existing["password"] = pwd
+            existing["remark"] = remark or existing.get("remark", "")
+            existing["health"] = {"status": "unknown", "message": "", "checkedAt": ""}
+        elif result == "added":
+            self.accounts.append({
+                "userName": user, "password": pwd, "remark": remark,
+                "health": {"status": "unknown", "message": "", "checkedAt": ""},
+            })
         if result != "kept":
             acc = next(a for a in self.accounts if a["userName"] == user)
             acc["graduateYear"] = year
@@ -791,47 +882,12 @@ class SettingsPage(FluentPage):
         self.new_remark.clear()
         self.new_year.clear()
         self._after_accounts_changed()
-        if result == "dedup":
+        if result == "added":
+            InfoBar.success("已添加", f"账号 {user}", duration=3000, parent=self)
+        elif result == "dedup":
             InfoBar.info("已去重", f"账号 {user} 同密码已存在，自动跳过", duration=3000, parent=self)
         elif result == "kept":
             InfoBar.info("已保留", f"账号 {user} 保留了原密码", duration=3000, parent=self)
-
-    def _import_accounts(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择账号文件", "", "表格或文本 (*.xlsx *.xlsm *.txt *.csv)")
-        if not path:
-            return
-        rows = self._read_account_file(path)
-        if not rows:
-            InfoBar.warning("没有读到账号",
-                            "每行应为：账号 密码（备注、届别可空）；xlsx 需有「账号」「密码」列",
-                            duration=4000, parent=self)
-            return
-        rule = self.org_rule()
-        stat = {"added": 0, "dedup": 0, "overwritten": 0, "kept": 0}
-        prefilled = 0
-        bad_years: list[str] = []
-        for account, pwd, remark, year in rows:
-            if not remark or remark.strip() == account:
-                # 备注留空或误填成账号号 → 按编号规则预填（如 ssfz12601 → 普通高中高一一班）
-                remark = describe_code(account, rule)
-                prefilled += 1 if remark else 0
-            stat[self._upsert_account(account, pwd, remark)] += 1
-            if year:
-                from app.domain.transfer import parse_graduate_year
-
-                if parse_graduate_year(year) is None:
-                    bad_years.append(account)
-                    continue
-                acc = next(a for a in self.accounts if a["userName"] == account)
-                acc["graduateYear"] = year
-        self._after_accounts_changed()
-        msg = f"新增 {stat['added']}，去重跳过 {stat['dedup']}，覆盖 {stat['overwritten']}，冲突保留 {stat['kept']}"
-        if prefilled:
-            msg += f"；按编号规则预填备注 {prefilled} 个"
-        if bad_years:
-            msg += f"；届别无效未设置：{'、'.join(bad_years[:5])}"
-        InfoBar.success("导入完成", msg, duration=5000, parent=self)
 
     def _read_account_file(self, path: str) -> list[tuple[str, str, str, str]]:
         """读账号文件 → (账号, 密码, 备注, 届别)。
@@ -926,12 +982,13 @@ class SettingsPage(FluentPage):
         if not users:
             InfoBar.warning("未选择", "勾选要删除的账号，或点行内的删除按钮", duration=2500, parent=self)
             return
-        if not dialogs.confirm(
+        dialogs.confirm(
             self.window(), "删除账号",
             f"确定从列表删除 {'、'.join(users[:5])}{'等' if len(users) > 5 else ''}，共 {len(users)} 个？（不影响站点数据）",
             yes="删除", cancel="取消",
-        ):
-            return
+            on_result=lambda ok, rows=list(rows), users=list(users): ok and self._do_remove_accounts(rows, users))
+
+    def _do_remove_accounts(self, rows: list[int], users: list[str]):
         for r in sorted(rows, reverse=True):
             if 0 <= r < len(self.accounts):
                 self.accounts.pop(r)
