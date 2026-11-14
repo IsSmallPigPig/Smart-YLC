@@ -49,6 +49,7 @@ class TemplateField:
     expected: str = ""
     match: str = "exact"  # exact | notEmpty | contains | regex | numeric
     enabled: bool = True
+    severity: str = "error"  # error（计入信息错误）| warning（仅提示）
 
 
 @dataclass
@@ -65,6 +66,7 @@ class FieldDiff:
     expected: str
     actual: str
     reason: str
+    severity: str = "error"
 
 
 @dataclass
@@ -76,6 +78,13 @@ class CheckResult:
     amount: float = 0.0
     months: int = 0
     basis: str = ""
+
+    @property
+    def is_error(self) -> bool:
+        """错误级（计入组织统计）才返回 True；仅有警告级差异的不算异常。"""
+        if self.kind == "fees":
+            return True
+        return any(d.severity == "error" for d in self.diffs)
 
 
 @dataclass
@@ -120,7 +129,7 @@ def compare_with_template(member: MemberRecord, template: CheckTemplate) -> list
             if f.match == "notEmpty"
             else f"{f.label} 应为「{f.expected}」，实际为「{actual or '空'}」"
         )
-        diffs.append(FieldDiff(f.key, f.label, expected, actual or "（空）", reason))
+        diffs.append(FieldDiff(f.key, f.label, expected, actual or "（空）", reason, f.severity))
     return diffs
 
 
@@ -149,9 +158,34 @@ def _abnormal_only(kind: str, members: list[MemberRecord], template: CheckTempla
     out: list[CheckResult] = []
     for m in members:
         diffs = compare_with_template(m, template)
+        conflict = _occupation_conflict_diff(m) if kind == "identity" else None
+        if conflict:
+            diffs.append(conflict)
         if diffs:
             out.append(CheckResult(kind, m, True, diffs))
     return out
+
+
+# 在读身份启发式：全日制学历是中学/中专阶段、单位是学校，但职业填成了社会职业 → 信息错误
+STUDENT_EDU_MARKS = ("高中", "初中", "小学", "中专", "中职", "中技")
+SCHOOL_UNIT_MARKS = ("学校", "中学", "小学", "实验", "附属", "学院", "大学")
+
+
+def _occupation_conflict_diff(m: MemberRecord) -> FieldDiff | None:
+    edu = (m.full_time_education or "").strip()
+    if not any(k in edu for k in STUDENT_EDU_MARKS):
+        return None
+    unit = (m.work_unit or "").strip()
+    if not unit or not any(k in unit for k in SCHOOL_UNIT_MARKS):
+        return None
+    occ = (m.occupation or "").strip()
+    if not occ or "学生" in occ:
+        return None
+    return FieldDiff(
+        "occupation", "职业", "学生", occ,
+        f"职业「{occ}」与在读身份不符（{edu}在读，学习单位 {unit}），请核对并修改",
+        "error",
+    )
 
 
 def build_identity_results(members: list[MemberRecord], template: CheckTemplate) -> list[CheckResult]:

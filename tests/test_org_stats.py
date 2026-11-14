@@ -1,6 +1,6 @@
 """组织状况统计（纯函数）。"""
 
-from app.domain.check_rules import CheckResult, MemberRecord
+from app.domain.check_rules import CheckResult, FieldDiff, MemberRecord
 from app.domain.org_stats import is_uploaded, summarize_members
 
 
@@ -39,9 +39,19 @@ def test_summarize_by_kind_dedup():
     m1 = member()
     m2 = member(member_id="m2", name="李四", mobile="13900000000", unpaid_total=3.5)
     results = [
-        CheckResult("identity", m2, True, []),
+        CheckResult("identity", m2, True, [FieldDiff("real_name_status", "实名认证", "通过", "校验失败", "不符", "error")]),
         CheckResult("fees", m2, True, [], 3.5, 1, "欠缴"),
     ]
     s = summarize_members([m1, m2], results)
     assert s.abnormal == 1  # 一人多项异常只计一次
     assert s.by_kind["identity"] == 1 and s.by_kind["fees"] == 1 and s.by_kind["report"] == 0
+
+
+def test_warning_only_result_not_counted():
+    """警告级差异（如职业未填）不计入异常统计。"""
+    m1 = member(ebook_status="已上传")
+    results = [
+        CheckResult("identity", m1, True, [FieldDiff("occupation", "职业", "非空", "（空）", "职业 为空", "warning")]),
+    ]
+    s = summarize_members([m1], results)
+    assert s.abnormal == 0 and s.by_kind["identity"] == 0

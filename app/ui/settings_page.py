@@ -37,6 +37,7 @@ from qfluentwidgets import (
 
 from app.ui.page import FluentPage, note_label
 from app.domain.naming import Roster
+from app.domain.transfer import is_graduated
 from app.services import store
 from app.services.api import SiteClient
 
@@ -137,6 +138,26 @@ class WorkspaceWorker(QThread):
                 self.file_done.emit(os.path.basename(p), "warn", f"处理失败：{e}", p)
 
 
+class WebOpenWorker(QThread):
+    """登录当前账号后携带 cookie 在浏览器打开站点（网络操作放线程，避免卡 UI）。"""
+
+    done = Signal(bool, str)  # ok, message
+
+    def __init__(self, user: str, pwd: str, parent=None):
+        super().__init__(parent)
+        self.user, self.pwd = user, pwd
+
+    def run(self):
+        try:
+            from app.services import webopen
+
+            client = SiteClient(self.user, self.pwd)
+            ok, msg = webopen.open_logged_in(client)
+            self.done.emit(ok, msg)
+        except Exception as e:
+            self.done.emit(False, f"打开失败：{e}")
+
+
 class SettingsPage(FluentPage):
     roster_changed = Signal(object)
     workspace_changed = Signal()
@@ -152,6 +173,7 @@ class SettingsPage(FluentPage):
         self._client: SiteClient | None = None
         self._worker: HealthWorker | None = None
         self._ws_worker: WorkspaceWorker | None = None
+        self._web_worker: WebOpenWorker | None = None
         self._ws_known: set[str] = set()
 
         lay = self.vBoxLayout
@@ -184,25 +206,29 @@ class SettingsPage(FluentPage):
         self.recheck_btn = ToolButton(FIF.SYNC)
         self.recheck_btn.setToolTip("全部测活")
         self.recheck_btn.clicked.connect(self.start_health_check)
+        self.web_btn = ToolButton(FIF.GLOBE)
+        self.web_btn.setToolTip("在浏览器打开当前账号的网页端（携带登录态）")
+        self.web_btn.clicked.connect(self._open_web)
         tools.addWidget(self.sel_all_btn)
         tools.addWidget(self.del_checked_btn)
         tools.addWidget(self.recheck_btn)
+        tools.addWidget(self.web_btn)
         tools.addStretch(1)
         lay.addLayout(tools)
 
-        # 账号表：勾选框 + 账号 + 密码 + 备注 + 健康状态 + 最近检查
-        # 只有账号/密码/备注可编辑，健康状态等属性列只读；编辑实时回写配置
+        # 账号表：勾选框 + 账号 + 密码 + 备注 + 届别 + 状态 + 健康状态 + 最近检查
+        # 账号/密码/备注/届别可编辑，状态按届别自动算（毕业应转出），其余只读
         self.table = TableWidget()
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(8)
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["", "账号", "密码", "备注", "健康状态", "最近检查"])
+        self.table.setColumnCount(8)
+        self.table.setHorizontalHeaderLabels(["", "账号", "密码", "备注", "届别", "状态", "健康状态", "最近检查"])
         self.table.setColumnWidth(0, 32)
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
-        for col in (1, 2, 3, 4):  # 账号/密码/备注/健康状态列宽随内容自适应，保证完整展示
+        for col in (1, 2, 3, 4, 5, 6):  # 内容自适应，保证完整展示
             header.setSectionResizeMode(col, header.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, header.ResizeMode.Stretch)
+        header.setSectionResizeMode(7, header.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._on_item_changed)
         self.add_table(self.table, 2)
 
@@ -220,11 +246,14 @@ class SettingsPage(FluentPage):
         self.new_pwd.setPlaceholderText("密码")
         self.new_remark = LineEdit()
         self.new_remark.setPlaceholderText("备注（如 高一3班团支部）")
+        self.new_year = LineEdit()
+        self.new_year.setPlaceholderText("届别（毕业年份，可选）")
         self.add_btn = PrimaryPushButton(FIF.ADD, "添加")
         self.add_btn.clicked.connect(self._add_manual)
         row1.addWidget(self.new_user, 1)
         row1.addWidget(self.new_pwd, 1)
         row1.addWidget(self.new_remark, 1)
+        row1.addWidget(self.new_year, 1)
         row1.addWidget(self.add_btn)
         add_lay.addLayout(row1)
         row2 = QHBoxLayout()
@@ -453,10 +482,21 @@ class SettingsPage(FluentPage):
         if not user or not pwd:
             InfoBar.warning("账号或密码未填", "两栏都填好再点添加", duration=2500, parent=self)
             return
+        year = self.new_year.text().strip()
+        if year:
+            from app.domain.transfer import parse_graduate_year
+
+            if parse_graduate_year(year) is None:
+                InfoBar.warning("届别无效", "届别请填毕业年份（如 2023），或留空", duration=3000, parent=self)
+                return
         result = self._upsert_account(user, pwd, self.new_remark.text().strip())
+        if result != "kept":
+            acc = next(a for a in self.accounts if a["userName"] == user)
+            acc["graduateYear"] = year
         self.new_user.clear()
         self.new_pwd.clear()
         self.new_remark.clear()
+        self.new_year.clear()
         self._after_accounts_changed()
         if result == "dedup":
             InfoBar.info("已去重", f"账号 {user} 同密码已存在，自动跳过", duration=3000, parent=self)
@@ -561,7 +601,8 @@ class SettingsPage(FluentPage):
     # ---------- 表格 / 当前账号 ----------
 
     READONLY_FLAGS = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-    EDITABLE_COLS = {1: "userName", 2: "password", 3: "remark"}  # 列号 → 账号字段
+    # 列号 → 账号字段；届别=毕业年份（如 2023），留空表示在读未定
+    EDITABLE_COLS = {1: "userName", 2: "password", 3: "remark", 4: "graduateYear"}
 
     def _refresh_table(self):
         self.table.blockSignals(True)
@@ -572,18 +613,26 @@ class SettingsPage(FluentPage):
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
             chk.setCheckState(Qt.CheckState.Unchecked)
             self.table.setItem(i, 0, chk)
-            # 可编辑列：账号 / 密码 / 备注
+            # 可编辑列：账号 / 密码 / 备注 / 届别
             for col, key in self.EDITABLE_COLS.items():
-                self.table.setItem(i, col, QTableWidgetItem(str(acc.get(key, ""))))
+                self.table.setItem(i, col, QTableWidgetItem(str(acc.get(key, "") or "")))
+            # 状态列：按届别自动判定毕业应转出
+            graduated = is_graduated(acc)
+            gy = acc.get("graduateYear")
+            status_text = f"{gy} 届 · 毕业应转出" if graduated else ("在读" if gy else "—")
+            self.table.setItem(i, 5, QTableWidgetItem(status_text))
+            self.table.item(i, 5).setFlags(self.READONLY_FLAGS)
+            if graduated:
+                self.table.item(i, 5).setForeground(QColor("#ef6c00"))
             h = acc.get("health") or {}
             status, msg = h.get("status", "unknown"), h.get("message", "")
             label = HEALTH_LABEL.get(status, status) + (f"：{msg}" if msg and status != "ok" else "")
-            self.table.setItem(i, 4, QTableWidgetItem(label))
-            self.table.item(i, 4).setFlags(self.READONLY_FLAGS)
-            self.table.item(i, 4).setForeground(QColor(HEALTH_COLOR.get(status, "#9e9e9e")))
+            self.table.setItem(i, 6, QTableWidgetItem(label))
+            self.table.item(i, 6).setFlags(self.READONLY_FLAGS)
+            self.table.item(i, 6).setForeground(QColor(HEALTH_COLOR.get(status, "#9e9e9e")))
             checked = h.get("checkedAt", "")
-            self.table.setItem(i, 5, QTableWidgetItem(checked.replace("T", " ")[:19] if checked else "—"))
-            self.table.item(i, 5).setFlags(self.READONLY_FLAGS)
+            self.table.setItem(i, 7, QTableWidgetItem(checked.replace("T", " ")[:19] if checked else "—"))
+            self.table.item(i, 7).setFlags(self.READONLY_FLAGS)
         self.table.blockSignals(False)
         # 当前使用下拉
         self.active_combo.blockSignals(True)
@@ -620,6 +669,17 @@ class SettingsPage(FluentPage):
             InfoBar.warning("账号无效", "账号不能为空，也不能与其他账号重复", duration=3000, parent=self)
             return
 
+        if key == "graduateYear":
+            from app.domain.transfer import parse_graduate_year
+
+            new_value = text.strip()
+            if new_value and parse_graduate_year(new_value) is None:
+                self.table.blockSignals(True)
+                item.setText(str(acc.get("graduateYear", "") or ""))
+                self.table.blockSignals(False)
+                InfoBar.warning("届别无效", "届别请填毕业年份（如 2023），或留空表示在读未定", duration=3000, parent=self)
+                return
+
         changed = acc.get(key, "") != new_value
         if not changed:
             return
@@ -627,6 +687,8 @@ class SettingsPage(FluentPage):
         if key in ("userName", "password"):
             acc["health"] = {"status": "unknown", "message": "", "checkedAt": ""}
         self._save_config()
+        if key == "graduateYear":
+            self._refresh_table()  # 状态列随届别联动
         if key == "userName":
             if self.active_user == text.strip() or not self.active_user:
                 self.active_user = new_value
@@ -657,6 +719,34 @@ class SettingsPage(FluentPage):
         self._worker.account_checked.connect(self._on_account_checked)
         self._worker.finished.connect(lambda: self.health_btn.setEnabled(True))
         self._worker.start()
+
+    # ---------- 浏览器打开（携带登录态） ----------
+
+    def _open_web(self):
+        """优先打开勾选行的第一个账号，否则打开当前使用账号。"""
+        if not self.accounts:
+            InfoBar.warning("没有账号", "请先添加团支部账号", duration=2500, parent=self)
+            return
+        if self._web_worker and self._web_worker.isRunning():
+            return
+        checked = [i for i in range(self.table.rowCount())
+                   if self.table.item(i, 0) and self.table.item(i, 0).checkState() == Qt.CheckState.Checked]
+        idx = checked[0] if checked else next(
+            (i for i, a in enumerate(self.accounts) if a["userName"] == self.active_user), 0)
+        if not (0 <= idx < len(self.accounts)):
+            return
+        acc = self.accounts[idx]
+        self.web_btn.setEnabled(False)
+        self._web_worker = WebOpenWorker(acc["userName"], acc["password"], self)
+        self._web_worker.done.connect(self._on_web_opened)
+        self._web_worker.start()
+
+    def _on_web_opened(self, ok: bool, msg: str):
+        self.web_btn.setEnabled(True)
+        if ok:
+            InfoBar.success("打开网页", msg, duration=5000, parent=self)
+        else:
+            InfoBar.warning("打开网页", msg, duration=8000, parent=self)
 
     def _on_account_checked(self, user: str, status: str, message: str):
         acc = next((a for a in self.accounts if a["userName"] == user), None)
