@@ -133,6 +133,8 @@ class MainWindow(MSFluentWindow):
         self._bg_sync_worker.all_done.connect(
             lambda: self.org_manage_page.refresh()
             if self.stackedWidget.currentWidget() is self.org_manage_page else None)
+        # 成员同步完成后顺带自动拉取站内信（缓存新鲜则跳过）
+        self._bg_sync_worker.all_done.connect(lambda: self.messages_page.auto_fetch())
         self._bg_sync_worker.start()
 
     def _setup_back_button(self):

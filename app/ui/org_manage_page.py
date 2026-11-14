@@ -275,7 +275,7 @@ class OrgManagePage(FluentPage):
         return card
 
     def _member_row(self, m: MemberView) -> QWidget:
-        """成员行：姓名 + 手机号 + 来源；系统成员可展开查看全部字段。"""
+        """成员行：姓名 + 手机号 + 来源；系统成员点击卡片任意位置展开/收起全部字段。"""
         card = CardWidget()
         h = QHBoxLayout(card)
         h.setContentsMargins(14, 8, 14, 8)
@@ -291,9 +291,10 @@ class OrgManagePage(FluentPage):
         chip = BodyLabel(SOURCE_LABEL[m.source])
         chip.setTextColor(SOURCE_COLOR[m.source], SOURCE_COLOR[m.source])
         h.addWidget(chip)
+        detail = None
         if m.system is not None:
             toggle = TransparentToolButton(FIF.CHEVRON_DOWN_MED)
-            toggle.setToolTip("展开系统信息")
+            toggle.setToolTip("展开/收起系统信息")
             h.addWidget(toggle)
 
         wrap = QWidget()
@@ -311,6 +312,8 @@ class OrgManagePage(FluentPage):
                 t.setIcon(FIF.CHEVRON_UP_MED if d.isVisible() else FIF.CHEVRON_DOWN_MED)
 
             toggle.clicked.connect(_toggle)
+            card.clicked.connect(_toggle)
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
         return wrap
 
     def _detail_grid(self, rec: MemberRecord) -> QWidget:

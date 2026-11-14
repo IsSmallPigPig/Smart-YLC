@@ -84,24 +84,24 @@ class HomePage(FluentPage):
         super().__init__('page-home', parent)
         self.window_ref = window
         lay = self.vBoxLayout
-        # 头图铺满上方页面：页面外边距归零，正文内容用自己的边距
-        lay.setContentsMargins(0, 0, 0, 28)
+        # 头图叠加在页面底层（不占布局），正文铺满整页：欢迎块以整个视口垂直居中，
+        # 有头图时正好落在头图与下方背景的交界处
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         # 首页内容固定刚好一屏：不出现滚动条
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # 头图横幅（通栏，贴顶，无圆角）
-        self.banner = Banner()
-        self.banner.setFixedHeight(260)
-        lay.addWidget(self.banner)
+        # 头图横幅（通栏，贴顶，无圆角；叠加层，几何在 resizeEvent 里维护）
+        self.banner = Banner(self.scrollWidget)
+        self.banner.lower()
 
         body = QWidget()
         body_lay = QVBoxLayout(body)
         body_lay.setContentsMargins(36, 0, 36, 0)
         body_lay.setSpacing(8)
 
-        # 欢迎大字块 + 按钮在头图以下的剩余空间内垂直居中
+        # 欢迎大字块 + 按钮在整页视口内垂直居中
         body_lay.addStretch(1)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
@@ -125,7 +125,10 @@ class HomePage(FluentPage):
         body_lay.addLayout(row)
         body_lay.addStretch(1)
 
-        body_lay.addWidget(note_label("上传后需在智慧团建网页端点击「审核」完成认证"))
+        # 底部说明小字叠放在页面底部（不占布局），保证欢迎块在视口内精确垂直居中
+        self.note = note_label("上传后需在智慧团建网页端点击「审核」完成认证")
+        self.note.setWordWrap(False)
+        self.note.setParent(self.scrollWidget)
         lay.addWidget(body, 1)
 
         self._apply_font()
@@ -156,6 +159,12 @@ class HomePage(FluentPage):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        # 头图铺满上方页面：高度跟随视口
-        self.banner.setFixedHeight(max(200, int(self.viewport().height() * BANNER_RATIO)))
+        # 头图铺满上方 40% 视口、通栏贴顶；正文铺满整页在其上层
+        self.banner.setFixedSize(self.scrollWidget.width(),
+                                 max(200, int(self.viewport().height() * BANNER_RATIO)))
+        self.banner.move(0, 0)
+        self.banner.lower()
+        # 底部说明小字贴底
+        self.note.adjustSize()
+        self.note.move(36, self.scrollWidget.height() - self.note.height() - 24)
         self._apply_font()
