@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QThread, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QThread, Signal, QUrl
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import QTableWidgetItem
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
@@ -13,6 +13,7 @@ from qfluentwidgets import (
     BodyLabel,
     ComboBox,
     LineEdit,
+    MessageBox,
     PrimaryPushButton,
     ProgressRing,
     PushButton,
@@ -69,6 +70,7 @@ class CompressPage(FluentPage):
         super().__init__('page-compress', parent)
         self.window_ref = window
         self.worker = None
+        self.out_dir = ""
         lay = self.vBoxLayout
 
         row = QHBoxLayout()
@@ -126,6 +128,7 @@ class CompressPage(FluentPage):
             return
         out_dir = os.path.join(d, "压缩结果")
         os.makedirs(out_dir, exist_ok=True)
+        self.out_dir = out_dir
         target = TARGET_95 if self.target_combo.currentIndex() == 0 else TARGET_195
         self.table.setRowCount(len(files))
         for i, p in enumerate(files):
@@ -171,4 +174,13 @@ class CompressPage(FluentPage):
         self.stop_btn.setEnabled(False)
         self.ring.setValue(100)
         self.stat.setText(f"完成：{ok}/{total} 个文件已输出到「压缩结果」子目录")
-        InfoBar.success("压缩完成", f"{ok}/{total} 个文件完成", duration=3500, parent=self)
+        box = MessageBox(
+            "压缩完成",
+            f"{ok}/{total} 个文件已完成，输出到「压缩结果」子目录。\n{self.out_dir}",
+            self.window(),
+        )
+        box.yesButton.setText("打开目录")
+        box.cancelButton.setText("我知道了")
+        box.exec()
+        if box.result() and self.out_dir and os.path.isdir(self.out_dir):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.out_dir))

@@ -288,7 +288,7 @@ class UploadPage(FluentPage):
                 self.window(),
             )
             box.yesButton.setText("继续上传可路由部分")
-            box.noButton.setText("取消")
+            box.cancelButton.setText("取消")
             box.exec()
             if not box.result():
                 return
