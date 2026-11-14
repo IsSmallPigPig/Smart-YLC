@@ -27,7 +27,6 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     InfoBar,
     LineEdit,
-    MessageBox,
     PrimaryPushButton,
     PushButton,
     StrongBodyLabel,
@@ -36,6 +35,7 @@ from qfluentwidgets import (
     ToolButton,
 )
 
+from app.ui import dialogs
 from app.ui.page import FluentPage, note_label
 from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, describe_code, parse_class_code
@@ -239,7 +239,7 @@ class SettingsPage(FluentPage):
         self.table.setBorderRadius(8)
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels(["", "账号", "密码", "备注", "届别", "状态", "健康状态", "最近检查"])
-        self.table.setColumnWidth(0, 32)
+        self.table.setColumnWidth(0, 46)
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         for col in (1, 2, 3, 4, 5, 6):  # 内容自适应，保证完整展示
@@ -642,16 +642,14 @@ class SettingsPage(FluentPage):
     # ---------- 账号增删 / 去重 / 冲突 ----------
 
     def _resolve_conflict(self, user: str, existing: dict) -> str:
-        box = MessageBox(
-            "账号密码冲突",
+        if not dialogs.confirm(
+            self.window(), "账号密码冲突",
             f"账号 {user} 已存在，但密码与现存的（备注：{existing.get('remark') or '无'}）不一致。\n"
             "点击「覆盖」用新密码替换；点击「保留原密码」跳过这一条。",
-            self.window(),
-        )
-        box.yesButton.setText("覆盖")
-        box.cancelButton.setText("保留原密码")
-        box.exec()
-        return "overwrite" if box.result() else "keep"
+            yes="覆盖", cancel="保留原密码",
+        ):
+            return "keep"
+        return "overwrite"
 
     def _upsert_account(self, user: str, pwd: str, remark: str = "") -> str:
         user = user.strip()
@@ -790,15 +788,11 @@ class SettingsPage(FluentPage):
         if not users:
             InfoBar.warning("未选择", "勾选要删除的账号，或点行内的删除按钮", duration=2500, parent=self)
             return
-        box = MessageBox(
-            "删除账号",
+        if not dialogs.confirm(
+            self.window(), "删除账号",
             f"确定从列表删除 {'、'.join(users[:5])}{'等' if len(users) > 5 else ''}，共 {len(users)} 个？（不影响站点数据）",
-            self.window(),
-        )
-        box.yesButton.setText("删除")
-        box.cancelButton.setText("取消")
-        box.exec()
-        if not box.result():
+            yes="删除", cancel="取消",
+        ):
             return
         for r in sorted(rows, reverse=True):
             if 0 <= r < len(self.accounts):

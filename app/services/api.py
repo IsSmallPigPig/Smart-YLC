@@ -118,6 +118,25 @@ class SiteClient:
 
     # ---------- 组织 / 团员（只读） ----------
 
+    def get_messages_page(self, page_no: int = 1, page_size: int = 100, msg_type: int = 0) -> dict:
+        """GET /api/v1/admin/message/findAllMessage（前端 MessageApi.findAllMessage）。
+
+        type=0 组织账号；返回信封 {code, total, listData}（total 为本页条数，翻页看 listData）。"""
+        try:
+            resp = self.http.get(
+                API_BASE_URL + "/api/v1/admin/message/findAllMessage",
+                params={"type": msg_type, "pageNo": page_no, "pageSize": page_size},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            raise RuntimeError(f"站内信请求失败：{e}") from e
+        code = str((raw or {}).get("code", ""))
+        if code and code != "200":
+            raise RuntimeError(f"站内信接口返回异常：{raw.get('message') or raw.get('msg') or code}")
+        return raw
+
     def _post_api(self, path: str, payload: dict):
         headers = {AUTHORIZE_HEADER: self.authorize_name} if self.authorize_name else {}
         resp = self.http.post(
