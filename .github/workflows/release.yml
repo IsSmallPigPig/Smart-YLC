@@ -29,9 +29,9 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -54,7 +54,9 @@ jobs:
             px="${spec%%:*}"; name="${spec##*:}"
             sips -z "$px" "$px" "$SRC" --out "$ICONSET/icon_${name}.png" > /dev/null
           done
-          iconutil -c icns "$ICONSET" -o build/icon.icns
+          iconutil -c icns "$ICONSET" -o "build/$APP_NAME.icns"
+          # 导出一次确认 icns 里真有图：空图标时 iconutil 也可能成功返回
+          sips -g pixelWidth "build/$APP_NAME.icns" > /dev/null
 
       - name: PyInstaller 打包（.app）
         run: |
@@ -66,13 +68,48 @@ jobs:
             --add-data "app/assets:assets" \
             main.py
 
+      - name: 校验应用图标
+        run: |
+          PLIST="dist/$APP_NAME.app/Contents/Info.plist"
+          NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$PLIST" || true)
+          if [ -z "$NAME" ]; then
+            echo "::error::Info.plist 没有 CFBundleIconFile，.app 会用默认图标"
+            exit 1
+          fi
+          ICON="dist/$APP_NAME.app/Contents/Resources/$NAME"
+          if [ ! -f "$ICON" ]; then
+            echo "::error::找不到 $ICON"
+            exit 1
+          fi
+          if ! cmp -s "build/$APP_NAME.icns" "$ICON"; then
+            echo "::error::打包进 .app 的图标与 build/$APP_NAME.icns 不一致（回退成 PyInstaller 默认图标）"
+            exit 1
+          fi
+          echo "应用图标已嵌入：$NAME ($(stat -f%z "$ICON") 字节)"
+
       - name: 制作 dmg 安装镜像
         run: |
-          hdiutil create -volname "$APP_NAME" \
-            -srcfolder "dist/$APP_NAME.app" \
-            -ov -format UDZO "dist/$APP_NAME-macOS-${{ matrix.arch }}.dmg"
+          DMGROOT="dist/dmgroot"
+          rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
+          cp -R "dist/$APP_NAME.app" "$DMGROOT/"
+          # 卷图标：不设的话挂载后的磁盘显示成通用磁盘图标，看不到应用 LOGO
+          cp "build/$APP_NAME.icns" "$DMGROOT/.VolumeIcon.icns"
+          RW="dist/$APP_NAME-rw.dmg"
+          hdiutil create -volname "$APP_NAME" -srcfolder "$DMGROOT" \
+            -ov -format UDRW "$RW" > /dev/null
+          MOUNT="/tmp/$APP_NAME-vol"
+          hdiutil attach "$RW" -nobrowse -mountpoint "$MOUNT" > /dev/null
+          if command -v SetFile > /dev/null; then
+            SetFile -a C "$MOUNT"
+          else
+            echo "::warning::SetFile 不可用，卷图标可能不生效"
+          fi
+          hdiutil detach "$MOUNT" > /dev/null
+          hdiutil convert "$RW" -format UDZO \
+            -o "dist/$APP_NAME-macOS-${{ matrix.arch }}.dmg" > /dev/null
+          rm -rf "$RW" "$DMGROOT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ env.APP_NAME }}-macOS-${{ matrix.arch }}
           path: dist/${{ env.APP_NAME }}-macOS-${{ matrix.arch }}.dmg
@@ -81,9 +118,9 @@ jobs:
     # windows-latest 自带 x86_64 工具链，打出的就是 64 位 Windows 版
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -105,7 +142,7 @@ jobs:
       - name: 重命名 exe 标明架构
         run: Move-Item "dist/$env:APP_NAME.exe" "dist/$env:APP_NAME-Windows-x64.exe"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ env.APP_NAME }}-Windows
           path: dist/${{ env.APP_NAME }}-Windows-x64.exe
@@ -115,7 +152,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
 
