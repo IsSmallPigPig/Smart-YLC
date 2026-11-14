@@ -18,20 +18,19 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
-    BodyLabel,
     CaptionLabel,
     CardWidget,
-    ComboBox,
     FluentIcon as FIF,
     InfoBar,
-    isDarkTheme,
     PrimaryPushButton,
     PushButton,
+    TransparentToolButton,
+    SegmentedWidget,
     StrongBodyLabel,
 )
 
@@ -41,14 +40,51 @@ from app.domain.messages import (
     build_member_name_index,
     clean_title,
     fetch_all_messages,
+    guess_member_name,
 )
 from app.domain.account_health import excluded_note, split_accounts
 from app.services import login_gate, store
 from app.services.api import SiteClient
-from app.ui.page import FluentPage, note_label, section_title, theme_font
+from app.ui.page import (
+    FluentPage,
+    set_tip,
+    PageHeader,
+    note_label,
+    theme_font,
+)
+from app.ui.widgets import PillLabel
 
-FILTER_LABELS = ["全部", *KIND_LABEL.values()]  # 全部 / 报到申请 / 转接申请 / 其他消息
-SECTION_PAGE = 60  # 每个分组一次渲染的卡片数，其余走「显示更多」
+KINDS = list(KIND_LABEL)
+PAGE_SIZE = 12  # 每页卡片数：正好铺满一屏，翻页条落在首屏底部看得到
+RENDER_BATCH = 6  # 一页内再分两批建卡，首屏立刻可见
+
+
+class MessageLoadWorker(QThread):
+    """后台读配置并组装消息数据。
+
+    配置里消息、成员、已读三份缓存加起来可达数 MB，JSON 解析放在 GUI 线程里
+    会让切页明显停顿；这里只在后台读出原始字典，视图对象仍由界面线程构造。
+    """
+
+    loaded = Signal(object)
+    failed = Signal(str)
+
+    def run(self):
+        try:
+            cfg = store.load()
+        except Exception as e:  # 配置损坏时不让线程悄悄死掉
+            self.failed.emit(str(e))
+            return
+        cache = cfg.get("messagesCache") or {}
+        read = cfg.get("messagesRead") or {}
+        members = cfg.get("memberCache") or {}
+        raw = json.dumps([cache, read, members], sort_keys=True, ensure_ascii=False)
+        self.loaded.emit({
+            "digest": hashlib.md5(raw.encode()).hexdigest(),
+            "cache": cache,
+            "read": read,
+            "memberCache": members,
+        })
 
 
 class MessageFetchWorker(QThread):
@@ -147,75 +183,97 @@ class MessageFetchWorker(QThread):
         self.all_done.emit()
 
 
-class MessageOpenWorker(QThread):
-    """点击消息：按消息所属支部账号登录 → 携带 cookie 打开网页端。"""
-
-    done = Signal(bool, str)
-
-    def __init__(self, user: str, pwd: str, parent=None):
-        super().__init__(parent)
-        self.user, self.pwd = user, pwd
-
-    def run(self):
-        from app.services.webopen import open_logged_in
-
-        try:
-            client = SiteClient(self.user, self.pwd)
-            ok, msg = open_logged_in(client)
-            self.done.emit(ok, f"{self.user}：{msg}")
-        except Exception as e:
-            self.done.emit(False, f"{self.user}：{e}")
-
-
 class MessagesPage(FluentPage):
     def __init__(self, window, parent=None):
         super().__init__("page-messages", parent)
         self.window_ref = window
         self.worker: MessageFetchWorker | None = None
-        self.open_worker: MessageOpenWorker | None = None
         self._views: list[MessageView] = []
         self._name_index: dict[str, str] = {}
-        self._shown: dict[str, int] = {}  # 每个分组已渲染条数（防一次建上千卡片卡死 UI）
+        self._search = ""  # 标题栏搜索框注入的关键词
+        self._filtered: list = []  # 当前筛选结果（整份，不分页）
+        self._page = 0
+        self._render_token = 0  # 翻页/筛选变化时丢弃上一轮未完成的续渲染
+        self._loader: MessageLoadWorker | None = None
         self._silent = False  # 自动拉取时不弹成功提示
 
         lay = self.vBoxLayout
 
-        bar = CardWidget()
-        bar_lay = QVBoxLayout(bar)
-        bar_lay.setContentsMargins(20, 16, 20, 16)
-        row = QHBoxLayout()
-        self.filter_combo = ComboBox()
-        for label in FILTER_LABELS:
-            self.filter_combo.addItem(label)
-        self.filter_combo.setCurrentIndex(0)
-        self.filter_combo.currentIndexChanged.connect(lambda *_: self._rebuild())
-        self.read_combo = ComboBox()
-        self.read_combo.addItems(["未读", "已读", "全部"])
-        self.read_combo.setCurrentIndex(0)  # 默认只看未读
-        self.read_combo.currentIndexChanged.connect(lambda *_: self._rebuild())
-        self.fetch_btn = PrimaryPushButton(FIF.SYNC, "拉取站内信")
-        self.fetch_btn.clicked.connect(lambda: self._fetch(silent=False))
-        self.mark_read_btn = PushButton(FIF.CHECKBOX, "全部标为已读")
-        self.mark_read_btn.clicked.connect(self._mark_all_read)
-        row.addWidget(self.filter_combo, 0)
-        row.addSpacing(12)
-        row.addWidget(self.read_combo, 0)
-        row.addSpacing(16)
-        row.addWidget(self.fetch_btn, 0)
-        row.addWidget(self.mark_read_btn, 0)
-        row.addStretch(1)
-        bar_lay.addLayout(row)
-        self.stat_label = note_label("")
-        bar_lay.addWidget(self.stat_label)
-        lay.addWidget(bar)
+        # 标题与操作直接写在背景上，列表卡片铺在下面
+        self.header = PageHeader("系统消息")
+        self.stat_label = self.header.desc_label
+        lay.addWidget(self.header)
 
-        # 分组消息列表
+        self.kind_seg = SegmentedWidget()
+        for key in KINDS:
+            self.kind_seg.addItem(key, KIND_LABEL[key])
+        self.kind_seg.setCurrentItem(KINDS[0])
+        self.kind_seg.currentItemChanged.connect(lambda *_: self._rebuild())
+        self.kind_seg.setFixedHeight(34)
+
+        self.read_seg = SegmentedWidget()
+        self.read_seg.addItem("unread", "未读")
+        self.read_seg.addItem("read", "已读")
+        self.read_seg.addItem("all", "全部")
+        self.read_seg.setCurrentItem("unread")
+        self.read_seg.currentItemChanged.connect(lambda *_: self._rebuild())
+        self.read_seg.setFixedHeight(34)
+
+        self.fetch_btn = PrimaryPushButton(FIF.SYNC, "拉取消息")
+        self.fetch_btn.clicked.connect(lambda: self._fetch(silent=False))
+        self.mark_read_btn = PushButton(FIF.CHECKBOX, "全部已读")
+        self.mark_read_btn.clicked.connect(self._mark_all_read)
+
+        # 拉取与全部已读进标题行，页签与翻页留在下面一行，都在一行内完成
+        self.header.add_control(self.fetch_btn)
+        self.header.add_control(self.mark_read_btn)
+
+        self.stat_label.setWordWrap(False)
+
+        tools = QWidget()
+        tools_lay = QHBoxLayout(tools)
+        tools_lay.setContentsMargins(0, 2, 0, 8)
+        tools_lay.setSpacing(10)
+        tools_lay.addWidget(self.kind_seg, 0)
+        tools_lay.addStretch(1)
+        tools_lay.addWidget(self.read_seg, 0)
+        lay.addWidget(tools)
+
         self.list_box = QWidget()
         self.list_lay = QVBoxLayout(self.list_box)
         self.list_lay.setContentsMargins(0, 0, 0, 0)
-        self.list_lay.setSpacing(8)
+        self.list_lay.setSpacing(6)
         self.list_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.add_table(self.list_box, 1)
+        self.list_box.setMinimumHeight(180)
+        lay.addWidget(self.list_box)
+
+        # 翻页放在列表底下：左右箭头 + 当前页，居中一行
+        self.prev_btn = TransparentToolButton(FIF.PAGE_LEFT)
+        set_tip(self.prev_btn, "上一页")
+        self.prev_btn.clicked.connect(lambda *_: self._flip(-1))
+        self.next_btn = TransparentToolButton(FIF.PAGE_RIGHT)
+        set_tip(self.next_btn, "下一页")
+        self.next_btn.clicked.connect(lambda *_: self._flip(1))
+        self.page_label = note_label("")
+        pager = QWidget()
+        pager_lay = QHBoxLayout(pager)
+        pager_lay.setContentsMargins(0, 10, 0, 4)
+        pager_lay.setSpacing(6)
+        pager_lay.addStretch(1)
+        pager_lay.addWidget(self.prev_btn, 0)
+        pager_lay.addWidget(self.page_label, 0)
+        pager_lay.addWidget(self.next_btn, 0)
+        pager_lay.addStretch(1)
+        lay.addWidget(pager)
+        self._sync_pager()
+
+    def set_search(self, text: str):
+        """标题栏搜索框变化：按姓名、标题、正文过滤当前页签。"""
+        text = (text or "").strip()
+        if text == self._search:
+            return
+        self._search = text
+        self._rebuild()
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -224,26 +282,27 @@ class MessagesPage(FluentPage):
 
     # ---------- 数据 ----------
 
-    def _cache_digest(self) -> str:
-        """消息列表依赖的配置指纹：消息缓存 + 成员缓存（姓名索引）+ 已读标记。
-        三者都没变时 _load_cache 直接跳过，30 秒快刷不再全量重建卡片。"""
-        cfg = store.load()
-        raw = json.dumps([cfg.get("messagesCache", {}), cfg.get("messagesRead", {}),
-                          cfg.get("memberCache", {})], sort_keys=True, ensure_ascii=False)
-        return hashlib.md5(raw.encode()).hexdigest()
-
     def _load_cache(self):
-        """从缓存组装视图（拉取后也会刷新）；按 (账号, receive_id) 去重，
-        兼容旧缓存里已被重复写入的同一条消息。"""
-        digest = self._cache_digest()
-        if digest == getattr(self, "_last_digest", None) and self._views:
+        """后台读缓存；正在加载时重复调用直接返回，不叠线程。"""
+        if self._loader is not None and self._loader.isRunning():
             return
-        self._last_digest = digest
-        cfg = store.load()
-        cache = cfg.get("messagesCache", {})
+        self._loader = MessageLoadWorker(self)
+        self._loader.loaded.connect(self._on_cache_loaded)
+        self._loader.failed.connect(self._on_cache_failed)
+        self._loader.start()
+
+    def _on_cache_failed(self, message: str):
+        InfoBar.error("消息缓存读取失败", message, duration=8000, parent=self)
+
+    def _on_cache_loaded(self, payload: dict):
+        """缓存没变就跳过；变了才重组视图并重置到第一页。"""
+        if payload["digest"] == getattr(self, "_last_digest", None) and self._views:
+            return
+        self._last_digest = payload["digest"]
+        self._read_marks_cache = payload["read"]
         views: list[MessageView] = []
         seen: set[tuple] = set()
-        for user, blob in cache.items():
+        for user, blob in payload["cache"].items():
             for d in blob.get("messages", []):
                 d = dict(d)
                 d.setdefault("account", user)
@@ -262,7 +321,7 @@ class MessagesPage(FluentPage):
         views.sort(key=lambda v: v.time_str, reverse=True)
         self._views = views
         self._name_index = build_member_name_index(
-            cfg.get("memberCache", {}), self._local_rows())
+            payload["memberCache"], self._local_rows())
         self._rebuild()
 
     def _local_rows(self) -> list:
@@ -316,100 +375,164 @@ class MessagesPage(FluentPage):
         InfoBar.success("已全部标为已读", f"共 {len(unread)} 条", duration=3000, parent=self)
 
     def _rebuild(self):
-        self._read_marks_cache = None  # 本轮已读表重新载入
-        while self.list_lay.count():
-            item = self.list_lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        idx = self.filter_combo.currentIndex()
-        read_idx = self.read_combo.currentIndex()  # 0 未读 1 已读 2 全部
-        if read_idx == 0:
+        """按页签、已读与搜索词重新筛选，回到第一页并分批建卡。"""
+        self._read_marks_cache = None
+        kind = self.kind_seg.currentRouteKey() or KINDS[0]
+        read_mode = self.read_seg.currentRouteKey() or "unread"
+        if read_mode == "unread":
             base = [v for v in self._views if self._is_unread(v)]
-        elif read_idx == 1:
+        elif read_mode == "read":
             base = [v for v in self._views if not self._is_unread(v)]
         else:
             base = self._views
-        unread_total = sum(1 for v in self._views if self._is_unread(v))
-        counts = {k: sum(1 for v in base if v.kind == k) for k in KIND_LABEL}
-        self.stat_label.setText(
-            f"共 {len(self._views)} 条，未读 {unread_total}")
-        if not base:
-            hint = ("没有未读消息。" if read_idx == 0 else
-                    "已读里还没有消息。" if read_idx == 1 else
-                    "没有消息。")
-            self.list_lay.addWidget(note_label(hint))
-            return
-        kinds = list(KIND_LABEL) if idx == 0 else [list(KIND_LABEL)[idx - 1]]
-        for k in kinds:
-            group = [v for v in base if v.kind == k]
-            if not group and idx != 0:
-                self.list_lay.addWidget(note_label("没有消息"))
-                continue
-            self.list_lay.addWidget(self._section_header(k, len(group)))
-            shown = self._shown.setdefault(k, SECTION_PAGE)
-            for v in group[:shown]:
-                self.list_lay.addWidget(self._message_card(v, unread=self._is_unread(v)))
-            if len(group) > shown:
-                more = PushButton(f"显示更多（还有 {len(group) - shown} 条）")
-                more.clicked.connect(lambda *_: self._show_more(k))
-                self.list_lay.addWidget(more)
 
-    def _show_more(self, kind: str):
-        self._shown[kind] = self._shown.get(kind, SECTION_PAGE) + SECTION_PAGE
-        self._rebuild()
+        if self._search:
+            needle = self._search.lower()
+
+            def _hit(v: MessageView) -> bool:
+                name = guess_member_name(v.mobile, v.content, self._name_index)
+                return (needle in (v.content or "").lower()
+                        or needle in (v.title or "").lower()
+                        or needle in name.lower())
+
+            base = [v for v in base if _hit(v)]
+
+        unread_total = sum(1 for v in self._views if self._is_unread(v))
+        group = [v for v in base if v.kind == kind]
+        pages = max(1, (len(group) + PAGE_SIZE - 1) // PAGE_SIZE)
+        self._filtered = group
+        self._page = 0  # 换页签、换已读状态或改搜索词都从头看
+        self.stat_label.setText(
+            f"共 {len(self._views)} 条，未读 {unread_total}，"
+            f"{KIND_LABEL[kind]} {len(group)} 条")
+        if not group:
+            self._clear_list()
+            hint = ("没有未读消息。" if read_mode == "unread" else
+                    "这类消息都还没读过。" if read_mode == "read" else "没有消息。")
+            self.list_lay.addWidget(note_label(hint))
+            self._sync_pager()
+            return
+        self._render_page()
+
+    def _clear_list(self):
+        self._render_token += 1  # 作废上一轮可能还挂着的续渲染
+        while self.list_lay.count():
+            item = self.list_lay.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _render_page(self):
+        """只建当前页的 20 张卡，并分两批塞进布局，单批不超过 10 张。"""
+        self._clear_list()
+        start = self._page * PAGE_SIZE
+        self._queue = self._filtered[start:start + PAGE_SIZE]
+        self._queue_index = 0
+        token = self._render_token
+        self._drain(token)
+
+    def _drain(self, token: int):
+        if token != self._render_token:
+            return
+        batch = self._queue[self._queue_index:self._queue_index + RENDER_BATCH]
+        for view in batch:
+            self.list_lay.addWidget(
+                self._message_card(view, unread=self._is_unread(view)))
+        self._queue_index += len(batch)
+        if self._queue_index < len(self._queue):
+            QTimer.singleShot(0, lambda: self._drain(token))
+            return
+        self._sync_pager()
+
+    def _sync_pager(self):
+        """翻页控件在列表底下，页数用「第 2 / 5 页」这样的简写。"""
+        pages = max(1, (len(self._filtered) + PAGE_SIZE - 1) // PAGE_SIZE)
+        if not getattr(self, "_filtered", None):
+            self.prev_btn.setVisible(False)
+            self.next_btn.setVisible(False)
+            self.page_label.setVisible(False)
+            return
+        self.prev_btn.setVisible(pages > 1)
+        self.next_btn.setVisible(pages > 1)
+        self.page_label.setVisible(pages > 1)
+        self.prev_btn.setEnabled(self._page > 0)
+        self.next_btn.setEnabled(self._page < pages - 1)
+        self.page_label.setText(f"第 {self._page + 1} / {pages} 页")
+
+    def _flip(self, delta: int):
+        pages = max(1, (len(self._filtered) + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = max(0, min(self._page + delta, pages - 1))
+        if page == self._page:
+            return
+        self._page = page
+        self._render_page()
+        self.verticalScrollBar().setValue(0)
+        # 翻页只换一屏卡片：淡入表示"内容换了"，不做位移以免整块跳动
+        from app.ui.anim import fade_in
+
+        fade_in(self.list_box, duration=160, dy=0)
+
+    def apply_theme(self):
+        """主题变化：只让按主题取色的卡片重设一次颜色，不重建整页控件。"""
+        for i in range(self.list_lay.count()):
+            card = self.list_lay.itemAt(i).widget()
+            hook = getattr(card, "apply_theme", None)
+            if hook is not None:
+                hook()
 
     # ---------- UI ----------
 
-    def _section_header(self, kind: str, count: int) -> QWidget:
-        return section_title(f"{KIND_LABEL[kind]} {count} 条")
-
     def _message_card(self, v: MessageView, unread: bool) -> QWidget:
+        """一条消息：姓名 + 原标题标签 + 未读标签 … 时间、账号固定宽度右对齐。"""
         card = CardWidget()
         card.setCursor(Qt.CursorShape.PointingHandCursor)
-        if not unread:
-            # 已读：整卡变暗，不改字体颜色
-            from PySide6.QtWidgets import QGraphicsOpacityEffect
-
-            effect = QGraphicsOpacityEffect(card)
-            effect.setOpacity(0.45)
-            card.setGraphicsEffect(effect)
-
-        v_out = QVBoxLayout(card)
-        v_out.setContentsMargins(18, 12, 18, 12)
-        v_out.setSpacing(6)
+        outer = QVBoxLayout(card)
+        outer.setContentsMargins(16, 7, 16, 7)
+        outer.setSpacing(3)
 
         head = QHBoxLayout()
-        name = self._name_index.get(v.mobile, "")
+        head.setSpacing(8)
+        name = guess_member_name(v.mobile, v.content, self._name_index)
         tag_title = clean_title(v.title)
-        # 主标题：团员姓名 → 原标题（去【系统通知】括号）→ 类别名；
-        # 站内信标题可能整串都是中括号（剥完为空），此时按类别展示
         title_text = name or tag_title or KIND_LABEL[v.kind]
-        title = theme_font(StrongBodyLabel(title_text), 15, int(QFont.Weight.DemiBold))
-        head.addWidget(title)
-        # 右侧小标签：彩色底 + 白字（不改字体颜色）
+        title = theme_font(StrongBodyLabel(title_text), 14, int(QFont.Weight.DemiBold))
+        # 姓名、类别、未读各占一列固定宽度，否则每行标签起点都不一样，看着参差不齐
+        title.setFixedWidth(84)
+        head.addWidget(title, 0)
+
+        def _tint_title(t=title, dim=not unread):
+            """已读卡片的标题压暗；主题换了要重设一次，颜色是按主题取的。"""
+            if dim:
+                t.setTextColor(QColor("#6b7280"), QColor("#9ca3af"))
+
+        _tint_title()
+
         if name and tag_title:
-            head.addSpacing(8)
-            tag = CaptionLabel(tag_title)
-            tag.setStyleSheet(
-                f"background-color: {'#4b5563' if isDarkTheme() else '#6b7280'};"
-                "color: white; border-radius: 4px; padding: 1px 8px;")
-            head.addWidget(tag)
+            tag = PillLabel(tag_title, "gray")
+            tag.set_fixed_width(132)
+            head.addWidget(tag, 0)
+
         if unread:
-            head.addSpacing(6)
-            unread_tag = CaptionLabel("未读")
-            unread_tag.setStyleSheet(
-                "background-color: #0067f4; color: white; border-radius: 4px; padding: 1px 8px;")
-            head.addWidget(unread_tag)
+            flag = PillLabel("未读", "blue")
+            flag.set_fixed_width(52)
+            head.addWidget(flag, 0)
+
         head.addStretch(1)
-        head.addWidget(CaptionLabel(v.time_str))
-        head.addSpacing(12)
-        head.addWidget(CaptionLabel(v.account))
-        v_out.addLayout(head)
+        when = CaptionLabel(v.time_str)
+        when.setFixedWidth(152)
+        when.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        head.addWidget(when, 0)
+        account = CaptionLabel(v.account)
+        account.setFixedWidth(96)
+        account.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        head.addWidget(account, 0)
+        outer.addLayout(head)
 
         body = note_label(v.content or "")
         body.setWordWrap(True)
-        v_out.addWidget(body)
+        outer.addWidget(body)
         card.clicked.connect(lambda *_: self._open_message(v))
+        card.apply_theme = _tint_title  # 主题切换时由列表统一回调
         return card
 
     # ---------- 动作 ----------
@@ -449,24 +572,15 @@ class MessagesPage(FluentPage):
             InfoBar.success("拉取完成", "站内信已更新并保留在本地", duration=3000, parent=self)
 
     def _open_message(self, v: MessageView):
-        self._set_read(v)  # 点开即在本地标记已读，卡片移出未读
+        """点开消息：标为已读，并在内嵌浏览器里打开该支部的标签页（不拉起外部浏览器）。"""
+        self._set_read(v)
         self._rebuild()
-        if self.open_worker is not None and self.open_worker.isRunning():
-            return
         # 消息从哪个账号的收件箱拉来，就打开哪个账号（支部即账号，无需再定位团员）
         user = v.account
-        accounts = self.window_ref.settings_page.accounts
-        acc = next((a for a in accounts if a.get("userName") == user), None)
+        acc = next((a for a in self.window_ref.settings_page.accounts
+                    if a.get("userName") == user), None)
         if not acc or not acc.get("password"):
             InfoBar.warning("账号不可用", f"账号 {user or '未标注'} 不在系统配置或缺少密码",
                             duration=4000, parent=self)
             return
-        self.open_worker = MessageOpenWorker(user, acc["password"], self)
-        self.open_worker.done.connect(self._on_opened)
-        self.open_worker.start()
-
-    def _on_opened(self, ok: bool, msg: str):
-        if ok:
-            InfoBar.success("打开网页", msg, duration=5000, parent=self)
-        else:
-            InfoBar.warning("打开网页", msg, duration=8000, parent=self)
+        self.window_ref.open_browser(user)

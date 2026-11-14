@@ -1,4 +1,4 @@
-"""组织状况仪表盘：上传进度圆环 + 异常分类条形图 + 错误团员名单（可导出）。
+"""组织状况仪表盘：上传进度圆环 + 异常分类条形图 + 异常团员名单（可导出）。
 
 异常分类：信息错误（报到身份）/ 没有报道（报到情况）/ 欠缴团费（团员缴费）。
 名单只列错误级异常的团员，每行末尾是所属支部（账号备注，无备注回退账号名）。
@@ -19,8 +19,8 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     InfoBar,
     PrimaryPushButton,
-    PushButton,
     StrongBodyLabel,
+    ToolButton,
     CaptionLabel,
 )
 
@@ -34,8 +34,10 @@ from app.domain.account_health import excluded_note, split_accounts
 from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services.api import SiteClient
 from app.ui.charts import BarRowWidget, ProgressDonut
-from app.ui.check_page import default_identity_template, default_report_template
-from app.ui.page import CallbackWorker, FluentPage, note_label, theme_font, section_title
+from app.domain.check_templates import default_identity_template, default_report_template
+from app.ui.page import (CallbackWorker, FluentPage, PageHeader, note_label,
+                         set_tip,
+                         section_title, theme_font)
 
 STATUS_LABEL = {
     "ok": "正常",
@@ -52,7 +54,7 @@ TRANSFER_COLOR = "#1565c0"
 
 
 class OrgWorker(QThread):
-    """并发逐账号：会话探测 → 失效才登录 → 拉取团员 → 三项检查 + 错误团员名单 + 转接统计。只读查询。
+    """并发逐账号：会话探测 → 失效才登录 → 拉取团员 → 三项检查 + 异常团员名单 + 转接统计。只读查询。
 
     单账号失败（密码错误/网络异常）只影响它自己一行，不阻塞其他账号。"""
 
@@ -115,6 +117,21 @@ class OrgWorker(QThread):
         self.all_done.emit()
 
 
+class MemberCard(CardWidget):
+    """异常团员卡片：点一下跳到组织管理里这个团员所在的支部。"""
+
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+
 class OrgPage(FluentPage):
     def __init__(self, window, parent=None):
         super().__init__("page-org", parent)
@@ -132,12 +149,22 @@ class OrgPage(FluentPage):
 
         lay = self.vBoxLayout
 
-        # 仪表盘卡片：左圆环进度 + 右异常分类条形图（含转接申请占比）
+        # 标题与工具条在背景上，仪表盘卡片只装图表
+        self.header = PageHeader("组织状况", "各支部上传进度、异常分类与转接申请")
+        self.start_btn = PrimaryPushButton(FIF.SYNC, "开始统计")
+        self.start_btn.clicked.connect(self._start)
+        self.export_btn = ToolButton(FIF.SAVE)
+        self.export_btn.setFixedSize(32, 32)
+        set_tip(self.export_btn, "导出异常团员名单")
+        self.export_btn.setEnabled(False)
+        self.export_btn.clicked.connect(self._export)
+        self.header.add_control(self.export_btn)
+        self.header.add_control(self.start_btn)
+        lay.addWidget(self.header)
+
         card = CardWidget()
         card_lay = QVBoxLayout(card)
         card_lay.setContentsMargins(20, 16, 20, 16)
-        card_lay.addWidget(section_title("组织状况总览"))
-        card_lay.addSpacing(4)
 
         dash = QHBoxLayout()
         self.donut = ProgressDonut()
@@ -158,25 +185,15 @@ class OrgPage(FluentPage):
         self.transfer_note = note_label("")
         card_lay.addWidget(self.transfer_note)
 
-        row = QHBoxLayout()
-        self.start_btn = PrimaryPushButton(FIF.SYNC, "开始统计")
-        self.start_btn.clicked.connect(self._start)
-        self.export_btn = PushButton(FIF.SAVE, "导出表格")
-        self.export_btn.setEnabled(False)
-        self.export_btn.clicked.connect(self._export)
-        row.addWidget(self.start_btn)
-        row.addWidget(self.export_btn)
-        row.addStretch(1)
-        card_lay.addLayout(row)
         lay.addWidget(card)
 
-        # 错误团员卡片列表：每张卡片 = 姓名/支部 + 类别 + 问题说明；账号级失败单独成卡
+        # 异常团员卡片列表：每张卡片 = 姓名/支部 + 类别 + 问题说明；账号级失败单独成卡
         self.error_box = QWidget()
         self.error_lay = QVBoxLayout(self.error_box)
         self.error_lay.setContentsMargins(0, 0, 0, 0)
         self.error_lay.setSpacing(8)
         self.error_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.error_title = section_title("错误团员 0")
+        self.error_title = section_title("异常团员 0")
         self.add_table(self.error_box, 1)
         self.error_lay.addWidget(self.error_title)
 
@@ -232,7 +249,7 @@ class OrgPage(FluentPage):
             for r in rows:
                 self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                                   r.problems, r.branch, r.kinds)
-            self.error_title.setText(f"错误团员 {len(rows)}")
+            self.error_title.setText(f"异常团员 {len(rows)}")
 
     def refresh_offline(self):
         """从成员缓存（memberCache）离线重算三项统计，无网络请求。
@@ -277,7 +294,7 @@ class OrgPage(FluentPage):
         for r in error_rows:
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch, r.kinds)
-        self.error_title.setText(f"错误团员 {len(error_rows)}")
+        self.error_title.setText(f"异常团员 {len(error_rows)}")
         if error_rows:
             self.export_btn.setEnabled(True)
 
@@ -294,10 +311,9 @@ class OrgPage(FluentPage):
             self._by_kind[k] = self._by_kind.get(k, 0) + v
         if transfer:
             self._transfer_applied += transfer.applied
-            detail = f"：{'、'.join(transfer.names[:6])}" if transfer.names else ""
             self.transfer_note.setText(
-                f"已申请 {self._transfer_applied} 人，在册 {self._total} 人"
-                f"{detail}，成功 {transfer.succeeded} 审核中 {transfer.pending} 退回 {transfer.returned}")
+                f"转接申请 {self._transfer_applied} 人，成功 {transfer.succeeded}，"
+                f"审核中 {transfer.pending}，退回 {transfer.returned}")
         self._update_bars()
 
         if status != "ok":
@@ -308,7 +324,7 @@ class OrgPage(FluentPage):
             self._error_rows.append(r)
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch, r.kinds)
-        self.error_title.setText(f"错误团员 {len(self._error_rows)}")
+        self.error_title.setText(f"异常团员 {len(self._error_rows)}")
         if self._error_rows:
             self.export_btn.setEnabled(True)
         if status == "ok":
@@ -389,29 +405,32 @@ class OrgPage(FluentPage):
         for r in rows:
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch, r.kinds)
-        self.error_title.setText(f"错误团员 {len(rows)}")
+        self.error_title.setText(f"异常团员 {len(rows)}")
         if rows:
             self.export_btn.setEnabled(True)
-        uniq_names = list(dict.fromkeys(names))
-        detail = f"：{'、'.join(uniq_names[:6])}" if uniq_names else ""
         stamp = f"，更新于 {updated}" if updated else ""
         self.transfer_note.setText(
-            f"已申请 {applied} 人，在册 {total} 人{detail}"
-            f"，成功 {succeeded} 审核中 {pending} 退回 {returned}{stamp}")
+            f"转接申请 {applied} 人，成功 {succeeded}，审核中 {pending}，退回 {returned}{stamp}")
 
     def _clear_cards(self):
         while self.error_lay.count() > 1:  # 保留标题
             item = self.error_lay.takeAt(self.error_lay.count() - 1)
             if item.widget():
                 item.widget().deleteLater()
-        self.error_title.setText("错误团员 0")
+        self.error_title.setText("异常团员 0")
 
     def _append_card(self, name, mobile, kinds: list, problem, branch, kinds_text):
-        """一张错误团员卡片：左侧姓名+手机号，右侧支部；下方类别与问题。"""
-        card = CardWidget()
+        """一张异常团员卡片：左侧姓名+手机号，右侧支部；下方类别与问题。"""
+        # kinds 为 None 是账号级失败，没有可跳转的支部，保持普通卡片
+        if kinds is None or not branch:
+            card = CardWidget()
+        else:
+            card = MemberCard()
+            set_tip(card, f"点击查看「{branch}」的团员名单")
+            card.clicked.connect(lambda b=branch: self._goto_branch(b))
         v = QVBoxLayout(card)
-        v.setContentsMargins(18, 12, 18, 12)
-        v.setSpacing(6)
+        v.setContentsMargins(18, 9, 18, 9)
+        v.setSpacing(5)
 
         head = QHBoxLayout()
         title = theme_font(StrongBodyLabel(name or ""), 15, int(QFont.Weight.DemiBold))
@@ -442,14 +461,25 @@ class OrgPage(FluentPage):
 
         self.error_lay.addWidget(card)
 
+    def _goto_branch(self, branch: str):
+        """跳到组织管理，并打开这个支部的详情。"""
+        window = getattr(self, "window_ref", None)
+        page = getattr(window, "org_manage_page", None)
+        if page is None:
+            return
+        window.switchTo(page)
+        if not page.reveal_branch(branch):
+            InfoBar.warning("没有找到支部", f"组织管理里没有「{branch}」这个支部",
+                            duration=4000, parent=self)
+
     def _export(self):
         if not self._error_rows:
-            InfoBar.warning("没有可导出的名单", "先开始统计，有错误团员才能导出", duration=3000, parent=self)
+            InfoBar.warning("没有可导出的名单", "先开始统计，有异常团员才能导出", duration=3000, parent=self)
             return
         from PySide6.QtWidgets import QFileDialog
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出错误团员名单", "错误团员名单.xlsx", "Excel (*.xlsx)")
+            self, "导出异常团员名单", "异常团员名单.xlsx", "Excel (*.xlsx)")
         if not path:
             return
         from app.services.excel import save_error_rows
@@ -460,7 +490,7 @@ class OrgPage(FluentPage):
         def _ok(n: int):
             self.export_btn.setEnabled(True)
             self._workers = [w for w in getattr(self, "_workers", []) if w is not worker]
-            InfoBar.success("已导出", f"已导出 {n} 名错误团员到 {path}", duration=5000, parent=self)
+            InfoBar.success("已导出", f"已导出 {n} 名异常团员到 {path}", duration=5000, parent=self)
 
         def _fail(msg: str):
             self.export_btn.setEnabled(True)

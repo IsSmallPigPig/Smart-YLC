@@ -21,9 +21,10 @@ from qfluentwidgets import (
     IconWidget,
     InfoBar,
     PrimaryPushButton,
-    SearchLineEdit,
+    PrimaryToolButton,
     StrongBodyLabel,
-    SwitchButton,
+    ToggleToolButton,
+    ToolButton,
     TransparentPushButton,
     TransparentToolButton,
     isDarkTheme,
@@ -49,8 +50,11 @@ from app.services import login_gate, store
 from app.services.api import SiteClient
 from app.ui.anim import animate_expand, fade_in, value_animation
 from app.ui.charts import BarRowWidget
-from app.ui.check_page import default_identity_template, default_report_template
-from app.ui.page import FluentPage, CardRow, note_label, section_title, theme_font
+from app.domain.check_templates import default_identity_template, default_report_template
+from app.ui.export_flow import start_export
+from app.ui.page import (CardRow, FluentPage, PageHeader, chevron_icon, note_label,
+                         set_tip,
+                         section_title, theme_font)
 
 SOURCE_COLOR = {"local": "#6b7280", "system": "#1565c0", "both": "#2e7d32"}
 KIND_COLOR = {"identity": "#ef6c00", "report": "#c62828", "archive": "#00838f", "fees": "#8e24aa"}
@@ -220,61 +224,48 @@ class OrgManagePage(FluentPage):
         self._branches: list[BranchNode] = []
         self._stats = {"local": 0, "system": 0, "both": 0}
         self._detail_code = ""
+        self._search = ""  # 由主窗口标题栏的搜索框注入
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         lay = self.vBoxLayout
 
-        # ── 顶部导航卡：常驻，列表与详情只换导航内容，不做整块隐藏 ──
-        self.bar = CardWidget()
-        self.bar.setBorderRadius(8)
-        bar_lay = QVBoxLayout(self.bar)
-        bar_lay.setContentsMargins(20, 14, 20, 14)
-        bar_lay.setSpacing(10)
-        nav = QHBoxLayout()
-        nav.setSpacing(10)
-
-        self.title_lbl = section_title("组织管理")
-        nav.addWidget(self.title_lbl)
+        # ── 标题与工具条直接写在背景上：标题最大最重，控件全挤在一行 ──
+        self.header = PageHeader("组织管理")
+        self.title_lbl = self.header.title_label
+        self.stat_label = self.header.desc_label
 
         self.crumb_home = TransparentPushButton(FIF.HOME, "组织管理")
-        self.crumb_home.setToolTip("返回支部列表")
+        set_tip(self.crumb_home, "返回支部列表")
         self.crumb_home.clicked.connect(self.back_to_feed)
         self.crumb_sep = IconWidget(FIF.CHEVRON_RIGHT_MED)
         self.crumb_sep.setFixedSize(14, 14)
         self.crumb_branch = StrongBodyLabel("")
-        theme_font(self.crumb_branch, 14, int(QFont.Weight.DemiBold))
+        theme_font(self.crumb_branch, 18, int(QFont.Weight.DemiBold))
         self.crumb_box = QWidget()
         crumb_lay = QHBoxLayout(self.crumb_box)
         crumb_lay.setContentsMargins(0, 0, 0, 0)
         crumb_lay.setSpacing(8)
         for w in (self.crumb_home, self.crumb_sep, self.crumb_branch):
             crumb_lay.addWidget(w)
-        nav.addWidget(self.crumb_box)
-        nav.addStretch(1)
+        self.header.slot.addWidget(self.crumb_box)
+        self.crumb_box.setVisible(False)
 
-        self.search_edit = SearchLineEdit()
-        self.search_edit.setPlaceholderText("搜索团员姓名或手机号")
-        self.search_edit.setFixedWidth(240)
-        self.search_edit.textChanged.connect(lambda *_: self._rebuild())
-        self.sys_only = SwitchButton("仅系统名单")
-        self.sys_only.setOffText("全部")
-        self.sys_only.setChecked(False)
-        self.sys_only.checkedChanged.connect(lambda *_: self._rebuild())
-        self.sync_btn = PrimaryPushButton(FIF.SYNC, "同步系统数据")
+        # 显示全部：只有图标，常亮即「看全部团员」，灭掉只看系统名单
+        self.sys_only = ToggleToolButton(FIF.TILES)
+        self.sys_only.setChecked(True)
+        set_tip(self.sys_only, "显示全部团员；关掉只看系统名单")
+        self.sys_only.toggled.connect(lambda *_: self._rebuild())
+        self.sync_btn = PrimaryPushButton(FIF.SYNC, "同步数据")
+        set_tip(self.sync_btn, "同步系统数据：刷新成员、站内信与组织状况")
         self.sync_btn.clicked.connect(self._sync)
-        self.feed_tools = QWidget()
-        tools_lay = QHBoxLayout(self.feed_tools)
-        tools_lay.setContentsMargins(0, 0, 0, 0)
-        tools_lay.setSpacing(12)
-        tools_lay.addWidget(self.search_edit)
-        tools_lay.addWidget(self.sys_only)
-        nav.addWidget(self.feed_tools)
-        nav.addWidget(self.sync_btn)
-        bar_lay.addLayout(nav)
-
-        self.stat_label = note_label("")
-        bar_lay.addWidget(self.stat_label)
-        lay.addWidget(self.bar)
+        self.export_btn = ToolButton(FIF.SAVE)
+        self.export_btn.setFixedSize(32, 32)
+        set_tip(self.export_btn, "导出数据")
+        self.export_btn.clicked.connect(lambda: start_export(self))
+        self.header.add_control(self.sys_only)
+        self.header.add_control(self.export_btn)
+        self.header.add_control(self.sync_btn)
+        lay.addWidget(self.header)
 
         # 列表与详情：切换时新视图淡入并轻微上移
         self.feed_box = QWidget()
@@ -297,7 +288,12 @@ class OrgManagePage(FluentPage):
 
     def showEvent(self, e):
         super().showEvent(e)
-        self.refresh()
+        import time
+
+        now = time.monotonic()
+        if not self._branches or now - getattr(self, "_refreshed_at", 0) > 2:
+            self.refresh()
+            self._refreshed_at = now
         detail = bool(self._detail_code)
         self._set_nav(detail)
         self.feed_box.setVisible(not detail)
@@ -322,12 +318,22 @@ class OrgManagePage(FluentPage):
         self.back_to_feed()
         return True
 
+    def set_search(self, text: str):
+        """标题栏搜索框变化：只改过滤词，重建列表。"""
+        text = (text or "").strip()
+        if text == self._search:
+            return
+        self._search = text
+        self._rebuild()
+
     def _set_nav(self, detail: bool):
         self.title_lbl.setVisible(not detail)
-        self.feed_tools.setVisible(not detail)
         self.crumb_box.setVisible(detail)
-        # 详情里已有大标题和三列统计，导航卡不再重复一遍人数
+        # 详情里已有大标题和三列统计，工具条不再重复一遍人数
         self.stat_label.setVisible(not detail)
+        self.sys_only.setVisible(not detail)
+        self.export_btn.setVisible(not detail)
+        self.sync_btn.setVisible(not detail)
 
     def _stat_text(self, shown_count: int) -> str:
         return (f"本地 {self._stats['local']} 人，系统 {self._stats['system']} 人，"
@@ -411,7 +417,8 @@ class OrgManagePage(FluentPage):
 
     def _rebuild(self):
         self._clear(self.feed_lay)
-        shown = filter_members(self._branches, self.search_edit.text(), self.sys_only.isChecked())
+        shown = filter_members(self._branches, self._search,
+                               not self.sys_only.isChecked())
         shown_count = sum(len(b.members) for b in shown)
         self.stat_label.setText(self._stat_text(shown_count))
         if not shown:
@@ -470,7 +477,7 @@ class OrgManagePage(FluentPage):
         text.addWidget(note_label(meta or "暂无团支书信息"))
         h.addLayout(text, 1)
 
-        if self.search_edit.text().strip():
+        if self._search.strip():
             names = [m.name for m in b.members if m.name]
             if names:
                 label = "、".join(names[:3]) + (f" 等 {len(names)} 人" if len(names) > 3 else "")
@@ -512,12 +519,31 @@ class OrgManagePage(FluentPage):
         if animate:
             self.feed_box.setVisible(False)
             self.detail_box.setVisible(True)
-            fade_in(self.detail_box, duration=240, dy=12)
+            fade_in(self.detail_box, duration=240, dy=0)
         else:
             self.feed_box.setVisible(False)
             self.detail_box.setVisible(True)
         self._scroll_top()
         self.detail_changed.emit(True)
+
+    def reveal_branch(self, name: str) -> bool:
+        """按支部名打开详情：组织状况里点异常团员就跳到这里。
+
+        支部名来自账号备注（与错误名单里的字段同源），找不到时退一步做包含匹配，
+        备注被改过长也能对上。"""
+        needle = (name or "").strip()
+        if not needle:
+            return False
+        if not self._branches:
+            self.refresh()
+        node = next((b for b in self._branches if b.label == needle), None)
+        if node is None:
+            node = next((b for b in self._branches
+                         if needle in b.label or (b.label and b.label in needle)), None)
+        if node is None:
+            return False
+        self._open_branch(node.code)
+        return True
 
     def _build_detail(self, b: BranchNode, animate: bool = True):
         self._clear(self.detail_lay)
@@ -611,10 +637,10 @@ class OrgManagePage(FluentPage):
         self._set_nav(False)
         self.stat_label.setText(self._stat_text(
             sum(len(b.members) for b in filter_members(
-                self._branches, self.search_edit.text(), self.sys_only.isChecked()))))
+                self._branches, self._search, not self.sys_only.isChecked()))))
         self.detail_box.setVisible(False)
         self.feed_box.setVisible(True)
-        fade_in(self.feed_box, duration=220, dy=8)
+        fade_in(self.feed_box, duration=220, dy=0)
         self._scroll_top()
         self.detail_changed.emit(False)
 
@@ -639,8 +665,8 @@ class OrgManagePage(FluentPage):
         h.addWidget(_pill(SOURCE_LABEL[m.source], SOURCE_COLOR[m.source]))
         toggle = None
         if m.system is not None:
-            toggle = TransparentToolButton(FIF.DOWN)
-            toggle.setToolTip("展开系统信息")
+            toggle = TransparentToolButton()
+            set_tip(toggle, "展开系统信息")
             toggle.setFixedSize(28, 28)
             h.addWidget(toggle)
 
@@ -659,7 +685,7 @@ class OrgManagePage(FluentPage):
             if d is None:
                 return
             expanded = not d.isVisible()
-            t.setIcon(FIF.UP if expanded else FIF.DOWN)
+            t.setIcon(chevron_icon(expanded))
             animate_expand(d, expanded, duration=190)
 
         if toggle is not None:

@@ -1,6 +1,6 @@
 """版本检查与更新包下载。
 
-数据来源固定为 GitHub 仓库 IsSmallPigPig/Smart-Youth：
+数据来源固定为 GitHub 仓库 IsSmallPigPig/Smart-YLC：
   * 有 Release 时读 /releases/latest，取 tag、说明和安装包
   * 没有 Release 时读 main 分支的 app/__init__.py 版本号，下载源码压缩包
 下载可经 ghproxy.com 加速；加速失败会明确报出原因，由调用方决定是否回退直连。
@@ -22,8 +22,8 @@ from pathlib import Path
 
 from app import __version__
 
-REPO = "IsSmallPigPig/Smart-Youth"
-REPO_URL = "https://github.com/IsSmallPigPig/Smart-Youth.git"
+REPO = "IsSmallPigPig/Smart-YLC"
+REPO_URL = "https://github.com/IsSmallPigPig/Smart-YLC.git"
 REPO_PAGE = "https://github.com/" + REPO
 AUTHOR_URL = "https://github.com/IsSmallPigPig"
 ISSUES_URL = REPO_PAGE + "/issues"
@@ -34,7 +34,7 @@ VERSION_RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/app/__init__.p
 SOURCE_ZIP = f"https://github.com/{REPO}/archive/refs/heads/{BRANCH}.zip"
 UPDATE_DIR = os.path.join(os.path.expanduser("~"), ".gd12355-helper", "updates")
 TIMEOUT = 8
-USER_AGENT = f"Smart-Youth/{__version__} (+{REPO_PAGE})"
+USER_AGENT = f"Smart-YLC/{__version__} (+{REPO_PAGE})"
 
 DEFAULT_AUTO_CHECK = True
 DEFAULT_PROXY = "ghproxy"
@@ -163,7 +163,7 @@ def _release_info() -> UpdateInfo | None:
         filename = str(asset["name"])
     else:
         url = str(data.get("zipball_url") or f"{REPO_PAGE}/archive/refs/tags/{tag}.zip")
-        filename = f"Smart-Youth-{tag}.zip"
+        filename = f"Smart-YLC-{tag}.zip"
     notes = (str(data.get("body") or "").strip() or f"发布版本 {tag}")
     return UpdateInfo(tag, notes[:300], url, filename, "release")
 
@@ -178,7 +178,7 @@ def _branch_info() -> UpdateInfo:
         version=version,
         notes=f"{BRANCH} 分支最新源码，下载后手动替换应用文件",
         download_url=SOURCE_ZIP,
-        filename=f"Smart-Youth-{version}.zip",
+        filename=f"Smart-YLC-{version}.zip",
         source="branch",
     )
 

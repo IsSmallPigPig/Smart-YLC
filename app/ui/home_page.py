@@ -1,6 +1,7 @@
-"""工具首页：头图铺满顶部并柔和融进窗口底色，欢迎大字 + 右下两个入口按钮。
+"""工具首页：头图铺满顶部并柔和融进窗口底色，欢迎大字 + 概览磁贴 + 导出入口。
 
 头图在系统配置设置，持久化到配置文件 headerImage 键，未设置时显示同色系占位渐变。
+概览数字来自配置缓存（离线汇总），30 秒同步后自动刷新。
 """
 
 from __future__ import annotations
@@ -9,20 +10,29 @@ import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
-from qfluentwidgets import FluentIcon as FIF
-from qfluentwidgets import (
-    PrimaryPushButton,
-    PushButton,
-    SubtitleLabel,
-    TitleLabel,
-    isDarkTheme,
-)
+from qfluentwidgets import CardWidget, FluentIcon as FIF
+from qfluentwidgets import SubtitleLabel, TitleLabel, isDarkTheme
 
-from app.ui.page import FluentPage
+from app.ui.charts import BarRowWidget, ProgressDonut
+from app.ui.page import FluentPage, note_label
+from app.ui.widgets import StatTile
 
 BANNER_RATIO = 0.40  # 头图占视口高度的比例，铺满上方页面
+
+TILES = (
+    ("upload", "档案上传", FIF.CLOUD, "info"),
+    ("total", "团员总数", FIF.PEOPLE, "info"),
+    ("branches", "支部数量", FIF.PIE_SINGLE, "info"),
+    ("unread", "未读消息", FIF.MESSAGE, "warn"),
+)
+KIND_CHARTS = (
+    ("identity", "信息错误", "#ef6c00"),
+    ("report", "没有报道", "#c62828"),
+    ("archive", "没有档案", "#00838f"),
+    ("fees", "欠缴团费", "#8e24aa"),
+)
 
 
 def page_bg_color() -> QColor:
@@ -95,6 +105,7 @@ class HomePage(FluentPage):
     def __init__(self, window, parent=None):
         super().__init__('page-home', parent)
         self.window_ref = window
+        self._workers: list = []
         lay = self.vBoxLayout
         # 头图叠加在页面底层（不占布局），正文铺满整页：欢迎块以整个视口垂直居中，
         # 正好落在头图与下方背景的交界处
@@ -110,30 +121,120 @@ class HomePage(FluentPage):
         body_lay = QVBoxLayout(body)
         body_lay.setContentsMargins(36, 0, 36, 0)
         body_lay.setSpacing(8)
-        body_lay.addStretch(1)
+        body_lay.addStretch(2)
+        from PySide6.QtWidgets import QLabel
+
+        from app.ui.brand import app_pixmap
+
+        logo = QLabel(body)
+        logo.setPixmap(app_pixmap(64))
+        logo.setFixedSize(64, 64)
+        body_lay.addWidget(logo)
+        body_lay.addSpacing(6)
         self.hello_label = SubtitleLabel("欢迎，")
         self.title_label = TitleLabel("团委管理员")
-        body_lay.addWidget(self.hello_label)
-        body_lay.addWidget(self.title_label)
+        # 两行标题收在一个盒子里：默认布局会在它们之间留一整行空隙
+        greet = QWidget()
+        greet_lay = QVBoxLayout(greet)
+        greet_lay.setContentsMargins(0, 0, 0, 0)
+        greet_lay.setSpacing(0)
+        greet_lay.addWidget(self.hello_label)
+        greet_lay.addWidget(self.title_label)
+        body_lay.addWidget(greet)
+        body_lay.addSpacing(12)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
+        self.tiles: dict[str, StatTile] = {}
+        for index, (key, title, icon, tone) in enumerate(TILES):
+            tile = StatTile(title, "—", "", icon=icon, tone=tone)
+            tile.clicked.connect(lambda k=key: self._open_for(k))
+            self.tiles[key] = tile
+            grid.addWidget(tile, 0, index)
+
+        chart = CardWidget()
+        chart.setBorderRadius(8)
+        chart_lay = QHBoxLayout(chart)
+        chart_lay.setContentsMargins(18, 12, 18, 12)
+        chart_lay.setSpacing(24)
+        self.donut = ProgressDonut()
+        chart_lay.addWidget(self.donut, 0)
+        bars = QVBoxLayout()
+        bars.setSpacing(0)
+        self.bars: dict[str, BarRowWidget] = {}
+        for key, label, color in KIND_CHARTS:
+            bar = BarRowWidget(label, color)
+            self.bars[key] = bar
+            bars.addWidget(bar)
+        chart_lay.addLayout(bars, 1)
+        grid.addWidget(chart, 1, 0, 1, len(TILES))
+        body_lay.addLayout(grid)
+
+        self.summary = note_label("")
+        body_lay.addWidget(self.summary)
         body_lay.addStretch(1)
 
         row = QHBoxLayout()
-        row.setContentsMargins(36, 0, 36, 28)
-        upload_btn = PrimaryPushButton(FIF.CLOUD, "上传档案")
-        upload_btn.setFixedWidth(150)
-        upload_btn.clicked.connect(lambda: window.switchTo(window.upload_page))
-        org_btn = PushButton(FIF.PIE_SINGLE, "组织状况")
-        org_btn.setFixedWidth(150)
-        org_btn.clicked.connect(lambda: window.switchTo(window.org_page))
+        row.setContentsMargins(36, 0, 36, 24)
         row.addStretch(1)
-        row.addWidget(upload_btn)
-        row.addSpacing(16)
-        row.addWidget(org_btn)
         lay.addWidget(body, 1)
         lay.addLayout(row)
 
         self._apply_font()
         self._load_header()
+        self.refresh_stats(animate=False)
+
+    # ---------- 概览 ----------
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh_stats()
+
+    def refresh_stats(self, animate: bool = True):
+        """概览统计放到后台线程。
+
+        快照要读整份配置（memberCache 装着所有团员）并逐个跑检查，量大时在
+        界面线程里做会卡住切页。"""
+        from app.services import org_snapshot, store
+        from app.ui.page import CallbackWorker
+
+        self._stats_token = getattr(self, "_stats_token", 0) + 1
+        token = self._stats_token
+
+        def _snapshot():
+            return org_snapshot.snapshot(store.load())
+
+        worker = CallbackWorker(_snapshot, self)
+        worker.ok.connect(lambda data: token == self._stats_token
+                          and self._apply_stats(data, animate))
+        self._workers.append(worker)
+        worker.start()
+
+    def _apply_stats(self, data: dict, animate: bool = True):
+        total = data["total"]
+        self.tiles["upload"].set_value(
+            f"{data['uploaded']}/{total}" if total else "—",
+            f"已上传 / 在册 {total} 人", animate=False)
+        self.tiles["total"].set_value(total, f"覆盖 {data['branches']} 个支部", animate)
+        self.tiles["branches"].set_value(data["branches"], "已配置账号", animate)
+        self.tiles["unread"].set_value(data["unread"], "本地缓存未读", animate)
+        self.donut.set_value(data["uploaded"], total)
+        for key, bar in self.bars.items():
+            bar.set_value(data["by_kind"].get(key, 0), max(total, 1))
+        stamp = data["updated"].replace("T", " ")[5:16] if data["updated"] else ""
+        self.summary.setText(
+            f"转接申请 {data['applied']} 人"
+            + (f"，最近同步 {stamp}" if stamp else "，还没有同步过数据"))
+
+    def _open_for(self, key: str):
+        window = self.window_ref
+        if key == "unread":
+            window.switchTo(window.messages_page)
+        elif key == "upload":
+            window.switchTo(window.upload_page)
+        else:
+            window.switchTo(window.org_manage_page)
 
     # ---------- 头图持久化（设置入口在系统配置） ----------
 
@@ -147,8 +248,8 @@ class HomePage(FluentPage):
     def _apply_font(self):
         """保留原来的大字构图，只把字重收轻、字距放松，去掉 Black 的笨重感。"""
         vh = max(420, self.viewport().height())
-        title_px = max(40, int(vh * 0.14))
-        hello_px = max(32, int(vh * 0.105))
+        title_px = max(34, int(vh * 0.115))
+        hello_px = max(26, int(vh * 0.085))
 
         f = self.title_label.font()
         f.setPixelSize(title_px)

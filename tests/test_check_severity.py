@@ -21,7 +21,7 @@ def _member(**kw) -> MemberRecord:
 
 def test_empty_occupation_is_warning_not_error():
     """职业未填 → 警告级，不计入错误。"""
-    from app.ui.check_page import default_identity_template
+    from app.domain.check_templates import default_identity_template
     results = build_identity_results([_member(occupation="")], default_identity_template())
     assert results and not results[0].is_error
     assert results[0].diffs[0].severity == "warning"
@@ -31,7 +31,7 @@ def test_empty_occupation_is_warning_not_error():
 def test_default_template_not_flag_everyone_for_ecard():
     """全员团员证照片未上传不应被判为信息错误（站点语义：显示「无异常」）。"""
     members = [_member() for _ in range(3)]
-    from app.ui.check_page import default_identity_template
+    from app.domain.check_templates import default_identity_template
     results = build_identity_results(members, default_identity_template())
     assert not any(r.is_error for r in results)
 
@@ -39,7 +39,7 @@ def test_default_template_not_flag_everyone_for_ecard():
 def test_non_student_occupation_is_error():
     """刘雨嘉案例：职业=非公企业职工、单位=赫基集团 → 信息错误。"""
     m = _member(occupation="非公企业职工", work_unit="赫基集团")
-    from app.ui.check_page import default_identity_template
+    from app.domain.check_templates import default_identity_template
     results = build_identity_results([m], default_identity_template())
     assert results and results[0].is_error
     assert any(d.key == "occupation" and d.severity == "error" for d in results[0].diffs)
@@ -47,7 +47,7 @@ def test_non_student_occupation_is_error():
 
 def test_income_mismatch_is_error():
     """收入不是「学生无收入」→ 错误（含为空）。"""
-    from app.ui.check_page import default_identity_template
+    from app.domain.check_templates import default_identity_template
     for income in ("有固定工资收入", ""):
         m = _member(income=income)
         results = build_identity_results([m], default_identity_template())
@@ -58,13 +58,13 @@ def test_income_mismatch_is_error():
 def test_correct_member_not_flagged():
     """参考截图案例：学生 + 职业为学生无收入 → 无异常。"""
     m = _member(full_time_education="高中", work_unit="无")
-    from app.ui.check_page import default_identity_template
+    from app.domain.check_templates import default_identity_template
     assert not build_identity_results([m], default_identity_template())
 
 
 def test_real_name_failure_is_error():
     m = _member(real_name_status="校验失败")
-    from app.ui.check_page import default_identity_template
+    from app.domain.check_templates import default_identity_template
     results = build_identity_results([m], default_identity_template())
     assert results and results[0].is_error
 

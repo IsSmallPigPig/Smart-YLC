@@ -127,10 +127,11 @@ def check_on_startup(delay_ms: int = 2500, parent=None):
              f"{info.version} 已发布，打开「系统配置 - 关于」即可下载")
         if parent is not None:
             try:
-                from qfluentwidgets import InfoBar
+                from qfluentwidgets import InfoBar, InfoBarPosition
 
-                InfoBar.info("发现新版本", f"{info.version} 已发布，可在系统配置中下载更新",
-                             duration=8000, parent=parent)
+                InfoBar.info("检测到新版本", f"最新版本: {info.version}",
+                             duration=8000, position=InfoBarPosition.BOTTOM_RIGHT,
+                             parent=parent)
             except Exception:
                 pass
 

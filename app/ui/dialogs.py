@@ -53,3 +53,106 @@ def confirm(parent, title: str, text: str, yes: str = "确定", cancel: str = "�
     w.finished.connect(_finish)
     w.show()
     return w
+
+
+class ConfigDialog(FluentPanelDialog):
+    """配置弹窗：一列控件，只有「完成」一个按钮。
+
+    设置页把一行里放不下的次要项收进这里——行上留一个四字主按钮和一个齿轮图标，
+    齿轮打开这个弹窗。控件由调用方持有并塞进来，弹窗只负责摆。"""
+
+    def __init__(self, title: str, parent=None, note: str = "", width: int = 420,
+                 yes_text: str = "完成"):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QVBoxLayout
+
+        from qfluentwidgets import SubtitleLabel
+
+        from app.ui.page import note_label
+
+        self.widget.setMinimumWidth(width)
+        self.viewLayout.setSpacing(10)
+        self.viewLayout.addWidget(SubtitleLabel(title, self.widget))
+        if note:
+            self.viewLayout.addWidget(note_label(note))
+        self.body = QVBoxLayout()
+        self.body.setSpacing(8)
+        self.viewLayout.addLayout(self.body)
+        self.yesButton.setText(yes_text)
+        self.cancelButton.hide()
+        self._items: list = []
+        self.finished.connect(self._release)
+
+    def add(self, widget) -> None:
+        """塞一个控件进来。控件仍归调用方所有，关窗时还回去而不是跟着销毁。"""
+        self._items.append(widget)
+        widget.setParent(self.widget)
+        widget.show()
+        self.body.addWidget(widget)
+
+    def add_row(self, *widgets, spacing: int = 8):
+        """一排并排的控件；按钮横向填满弹窗宽度。"""
+        from PySide6.QtWidgets import QHBoxLayout, QWidget
+
+        box = QWidget(self.widget)
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(spacing)
+        for widget in widgets:
+            self._items.append(widget)
+            widget.setParent(box)
+            widget.show()
+            lay.addWidget(widget, 1)
+        self.body.addWidget(box)
+        return box
+
+    def add_field(self, label: str, widget):
+        """一个带说明的输入项：说明在上，控件在下。"""
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+        from app.ui.page import note_label
+
+        box = QWidget(self.widget)
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        hint = note_label(label)
+        lay.addWidget(hint)
+        self._items.append(widget)
+        widget.setParent(box)
+        widget.show()
+        lay.addWidget(widget)
+        self.body.addWidget(box)
+        return box
+
+    def _release(self, *_):
+        """弹窗关闭：把控件交还调用方并藏起来，再销毁弹窗本身。"""
+        for widget in self._items:
+            widget.setParent(None)
+            widget.hide()
+        self._items.clear()
+        self.deleteLater()
+
+
+class FormDialog(ConfigDialog):
+    """带「取消 / 确认」的表单弹窗。
+
+    确认按钮先跑调用方的校验，只有它返回 True 才关窗——校验不过就停在原地，
+    错误用 InfoBar 提示，不会把刚填的内容一起关掉。"""
+
+    def __init__(self, title: str, parent=None, note: str = "", width: int = 460,
+                 on_submit=None, yes_text: str = "确认"):
+        super().__init__(title, parent, note, width=width, yes_text=yes_text)
+        self._on_submit = on_submit
+        self.cancelButton.setText("取消")
+        self.cancelButton.show()
+        # MessageBoxBase 默认点确认就 accept，这里改成先校验
+        try:
+            self.yesButton.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self.yesButton.clicked.connect(self._submit)
+
+    def _submit(self):
+        if self._on_submit is None or self._on_submit():
+            self.accept()

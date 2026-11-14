@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from PySide6.QtCore import QObject, QTimer, QThread, Signal, Qt
 from PySide6.QtGui import QAction, QIcon, QPixmap
@@ -28,23 +28,10 @@ class DailyWorker(QThread):
 
 
 def _tray_icon() -> QIcon:
-    """生成一个简洁的托盘图标（深色圆底 + 白色 团 字）。"""
-    from PySide6.QtGui import QPainter, QColor, QFont
+    """托盘图标：与应用图标同一套品牌图，不再另画一个圆底团字。"""
+    from app.ui.brand import app_icon
 
-    pm = QPixmap(64, 64)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setBrush(QColor("#3b82f6"))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(4, 4, 56, 56)
-    p.setPen(QColor("white"))
-    f = QFont("PingFang SC", 28)
-    f.setBold(True)
-    p.setFont(f)
-    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, "团")
-    p.end()
-    return QIcon(pm)
+    return app_icon()
 
 
 class TrayDaemon(QObject):
@@ -55,7 +42,9 @@ class TrayDaemon(QObject):
         self.worker: DailyWorker | None = None
 
         self.tray = QSystemTrayIcon(_tray_icon())
-        self.tray.setToolTip(f"智慧团建管理员辅助 {__version__}（后台）")
+        from app.ui.page import set_tip
+
+        set_tip(self.tray, f"智慧团建管理员辅助 {__version__}（后台）")
         menu = QMenu()
         act_open = QAction("打开主界面")
         act_open.triggered.connect(self.open_window)
@@ -71,39 +60,21 @@ class TrayDaemon(QObject):
         self.tray.activated.connect(self._on_activated)
         self.tray.show()
 
-        # 每日定时：对准通知时刻（默认 08:00），触发后重新排下一个
+        # 通知节奏：每天固定时刻或按小时间隔，每分钟检查一次是否到点。
+        # 定时器只做轻量判断，真正取数与登录在 DailyWorker 里跑。
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.check_now)
-        self._schedule_next()
-        # 启动时若已过今日通知点且当天未检查过，先补一次
-        if self._missed_today():
-            QTimer.singleShot(3000, self.check_now)
+        self.timer.setInterval(60 * 1000)
+        self.timer.timeout.connect(self._tick)
+        self.timer.start()
+        QTimer.singleShot(3000, self._tick)
 
     # ---------- 调度 ----------
 
-    def _notify_target(self) -> tuple[int, int]:
-        hh, mm = store.notify_time(store.load()).split(":")
-        return int(hh), int(mm)
+    def _tick(self):
+        from app.services import notify_schedule
 
-    def _next_fire(self) -> datetime:
-        hh, mm = self._notify_target()
-        now = datetime.now()
-        target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        if target <= now:
-            target += timedelta(days=1)
-        return target
-
-    def _schedule_next(self):
-        target = self._next_fire()
-        ms = int((target - datetime.now()).total_seconds() * 1000) + 1000
-        self.timer.start(ms)
-
-    def _missed_today(self) -> bool:
-        """今天的通知时刻已过，且今天还没有成功检查过 → 补发。"""
-        last_file = store.load().get("lastDailyOkDate")
-        hh, mm = self._notify_target()
-        now = datetime.now()
-        return (now.hour, now.minute) >= (hh, mm) and last_file != now.strftime("%Y-%m-%d")
+        if notify_schedule.should_fire(datetime.now(), store.load()):
+            self.check_now()
 
     # ---------- 动作 ----------
 
@@ -115,13 +86,15 @@ class TrayDaemon(QObject):
         self.worker.start()
 
     def _on_done(self, ok: bool, message: str):
+        now = datetime.now()
+        store.update(lambda cfg: (
+            cfg.__setitem__("lastDailyAt", now.isoformat()),
+            cfg.__setitem__("lastDailyOkDate", now.strftime("%Y-%m-%d")),
+        ))
         if ok:
-            store.update(lambda cfg: cfg.__setitem__(
-                "lastDailyOkDate", datetime.now().strftime("%Y-%m-%d")))
             send("团员情况", message, self.tray)
         else:
             send("每日检查失败", message, self.tray)
-        self._schedule_next()
 
     def open_window(self):
         if self.window is None:
@@ -141,6 +114,10 @@ class TrayDaemon(QObject):
 
 
 def run_tray() -> int:
+    from PySide6.QtCore import Qt
+
+    # 托盘里也能打开主窗口，内嵌网页同样要求共享 OpenGL 上下文
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     from app.setup import setup_app

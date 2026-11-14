@@ -15,12 +15,19 @@ def run() -> int:
 
         return run_tray()
 
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
+    # 内嵌网页（账号网页标签页）要求共享 OpenGL 上下文，必须在 QApplication 之前设置
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication(sys.argv)
     from app.setup import setup_app
 
     setup_app()
+
+    from app.ui.brand import app_icon
+
+    app.setWindowIcon(app_icon())  # 窗口与任务栏图标（Windows 尤其需要）
 
     from app.ui.main_window import MainWindow
 

@@ -86,8 +86,8 @@ def branch_payload(version: str) -> bytes:
     return f'__version__ = "{version}"\n'.encode("utf-8")
 
 
-def info(version="9.9.9", url="https://github.com/IsSmallPigPig/Smart-Youth/archive/refs/heads/main.zip"):
-    return updater.UpdateInfo(version, "notes", url, f"Smart-Youth-{version}.zip", "branch")
+def info(version="9.9.9", url="https://github.com/IsSmallPigPig/Smart-YLC/archive/refs/heads/main.zip"):
+    return updater.UpdateInfo(version, "notes", url, f"Smart-YLC-{version}.zip", "branch")
 
 
 # ---------------------------------------------------------------- macOS 根证书
@@ -179,22 +179,22 @@ def test_is_newer_only_when_remote_version_is_higher():
 def test_proxy_url_prefixes_full_github_link():
     assert updater.proxy_url(updater.SOURCE_ZIP) == updater.GH_PROXY + updater.SOURCE_ZIP
     assert updater.proxy_url(updater.SOURCE_ZIP, False) == updater.SOURCE_ZIP
-    assert updater.REPO == "IsSmallPigPig/Smart-Youth"
-    assert updater.REPO_URL.endswith("IsSmallPigPig/Smart-Youth.git")
+    assert updater.REPO == "IsSmallPigPig/Smart-YLC"
+    assert updater.REPO_URL.endswith("IsSmallPigPig/Smart-YLC.git")
 
 
 # ---------------------------------------------------------------- 检查更新
 
 def test_release_is_preferred_and_uses_asset(monkeypatch):
     seen = fake_urlopen(monkeypatch, {
-        updater.RELEASES_API: release_payload("v9.1.0", "Smart-Youth.dmg"),
+        updater.RELEASES_API: release_payload("v9.1.0", "Smart-YLC.dmg"),
     })
     result = updater.check_update()
     assert seen == [updater.RELEASES_API]
     assert result.source == "release"
     assert result.version == "v9.1.0"
-    assert result.filename == "Smart-Youth.dmg"
-    assert result.download_url.endswith("/Smart-Youth.dmg")
+    assert result.filename == "Smart-YLC.dmg"
+    assert result.download_url.endswith("/Smart-YLC.dmg")
 
 
 def test_release_without_asset_falls_back_to_zipball(monkeypatch):
@@ -202,7 +202,7 @@ def test_release_without_asset_falls_back_to_zipball(monkeypatch):
         updater.RELEASES_API: release_payload("v3.0.0"),
     })
     result = updater.check_update()
-    assert result.filename == "Smart-Youth-v3.0.0.zip"
+    assert result.filename == "Smart-YLC-v3.0.0.zip"
     assert result.download_url.endswith("v3.0.0.zip")
 
 
@@ -241,14 +241,15 @@ def test_release_with_only_non_installable_assets_uses_zipball(monkeypatch):
         updater.RELEASES_API: release_with_assets("v9.9.9", ["checksums.txt"]),
     })
     result = updater.check_update()
-    assert result.filename == "Smart-Youth-v9.9.9.zip"
+    assert result.filename == "Smart-YLC-v9.9.9.zip"
 
 
 def test_release_tag_matches_local_version_without_self_update():
-    """发布的 tag 与本地版本一致时，不能一直提示发现新版本。"""
-    assert __version__ == "1.0.1"
-    assert not updater.is_newer("v1.0.1")
-    assert not updater.is_newer("v1.0.0")
+    """发布的 tag 与本地版本一致时，不能一直提示发现新版本。
+
+    断言跟着当前版本走，不要写死版本号，否则每次发版都要改测试。"""
+    assert not updater.is_newer(f"v{__version__}")
+    assert not updater.is_newer("v0.0.1")
 
 
 def test_no_release_falls_back_to_main_branch(monkeypatch):
@@ -359,7 +360,7 @@ def test_download_worker_falls_back_to_direct(monkeypatch):
         calls.append(use_proxy)
         if use_proxy:
             raise updater.UpdateError("加速下载失败：代理不可用")
-        return "/tmp/Smart-Youth.zip"
+        return "/tmp/Smart-YLC.zip"
 
     monkeypatch.setattr(updater, "download", _download)
     worker = update_check.DownloadWorker(info(), True)
@@ -371,7 +372,7 @@ def test_download_worker_falls_back_to_direct(monkeypatch):
 
     assert calls == [True, False]
     assert len(fallbacks) == 1 and "代理不可用" in fallbacks[0]
-    assert done == ["/tmp/Smart-Youth.zip"] and failed == []
+    assert done == ["/tmp/Smart-YLC.zip"] and failed == []
 
 
 def test_download_worker_direct_failure_reports_error(monkeypatch):

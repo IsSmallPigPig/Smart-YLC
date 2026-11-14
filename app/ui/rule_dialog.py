@@ -211,8 +211,11 @@ class RuleDialog(FluentPanelDialog):
             self._error_override = "规则有误，修正后再导出：" + "；".join(errors)
             self._refresh()
             return
+        from app.services.export_data import default_name
+
         path, _ = QFileDialog.getSaveFileName(
-            self.window(), "导出编号规则", "编号规则.json", "JSON 文件 (*.json)")
+            self.window(), "导出编号规则",
+            default_name("编号规则", ".json"), "JSON 文件 (*.json)")
         if not path:
             return
         try:

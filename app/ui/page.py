@@ -23,6 +23,34 @@ def note_label(text: str) -> CaptionLabel:
     return lbl
 
 
+def chevron_icon(expanded: bool) -> QIcon:
+    """折叠箭头：统一用 fluent 的细 chevron，展开时朝上。
+
+    fluent 没有 chevron-up 图标，朝上就是把向下 chevron 旋转 180°。
+    """
+    icon = FIF.CHEVRON_DOWN_MED.icon()
+    if expanded:
+        img = icon.pixmap(16, 16).toImage().transformed(QTransform().rotate(180))
+        return QIcon(QPixmap.fromImage(img))
+    return icon
+
+
+def set_tip(widget, text: str, delay: int = 300):
+    """设置悬浮提示，并套上 fluent 的提示样式。
+
+    默认的 QToolTip 是系统原生气泡，样式和界面不搭；fluent 的 ToolTipFilter
+    会画成跟卡片一致的浮层。
+    """
+    from qfluentwidgets import ToolTipFilter
+
+    widget.setToolTip(text)
+    # 表格条目之类不是控件，没有事件过滤器，只能用原生提示
+    if hasattr(widget, "installEventFilter") and not getattr(widget, "_fluent_tip_installed", False):
+        widget.installEventFilter(ToolTipFilter(widget, delay))
+        widget._fluent_tip_installed = True
+    return widget
+
+
 def theme_font(lbl, pixel_size: int, weight: int = 0):
     """按像素设置字号/字重，不覆盖 fluent 的主题样式表。
 
@@ -40,6 +68,49 @@ def theme_font(lbl, pixel_size: int, weight: int = 0):
 def section_title(text: str) -> StrongBodyLabel:
     """卡片区块标题：16px 加粗，比正文略大，与灰色说明文字拉开层级。"""
     return theme_font(StrongBodyLabel(text), 16, int(QFont.Weight.DemiBold))
+
+
+def page_title(text: str) -> StrongBodyLabel:
+    """页面主标题：整页最大最重的一行，卡片标题与正文都要明显弱于它。"""
+    return theme_font(StrongBodyLabel(text), 26, int(QFont.Weight.Bold))
+
+
+class PageHeader(QWidget):
+    """页面标题区：标题与说明直接写在背景上，右侧放这一页的操作控件。
+
+    页面不再用卡片装标题——卡片留给真正成组的内容，标题和工具条自己站在背景上，
+    与列表卡片形成两层，控件一律挤在一行。"""
+
+    def __init__(self, title: str, desc: str = "", parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(2, 6, 2, 8)
+        lay.setSpacing(4)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.title_label = page_title(title)
+        row.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.slot = QHBoxLayout()  # 详情态的面包屑之类插这里，紧跟标题
+        self.slot.setSpacing(8)
+        row.addLayout(self.slot)
+        row.addStretch(1)
+        self.controls = QHBoxLayout()
+        self.controls.setSpacing(8)
+        row.addLayout(self.controls)
+        lay.addLayout(row)
+        self.desc_label = note_label(desc)
+        lay.addWidget(self.desc_label)
+
+    def add_control(self, widget: QWidget):
+        self.controls.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        return widget
+
+    def set_desc(self, text: str):
+        self.desc_label.setText(text)
+        self.desc_label.setVisible(bool(text))
+
+    def set_title(self, text: str):
+        self.title_label.setText(text)
 
 
 def sub_title(text: str) -> StrongBodyLabel:
@@ -74,18 +145,24 @@ class CardRow(QWidget):
         painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
 
 
-class SettingRow(CardRow):
-    """左图标 + 标题（可带一行说明），右侧控件贴卡片右缘对齐。
+# 右侧控件列的上限宽度：约等于一个六字按钮。控件按内容取宽、右边缘对齐，
+# 放不下的次要项收进「设置」图标弹窗，而不是把这一列撑成一条宽跑道。
+CONTROL_MAX_WIDTH = 190
+CONTROL_WIDTH = CONTROL_MAX_WIDTH  # 兼容旧调用点
 
-    控件区有最小宽度，不同行的控件右边缘因此排成一条线；control 可以是
-    单个控件，也可以是先包好的 QWidget（多个控件时）。"""
+
+class SettingRow(CardRow):
+    """左图标 + 标题（可带一行说明），右侧控件列固定同一宽度。
+
+    控件列用固定宽度而不是最小宽度，各行的控件才会左右两边都对成一条线；
+    control 可以是单个控件，也可以是先包好的 QWidget（多个控件时）。"""
 
     def __init__(self, title: str, desc: str = "", control: QWidget | None = None,
-                 icon: FIF | None = None, control_width: int = 300,
+                 icon: FIF | None = None, control_width: int | None = None,
                  separator: bool = True, parent=None):
         super().__init__(separator, parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 12, 0, 12)
+        lay.setContentsMargins(0, 5, 0, 5)
         lay.setSpacing(14)
         if icon is not None:
             ic = IconWidget(icon)
@@ -93,10 +170,13 @@ class SettingRow(CardRow):
             lay.addWidget(ic, 0, Qt.AlignmentFlag.AlignVCenter)
         text_lay = QVBoxLayout()
         text_lay.setContentsMargins(0, 0, 0, 0)
-        text_lay.setSpacing(3)
+        text_lay.setSpacing(2)
         text_lay.addWidget(theme_font(StrongBodyLabel(title), 14, int(QFont.Weight.DemiBold)))
+        self._text_lay = text_lay
+        self.desc_label = None
         if desc:
-            text_lay.addWidget(note_label(desc))
+            self.desc_label = note_label(desc)
+            text_lay.addWidget(self.desc_label)
         lay.addLayout(text_lay, 1)
         if control is not None:
             holder = QWidget(self)
@@ -105,8 +185,23 @@ class SettingRow(CardRow):
             hl.setSpacing(8)
             hl.addStretch(1)
             hl.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
-            holder.setMinimumWidth(control_width)
+            if control_width:
+                holder.setFixedWidth(control_width)
+            else:
+                holder.setMaximumWidth(CONTROL_MAX_WIDTH)
+            self.control_holder = holder  # 供测试核对「所有行同一列宽」
             lay.addWidget(holder, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def set_desc(self, text: str):
+        """更新说明小字；动态状态直接接在标题下面，不用再单独占一行。"""
+        if self.desc_label is None:
+            if not text:
+                return
+            self.desc_label = note_label(text)
+            self._text_lay.addWidget(self.desc_label)
+        else:
+            self.desc_label.setText(text)
+            self.desc_label.setVisible(bool(text))
 
 
 class FullRow(CardRow):
@@ -123,22 +218,30 @@ class CollapsibleCard(CardWidget):
     """折叠卡片：标题行 + 细线条 chevron 箭头（展开朝上 / 收起朝下，无按钮底色）。
 
     用法：content = CollapsibleCard("标题", expanded=True)；往
-    content.body_lay 里加 SettingRow / FullRow 即可，行间分割线由行自己画。"""
+    content.body_lay 里加 SettingRow / FullRow 即可，行间分割线由行自己画。
+    tags 是标题右侧的胶囊标签 [(文字, 色调)]，份数、学段这类属性放这里，
+    不再用「·」拼进标题。"""
 
-    def __init__(self, title: str, expanded: bool = True, parent=None):
+    def __init__(self, title: str, expanded: bool = True,
+                 tags: list[tuple[str, str]] | None = None, parent=None):
         super().__init__(parent)
         self._expanded = bool(expanded)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 16, 20, 16)
-        outer.setSpacing(10)
+        outer.setContentsMargins(20, 12, 20, 12)
+        outer.setSpacing(8)
         header = QHBoxLayout()
-        header.addWidget(section_title(title))
+        header.setSpacing(8)
+        self.title_label = section_title(title)
+        header.addWidget(self.title_label)
+        self._tag_lay = header
+        self._tags: list = []
         header.addStretch(1)
         self.toggle_btn = TransparentToolButton()
-        self.toggle_btn.setToolTip("展开或收起")
+        set_tip(self.toggle_btn, "展开或收起")
         self.toggle_btn.clicked.connect(self.toggle)
         header.addWidget(self.toggle_btn)
         outer.addLayout(header)
+        self.set_tags(tags or [])
         self.body = QWidget(self)
         self.body_lay = QVBoxLayout(self.body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
@@ -147,6 +250,21 @@ class CollapsibleCard(CardWidget):
         self._sync()
         # 主题切换时箭头颜色要按新主题重烘焙（旋转图标是像素级副本）
         qconfig.themeChanged.connect(self._sync)
+
+    def set_tags(self, tags: list[tuple[str, str]]):
+        """替换标题右侧的标签；插在标题与弹簧之间，靠左紧贴标题。"""
+        from app.ui.widgets import PillLabel
+
+        for pill in self._tags:
+            self._tag_lay.removeWidget(pill)
+            pill.deleteLater()
+        self._tags = []
+        stretch_index = self._tag_lay.count() - 2  # 弹簧与箭头之间
+        for text, tone in tags:
+            pill = PillLabel(str(text), tone)
+            self._tag_lay.insertWidget(stretch_index, pill, 0, Qt.AlignmentFlag.AlignVCenter)
+            stretch_index += 1
+            self._tags.append(pill)
 
     def toggle(self):
         self.set_expanded(not self._expanded)
@@ -180,12 +298,7 @@ class CollapsibleCard(CardWidget):
         self._sync_chevron()
 
     def _sync_chevron(self, *_):
-        icon = FIF.CHEVRON_DOWN_MED.icon()
-        if self._expanded:
-            # fluent 没有 chevron-up 图标：向下 chevron 旋转 180°
-            img = icon.pixmap(16, 16).toImage().transformed(QTransform().rotate(180))
-            icon = QIcon(QPixmap.fromImage(img))
-        self.toggle_btn.setIcon(icon)
+        self.toggle_btn.setIcon(chevron_icon(self._expanded))
 
 
 def fit_table_columns(table: QTableView, stretch_last: bool = False,
@@ -208,12 +321,14 @@ def fit_table_columns(table: QTableView, stretch_last: bool = False,
         if mode in (QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch):
             continue
         item = table.horizontalHeaderItem(col)
-        w = fm.horizontalAdvance(item.text()) + 28 if item else 70
+        # fluent 的单元格委托左右各留约 24px 内边距（实测：55px 字形 hint 94px，
+        # 91px 字形 hint 137px），这里按同样的留白再加 48px，长账号和备注才不会被省略
+        w = fm.horizontalAdvance(item.text()) + 52 if item else 88
         for row in range(table.rowCount()):
             it = table.item(row, col)
             if it is not None:
-                w = max(w, fm.horizontalAdvance(it.text()) + 22)
-        table.setColumnWidth(col, max(min(w, max_col_width), 70))
+                w = max(w, fm.horizontalAdvance(it.text()) + 48)
+        table.setColumnWidth(col, max(min(w, max_col_width), 88))
     if stretch_last and cols:
         header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.Stretch)
     elif cols:
