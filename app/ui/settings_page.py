@@ -217,11 +217,15 @@ class SettingsPage(FluentPage):
         self.web_btn = ToolButton(FIF.GLOBE)
         self.web_btn.setToolTip("在浏览器打开当前账号的网页端（携带登录态）")
         self.web_btn.clicked.connect(self._open_web)
+        self.tpl_btn = ToolButton(FIF.DOWNLOAD)
+        self.tpl_btn.setToolTip("下载账号导入模板（备注 / 账号 / 密码）")
+        self.tpl_btn.clicked.connect(self._download_account_template)
         tools.addWidget(self.sel_all_btn)
         tools.addWidget(self.del_checked_btn)
         tools.addWidget(self.filter_btn)
         tools.addWidget(self.recheck_btn)
         tools.addWidget(self.web_btn)
+        tools.addWidget(self.tpl_btn)
         self.filter_note = note_label("")
         tools.addSpacing(8)
         tools.addWidget(self.filter_note)
@@ -768,6 +772,18 @@ class SettingsPage(FluentPage):
         return rows
 
     # ---------- 账号删除（行内按钮 + 勾选批量） ----------
+
+    def _download_account_template(self):
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存账号模板", "团支部账号模板.xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        from app.services.excel import save_account_template
+
+        n = save_account_template(path)
+        InfoBar.success("模板已保存", f"{path}（{n} 行示例，可直接改后批量导入）", duration=5000, parent=self)
 
     def _remove_accounts(self, rows: list[int]):
         users = [self.accounts[r]["userName"] for r in rows if 0 <= r < len(self.accounts)]
