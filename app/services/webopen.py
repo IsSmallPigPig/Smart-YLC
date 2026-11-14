@@ -6,11 +6,20 @@ tuanapi 主机级旧 SESSION 遮蔽（同名主机 cookie 在请求中排在前�
 先读到旧会话 →「登录已超4小时/已在其他设备登录」）。HttpOnly 主机 cookie
 无法用 JS 覆盖，伪造方案天然失效。
 
-改用浏览器原生登录：直接用 AppleScript 让浏览器访问登录 GET 接口
+改用浏览器原生登录：让真实浏览器访问登录 GET 接口
 tuanapi.12355.net/login/adminLogin?userName=&password=md5(md5(明文))&…
 （与网页端登录是同一个请求，密码只出现双重 md5，不泄露明文）。服务器对
-这个真实浏览器请求 Set-Cookie，覆盖旧的主机级 SESSION；随后把标签页
-导航回 tuan.12355.net/bg/index_main.html，即为完整登录态。
+这个真实浏览器请求 Set-Cookie，覆盖旧的主机级 SESSION；随后打开
+tuan.12355.net/bg/index_main.html，即为完整登录态。
+
+平台差异：
+- macOS：AppleScript 控制 Arc/Safari，打开登录 URL → 等响应 → 导航回
+  首页并校验（最终停在 index_main 才算成功）。Arc 与 Safari 的 Cookie
+  互相独立，各保持一个账号登录，多账号按浏览器轮流分配。
+- Windows/Linux：系统默认浏览器（webbrowser.open）。先开登录 URL，
+  等 3 秒再开首页标签——同一浏览器共享 Cookie，第二个标签即是登录态；
+  登录接口的 JSON 响应页（status:ok）会留在浏览器里，需手动关闭。
+  浏览器只有一个 Cookie 空间，同时只能保持一个账号登录。
 
 导航带回首页采用「设置 URL → 校验 → 未到位再设」的循环：登录接口的响应
 是 JSON 正文（status:ok），先跳走过早会取消登录请求、卡在响应页则说明
@@ -26,8 +35,10 @@ tuanapi.12355.net/login/adminLogin?userName=&password=md5(md5(明文))&…
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 import os
+import webbrowser
 from urllib.parse import urlencode
 
 from app.constants import API_BASE_URL, SITE_BASE_URL
@@ -45,8 +56,24 @@ def build_login_url(user_name: str, plain_password: str, login_valid_code: str =
 
 
 def available_browsers() -> list[str]:
-    """本机可用于携带登录态打开的浏览器（按优先级）。"""
+    """本机可用于携带登录态打开的浏览器（按优先级）。
+
+    macOS 的 Arc/Safari Cookie 空间互相独立（多账号轮流分配）；
+    Windows/Linux 只有一个系统默认浏览器，即一个登录位。"""
+    if sys.platform != "darwin":
+        return ["默认浏览器"]
     return (["Arc"] if os.path.exists(ARC_APP) else []) + ["Safari"]
+
+
+def _open_default_browser(login_url: str) -> tuple[bool, str]:
+    """Windows/Linux：默认浏览器两步打开。"""
+    if not webbrowser.open(login_url):
+        return False, "系统默认浏览器打开失败"
+    import time
+
+    time.sleep(3)  # 等登录接口响应完成 Set-Cookie
+    webbrowser.open(SITE_HOME)
+    return True, "已在默认浏览器打开（浏览器原生登录）；登录接口的 JSON 响应页可手动关闭"
 
 
 def _run_applescript(script: str, timeout: int = 30) -> tuple[bool, str]:
@@ -107,7 +134,8 @@ def open_logged_in(client, browser: str = "Arc") -> tuple[bool, str]:
     """确保会话有效后，用指定浏览器原生登录并打开站点。返回 (成功, 说明)。
 
     先恢复上次保存的会话探测，有效就不登录；失效才走程序化登录
-    （浏览器侧始终走原生登录，保证浏览器里的 SESSION 是本账号的）。"""
+    （浏览器侧始终走原生登录，保证浏览器里的 SESSION 是本账号的）。
+    browser 参数仅在 macOS 上生效；其他平台一律用系统默认浏览器。"""
     from app.services import login_gate
 
     login_gate.restore_session(client)
@@ -117,6 +145,8 @@ def open_logged_in(client, browser: str = "Arc") -> tuple[bool, str]:
         if not verdict.ok:
             return False, f"登录失败：{verdict.message}"
     login_url = build_login_url(client.user_name, client.password)
+    if sys.platform != "darwin":
+        return _open_default_browser(login_url)
     script = _arc_script(login_url) if browser == "Arc" else _safari_script(login_url)
     ok, final_url = _run_applescript(script)
     if ok and "index_main" in final_url:

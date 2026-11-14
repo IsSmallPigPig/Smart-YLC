@@ -7,10 +7,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap, QTransform
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QTransform
 from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
-from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, ScrollArea, StrongBodyLabel, TransparentToolButton, qconfig
+from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, ScrollArea, StrongBodyLabel, TransparentToolButton, isDarkTheme, qconfig
 
 PAGE_MARGINS = (36, 28, 36, 28)
 
@@ -47,17 +47,45 @@ def sub_title(text: str) -> StrongBodyLabel:
     return theme_font(StrongBodyLabel(text), 15, int(QFont.Weight.DemiBold))
 
 
-class SettingRow(QWidget):
-    """仿 Ghost Downloader 设置行：左图标 + 标题/说明两行文字，右侧控件右对齐。
+def _row_line_color() -> QColor:
+    """卡片内分割线：明暗模式各取一档极淡的对比色。"""
+    return QColor(255, 255, 255, 20) if isDarkTheme() else QColor(0, 0, 0, 22)
 
-    用法：row = SettingRow("明暗模式", "更改应用的外观", combo, icon=FIF.BRIGHTNESS)；
-    control 也可以是先包好的 QWidget（多个控件时）。"""
+
+class CardRow(QWidget):
+    """卡片内一块内容的基类，自己画底部分割线。
+
+    separator=False 用在卡片最后一块，避免结尾多一条线；主题切换时重绘。"""
+
+    def __init__(self, separator: bool = True, parent=None):
+        super().__init__(parent)
+        self._separator = separator
+
+    def set_separator(self, value: bool):
+        self._separator = value
+        self.update()
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if not self._separator:
+            return
+        painter = QPainter(self)
+        painter.setPen(_row_line_color())
+        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+
+
+class SettingRow(CardRow):
+    """左图标 + 标题（可带一行说明），右侧控件贴卡片右缘对齐。
+
+    控件区有最小宽度，不同行的控件右边缘因此排成一条线；control 可以是
+    单个控件，也可以是先包好的 QWidget（多个控件时）。"""
 
     def __init__(self, title: str, desc: str = "", control: QWidget | None = None,
-                 icon: FIF | None = None, parent=None):
-        super().__init__(parent)
+                 icon: FIF | None = None, control_width: int = 300,
+                 separator: bool = True, parent=None):
+        super().__init__(separator, parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 6, 0, 6)
+        lay.setContentsMargins(0, 12, 0, 12)
         lay.setSpacing(14)
         if icon is not None:
             ic = IconWidget(icon)
@@ -71,21 +99,38 @@ class SettingRow(QWidget):
             text_lay.addWidget(note_label(desc))
         lay.addLayout(text_lay, 1)
         if control is not None:
-            lay.addWidget(control, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            holder = QWidget(self)
+            hl = QHBoxLayout(holder)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(8)
+            hl.addStretch(1)
+            hl.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+            holder.setMinimumWidth(control_width)
+            lay.addWidget(holder, 0, Qt.AlignmentFlag.AlignVCenter)
+
+
+class FullRow(CardRow):
+    """占满卡片宽度的整块内容（表格、工具条）。用 row.lay 往里加控件。"""
+
+    def __init__(self, separator: bool = True, parent=None):
+        super().__init__(separator, parent)
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(0, 8, 0, 14)
+        self.lay.setSpacing(10)
 
 
 class CollapsibleCard(CardWidget):
     """折叠卡片：标题行 + 细线条 chevron 箭头（展开朝上 / 收起朝下，无按钮底色）。
 
     用法：content = CollapsibleCard("标题", expanded=True)；往
-    content.body_lay 里加内容即可。"""
+    content.body_lay 里加 SettingRow / FullRow 即可，行间分割线由行自己画。"""
 
     def __init__(self, title: str, expanded: bool = True, parent=None):
         super().__init__(parent)
         self._expanded = bool(expanded)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 14, 20, 14)
-        outer.setSpacing(10)
+        outer.setSpacing(12)
         header = QHBoxLayout()
         header.addWidget(section_title(title))
         header.addStretch(1)
@@ -97,18 +142,26 @@ class CollapsibleCard(CardWidget):
         self.body = QWidget(self)
         self.body_lay = QVBoxLayout(self.body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
-        self.body_lay.setSpacing(12)
+        self.body_lay.setSpacing(0)
         outer.addWidget(self.body)
         self._sync()
         # 主题切换时箭头颜色要按新主题重烘焙（旋转图标是像素级副本）
         qconfig.themeChanged.connect(self._sync)
 
     def toggle(self):
-        self._expanded = not self._expanded
+        self.set_expanded(not self._expanded)
+
+    def set_expanded(self, value: bool):
+        self._expanded = bool(value)
         self._sync()
 
     def _sync(self, *_):
         self.body.setVisible(self._expanded)
+        # 分割线颜色按主题取，主题切换时由卡片统一重绘各行（避免每行都挂全局信号）
+        for i in range(self.body_lay.count()):
+            w = self.body_lay.itemAt(i).widget()
+            if w is not None:
+                w.update()
         icon = FIF.CHEVRON_DOWN_MED.icon()
         if self._expanded:
             # fluent 没有 chevron-up 图标：向下 chevron 旋转 180°

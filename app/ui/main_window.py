@@ -6,7 +6,7 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPainter
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import (
@@ -48,8 +48,27 @@ if sys.platform == "darwin":
 
     StandardTitleBar.__init__ = _local_titlebar_font
 
+    # Qt 必须在原生 NSWindow 创建之前知道窗口要透明：qframelesswindow 的
+    # _initFrameless() 里会调 winId() 创建 NSWindow，之后再设
+    # WA_TranslucentBackground 只改 Qt 属性，backing store 仍没有 alpha
+    # （alphaBufferSize=-1）、NSWindow 仍是 opaque，behind-window 混合层
+    # 不会采样窗口背后的桌面内容。运行期再调 setOpaque_(False) 会被
+    # QNSWindow 立刻覆盖回来，只能在这里提前声明。
+    from qframelesswindow.mac import MacFramelessWindowBase
+
+    _orig_init_frameless = MacFramelessWindowBase._initFrameless
+
+    def _init_frameless_translucent(self):
+        if getattr(type(self), "_translucent_window", False):
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        _orig_init_frameless(self)
+
+    MacFramelessWindowBase._initFrameless = _init_frameless_translucent
+
 
 class MainWindow(MSFluentWindow):
+    _translucent_window = True
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("智慧团委")
@@ -63,9 +82,11 @@ class MainWindow(MSFluentWindow):
         geo.moveCenter(screen.center())
         self.move(geo.topLeft())
 
-        # 毛玻璃：窗口底色改为自己绘制（关闭时纯色、开启时露出混合层）
+        # 毛玻璃：窗口底色由 paintEvent 与 FluentWidget.backgroundColor 共同控制。
+        # 透明属性已在原生窗口创建前设置（见模块顶部钩子）。
         self._translucent = False
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._material = "none"
+        self._material_applied = False
         self.setStyleSheet("MainWindow{background: transparent}")
 
         self.settings_page = SettingsPage()
@@ -98,11 +119,12 @@ class MainWindow(MSFluentWindow):
         self._setup_back_button()
 
         QTimer.singleShot(0, lambda: self.switchTo(self.home_page))
-        # 启动恢复窗口背景透明材质（兼容旧 translucent 布尔配置）
+        # 启动恢复窗口背景透明材质（兼容旧 translucent 布尔配置）。混合层要等
+        # 窗口 show 之后 contentView 尺寸稳定才挂，实际动作在 showEvent 里。
         cfg = store.load()
-        material = cfg.get("translucentMaterial") or ("acrylic" if cfg.get("translucent") else "none")
-        if material != "none":
-            self.set_material(material)
+        self._material = cfg.get("translucentMaterial") or ("acrylic" if cfg.get("translucent") else "none")
+        self._translucent = self._material != "none"
+        self._apply_window_background()
 
         # 明暗模式切换（手动或跟随系统变化）：重绘窗口底色 + 重建带烘焙颜色的页面
         from qfluentwidgets import qconfig
@@ -261,24 +283,49 @@ class MainWindow(MSFluentWindow):
         self.titleBar.titleLabel.setText(self.windowTitle())
         self.titleBar.titleLabel.adjustSize()
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        if not self._material_applied:
+            self.set_material(self._material)
+            if not self._material_applied:
+                QTimer.singleShot(0, lambda: self.set_material(self._material))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if sys.platform == "darwin" and self._translucent:
+            from app.services.mac_effect import sync_frame
+
+            sync_frame(self)
+
     def paintEvent(self, e):
+        # FluentWidget.paintEvent 会画一层 backgroundColor；开启材质时它由
+        # _apply_window_background 设为全透明，混合层才不会被盖住。
+        super().paintEvent(e)
         if not self._translucent:
             painter = QPainter(self)
             painter.fillRect(self.rect(), page_bg_color())
-        super().paintEvent(e)
+
+    def _apply_window_background(self):
+        if self._translucent:
+            self.setCustomBackgroundColor(QColor(0, 0, 0, 0), QColor(0, 0, 0, 0))
+        else:
+            self.setCustomBackgroundColor(QColor(240, 244, 249), QColor(32, 32, 32))
 
     def set_material(self, material: str):
         """窗口背景透明材质：none 关闭（纯色底），acrylic/sidebar/hud 为混合层。
 
         配置持久化 translucentMaterial，系统配置里可切；兼容旧 translucent 布尔。"""
         material = material if material in ("none", "acrylic", "sidebar", "hud") else "none"
-        self._translucent = material != "none"
-        if sys.platform != "darwin":
-            return
-        from app.services.mac_effect import disable_acrylic, enable_acrylic
+        self._material = material
+        # 混合层只在 macOS 实现；其他平台保持纯色底（否则背景没人画，窗口发黑）
+        self._translucent = material != "none" and sys.platform == "darwin"
+        self._apply_window_background()
+        if sys.platform == "darwin":
+            from app.services.mac_effect import disable_acrylic, enable_acrylic
 
-        if self._translucent:
-            enable_acrylic(self, material)
-        else:
-            disable_acrylic(self)
+            if self._translucent:
+                self._material_applied = enable_acrylic(self, material)
+            else:
+                disable_acrylic(self)
+                self._material_applied = True
         self.update()
