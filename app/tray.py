@@ -14,7 +14,6 @@ from qfluentwidgets import setTheme, Theme
 from app import __version__
 from app.services import store
 from app.services.daily import run_daily_check
-from app.services.notify import send
 
 
 class DailyWorker(QThread):
@@ -60,6 +59,11 @@ class TrayDaemon(QObject):
         self.tray.activated.connect(self._on_activated)
         self.tray.show()
 
+        # 后台模式没有主窗口：点提醒就去建/叫出主界面
+        from app.ui import bg_toast
+
+        bg_toast.set_default_action(self.open_window)
+
         # 通知节奏：每天固定时刻或按小时间隔，每分钟检查一次是否到点。
         # 定时器只做轻量判断，真正取数与登录在 DailyWorker 里跑。
         self.timer = QTimer(self)
@@ -91,10 +95,11 @@ class TrayDaemon(QObject):
             cfg.__setitem__("lastDailyAt", now.isoformat()),
             cfg.__setitem__("lastDailyOkDate", now.strftime("%Y-%m-%d")),
         ))
-        if ok:
-            send("团员情况", message, self.tray)
-        else:
-            send("每日检查失败", message, self.tray)
+        from app.ui import bg_toast
+
+        bg_toast.alert("团员情况" if ok else "每日检查失败", message,
+                       tone="info" if ok else "error", tray=self.tray,
+                       on_click=self.open_window)
 
     def open_window(self):
         if self.window is None:
