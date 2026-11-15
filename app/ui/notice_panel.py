@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
@@ -45,6 +45,7 @@ class _NoticeRow(QWidget):
         self._notice = notice
         self._on_action = on_action
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 10, 10, 10)
@@ -123,6 +124,7 @@ class NoticePanel(QWidget):
         self._header.mouseReleaseEvent = lambda _e: self._toggle()  # type: ignore[assignment]
 
         self._body = QWidget(self)
+        self._body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._list = QVBoxLayout(self._body)
         self._list.setContentsMargins(0, 0, 0, 8)
         self._list.setSpacing(6)
@@ -167,12 +169,11 @@ class NoticePanel(QWidget):
         self._sync_height()
 
     def _sync_height(self):
+        # 只定面板高度；不要 adjustSize()，那会把 _body 强制缩成 sizeHint 的窄宽度
         if not self._expanded:
             self.setFixedHeight(HEADER_H)
             return
-        self._body.adjustSize()
-        h = HEADER_H + max(0, self._body.sizeHint().height())
-        self.setFixedHeight(h)
+        self.setFixedHeight(HEADER_H + max(0, self._body.sizeHint().height()))
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

@@ -14,12 +14,14 @@ import os
 import shutil
 import tempfile
 
-from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QFileDialog, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     ComboBox,
     FluentIcon as FIF,
+    IndeterminateProgressRing,
     InfoBar,
     PrimaryPushButton,
     PushButton,
@@ -37,6 +39,32 @@ from app.services.workspace import load_pending, remove_pending
 from app.ui.page import (BatchedBuild, CollapsibleCard, FluentPage, PageBanner,
                          PageHeader, note_label, set_tip)
 from app.ui.widgets import StatusList
+
+# 页面背景色（与首页 LoadingOverlay 同源），用于加载遮罩铺底
+from app.ui.home_page import page_bg_color
+
+
+class _BusyOverlay(QWidget):
+    """加载遮罩：覆盖内容区，居中一个圆环 + 文案，避免渲染过程中闪屏。"""
+
+    def __init__(self, parent, text: str = "正在加载…"):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.setSpacing(12)
+        self.ring = IndeterminateProgressRing(self)
+        self.ring.setFixedSize(40, 40)
+        self.ring.start()
+        lay.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.label = note_label(text)
+        lay.addWidget(self.label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+    def set_text(self, text: str):
+        self.label.setText(text)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.fillRect(self.rect(), page_bg_color())
 
 TARGETS = (
     ("压到 19.5MB", LIMITS["PDF_20MB_PRESET_BYTES"]),
@@ -236,6 +264,7 @@ class UploadPage(FluentPage):
         self._branch_rows: dict[str, tuple[StatusList, int]] = {}
         # 支部卡片分批建：档案多时一次性建几十个卡片会卡住界面（200 份约 580ms）
         self._branch_builder = BatchedBuild(self, batch=2)
+        self._busy: _BusyOverlay | None = None  # 加载遮罩（渲染/检查期间盖住内容，避免闪屏）
 
         lay = self.vBoxLayout
         # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐
@@ -269,6 +298,16 @@ class UploadPage(FluentPage):
                   self.upload_btn, self.stop_btn):
             self.header.add_control(w)
 
+        # 已知问题公告（banner 下方）：上传检查出的问题收进这里，不再重复弹窗
+        from app.ui.notice_panel import NoticePanel
+
+        self._notice_center = getattr(window, "notice_center", None)
+        self.notice_panel = NoticePanel(self._on_notice_action, self)
+        lay.addWidget(self.notice_panel)
+        if self._notice_center is not None:
+            self._notice_center.changed.connect(self._sync_notices)
+        self._sync_notices()
+
         self.summary = note_label("")
         lay.addWidget(self.summary)
 
@@ -288,16 +327,44 @@ class UploadPage(FluentPage):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._place_banner()
+        self._place_busy()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._place_banner()
+        self._place_busy()
         self.refresh()
 
     def _place_banner(self):
         """头图几何：铺满页面宽度、贴顶，跟随窗口宽度变化。"""
         if getattr(self, "header", None) is not None:
             self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
+
+    # ---------- 加载遮罩 ----------
+
+    def _show_busy(self, text: str = "正在加载…"):
+        """检查/渲染期间盖住内容区，避免空白与闪屏。"""
+        if self._busy is None:
+            self._busy = _BusyOverlay(self, text)
+        self._busy.set_text(text)
+        self._place_busy()
+        self._busy.ring.start()
+        self._busy.show()
+        self._busy.raise_()
+
+    def _hide_busy(self):
+        if self._busy is not None:
+            self._busy.ring.stop()
+            self._busy.hide()
+
+    def _place_busy(self):
+        if self._busy is None:
+            return
+        # 只盖住 banner 以下的内容区，头图保持可见
+        top = PageBanner.HEIGHT
+        self._busy.setGeometry(0, top, self.viewport().width(),
+                               max(0, self.viewport().height() - top))
+        self._busy.raise_()
 
     def _workspace_dir(self) -> str:
         path = str(store.load().get("workspaceDir") or "").strip()
@@ -356,6 +423,7 @@ class UploadPage(FluentPage):
             return
         self.rescan_btn.setEnabled(False)
         self.summary.setText(f"正在检查 {len(files)} 份档案…")
+        self._show_busy("正在检查档案…")
         cached_members = (store.load().get("memberCache") or {})
         self.inspector = InspectWorker(files, self._expected_pages(),
                                        self._accounts(), self._roster(),
@@ -368,6 +436,7 @@ class UploadPage(FluentPage):
         QTimer.singleShot(0, lambda: self._apply_statuses(list(statuses)))
 
     def _on_inspect_failed(self, message: str):
+        self._hide_busy()
         self.rescan_btn.setEnabled(True)
         self.summary.setText("")
         InfoBar.error("档案检查失败", message, duration=8000, parent=self)
@@ -386,13 +455,39 @@ class UploadPage(FluentPage):
             f"共 {stats['total']} 份：" + "，".join(parts)
             + f"，分 {stats['branches']} 个支部")
         self.upload_btn.setEnabled(any(s.usable for s in statuses))
-        self._rebuild_branches()
-        if stats["missing"]:
-            InfoBar.warning(
-                "支部名单缺团员",
-                f"{stats['missing']} 份档案的团员不在对应支部名单里，仍可上传；"
-                "名单请到组织管理核对",
-                duration=9000, parent=self)
+        # 卡片建完再收起加载遮罩，避免中途露出半截内容导致闪屏
+        self._rebuild_branches(on_done=self._hide_busy)
+        self._set_missing_notice(stats["missing"])
+
+    def _set_missing_notice(self, missing: int):
+        """缺团员只进公告列表（不重复弹窗）；数量变 0 时移除。"""
+        center = getattr(self, "_notice_center", None)
+        if center is None:
+            return
+        if not missing:
+            center.remove("upload:missing")
+            return
+        from app.services.notices import Notice
+
+        center.upsert(Notice(
+            key="upload:missing",
+            title=f"支部名单缺团员：{missing} 份档案",
+            detail="这些档案的团员不在对应支部名单里，仍可上传；名单请到组织管理核对",
+            action="org",
+            action_text="去组织管理",
+            tone="warning",
+            silent=True,
+        ))
+
+    def _sync_notices(self):
+        center = getattr(self, "_notice_center", None)
+        if center is not None and getattr(self, "notice_panel", None) is not None:
+            self.notice_panel.set_notices(center.snapshot())
+
+    def _on_notice_action(self, action: str):
+        handler = getattr(self.window_ref, "handle_notice_action", None)
+        if handler is not None:
+            handler(action)
 
     def set_search(self, text: str):
         """标题栏搜索框：按文件名、支部或问题说明过滤下方折叠卡片。"""
@@ -427,7 +522,7 @@ class UploadPage(FluentPage):
             "meta": meta,
         }
 
-    def _rebuild_branches(self):
+    def _rebuild_branches(self, on_done=None):
         self._branch_builder.cancel()
         while self.branch_lay.count():
             item = self.branch_lay.takeAt(0)
@@ -450,9 +545,11 @@ class UploadPage(FluentPage):
             empty = ("没有匹配的档案" if needle
                      else getattr(self, "_empty_text", "工作目录里还没有 PDF"))
             self.branch_lay.addWidget(note_label(empty))
+            if on_done is not None:
+                on_done()
             return
-        # 卡片分批建：首批同步（首帧就有内容），其余按帧补齐
-        self._branch_builder.start(groups.items(), self._add_branch_card)
+        # 卡片分批建：首批同步（首帧就有内容），其余按帧补齐；整批建完回调 on_done
+        self._branch_builder.start(groups.items(), self._add_branch_card, on_done=on_done)
 
     def _add_branch_card(self, group: tuple[str, list]):
         """建一个支部折叠卡片；由 BatchedBuild 逐批调用。"""
