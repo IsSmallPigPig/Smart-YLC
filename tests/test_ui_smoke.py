@@ -139,6 +139,36 @@ def test_home_and_upload_build(app, isolated_store):
     assert not upload.upload_btn.isEnabled()
 
 
+def test_material_default_is_mica(app, isolated_store):
+    """窗口背景默认 Mica；关闭项写「关闭模糊」。"""
+    from app.services.materials import preferred
+    from app.ui.settings_page import SettingsPage
+
+    assert preferred({}) == "mica"
+    assert preferred({"translucent": False}) == "none"     # 旧配置明确关掉过就保持关闭
+    assert preferred({"translucentMaterial": "acrylic"}) == "acrylic"
+
+    page = SettingsPage()
+    labels = [page.material_combo.itemText(i) for i in range(page.material_combo.count())]
+    assert labels == ["关闭模糊", "Acrylic", "Mica"]
+    assert page.material_combo.currentText() == "Mica"
+
+
+def test_settings_page_does_not_write_before_load(app, isolated_store):
+    """配置没载入完成时不许整份回写：那会把磁盘上的账号/名单抹成空。"""
+    from app.services import store
+    from app.ui.settings_page import SettingsPage
+
+    store.update(lambda c: c.__setitem__("accounts", [{"userName": "keep"}]))
+    before = store.load()
+
+    page = SettingsPage()
+    page._loaded = False          # 模拟「构造到一半」
+    page.accounts = []
+    page._save_config()
+    assert store.load()["accounts"] == before["accounts"]
+
+
 def test_upload_branch_cards_use_tags(app, isolated_store):
     """支部卡片标题只留班名，份数与学段做标签，不再用「·」拼字符串。"""
     from app.domain.upload_inspect import FileStatus

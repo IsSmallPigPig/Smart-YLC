@@ -18,6 +18,19 @@ def normalize(material: str | None) -> str:
     return m if m in MATERIAL_KEYS else "none"
 
 
+def preferred(cfg: dict) -> str:
+    """配置里该用哪种背景材质；从没设置过时默认 Mica。
+
+    只在「旧配置里明确关掉过」时保持关闭（`translucent: false`），
+    其余情况一律按 Mica 起：新装与老配置都直接拿到最好看的那档。"""
+    raw = cfg.get("translucentMaterial")
+    if raw is not None:
+        return normalize(raw)
+    if cfg.get("translucent") is False:
+        return "none"
+    return "mica"
+
+
 def win11_mica_available() -> bool:
     """Mica 只在 Windows 11（build ≥ 22000）可用。"""
     if sys.platform != "win32":

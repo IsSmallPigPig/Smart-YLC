@@ -143,10 +143,9 @@ class MainWindow(MSFluentWindow):
         # 启动恢复窗口背景透明材质（兼容旧 translucent 布尔配置）。混合层要等
         # 窗口 show 之后 contentView 尺寸稳定才挂，实际动作在 showEvent 里。
         cfg = store.load()
-        from app.services.materials import normalize, win11_mica_available
+        from app.services.materials import preferred, win11_mica_available
 
-        self._material = normalize(cfg.get("translucentMaterial")
-                                   or ("acrylic" if cfg.get("translucent") else "none"))
+        self._material = preferred(cfg)
         self._translucent = self._material != "none" and (
             sys.platform == "darwin" or win11_mica_available())
         self._apply_window_background()

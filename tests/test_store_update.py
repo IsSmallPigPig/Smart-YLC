@@ -74,3 +74,18 @@ def test_corrupt_config_without_backup_refuses_to_overwrite(tmp_path, monkeypatc
     with pytest.raises(RuntimeError):
         store.update(lambda c: c.__setitem__("memberCache", {"a": [1]}))
     assert path.read_text(encoding="utf-8") == broken
+
+
+def test_missing_main_file_restores_from_backup(tmp_path, monkeypatch):
+    """主文件被外部删掉、备份还在时按备份恢复，不能从空配置重新开始。"""
+    from app.services import store
+
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(store, "CONFIG_FILE", str(path))
+    store.save({"accounts": [{"userName": "a"}, {"userName": "b"}], "rosters": {"s": "x"}})
+    path.unlink()
+
+    cfg = store.load()
+    assert len(cfg["accounts"]) == 2
+    assert path.exists()          # 主文件被补回来
+    assert store.load()["rosters"] == {"s": "x"}
