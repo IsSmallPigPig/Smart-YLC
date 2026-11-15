@@ -432,6 +432,28 @@ def test_settings_control_column_stays_compact(app, isolated_store):
         assert holder.width() <= CONTROL_MAX_WIDTH
 
 
+def test_banner_light_theme_is_pale_with_dark_text(app, isolated_store):
+    """浅色模式的头图与首页同一套浅蓝，字换成深色——白字在浅底上看不清。"""
+    from qfluentwidgets import Theme, setTheme
+
+    from app.ui.page import (BANNER_STOPS_LIGHT, PageBanner, banner_stops,
+                             banner_text_colors)
+
+    setTheme(Theme.LIGHT)
+    banner = PageBanner("上传档案", "把团员档案 PDF 上传到站点")
+
+    assert banner_stops() == BANNER_STOPS_LIGHT
+    assert BANNER_STOPS_LIGHT[0].lightness() > 180      # 顶色是浅蓝，不是饱和深蓝
+    assert BANNER_STOPS_LIGHT[1].lightness() > 200      # 下端更浅，融进页面底色
+    title, _ = banner_text_colors()
+    assert title.lightness() < 80
+    assert banner.title_label._lightColor.lightness() < 80
+
+    setTheme(Theme.DARK)                                 # 切主题后字要跟着换回白色
+    assert banner_stops() != BANNER_STOPS_LIGHT
+    assert banner.title_label._darkColor.lightness() > 200
+
+
 def test_update_download_failure_clears_progress(app, isolated_store):
     """下载失败必须收掉「正在下载」浮层，按钮回到可重试的状态。"""
     from PySide6.QtWidgets import QVBoxLayout

@@ -55,10 +55,9 @@ from app.ui.charts import BarRowWidget
 from app.ui import palette as P
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.export_flow import start_export
-from app.ui.page import (BatchedBuild, CardRow, FluentPage, PageBanner, PageHeader, chevron_icon,
-                         note_label,
-                         set_tip,
-                         section_title, theme_font)
+from app.ui.page import (BatchedBuild, CardRow, FluentPage, PageBanner, PageHeader,
+                         banner_text_colors, chevron_icon, note_label,
+                         set_tip, section_title, theme_font)
 
 SOURCE_COLOR = P.SOURCE
 KIND_COLOR = P.KIND
@@ -141,10 +140,11 @@ class ClickRow(CardRow):
 
 
 class _BannerCrumbItem(BreadcrumbItem):
-    """banner 上的面包屑节点：白字。
+    """banner 上的面包屑节点：字色跟着头图深浅走。
 
-    官方节点按主题取色（浅色主题用黑字），而 banner 恒为深色底，黑字在上面读不清。
-    这里只重绘文字与分隔箭头，其余交互（点击、选中态）沿用父类。"""
+    官方节点按主题取色，但头图的底色不跟页面底色一致（浅色模式的头图是浅蓝），
+    直接用官方配色会在其中一头读不清。这里只重绘文字与分隔箭头，颜色取自
+    `banner_text_colors()`，其余交互（点击、选中态）沿用父类。"""
 
     def paintEvent(self, e):
         p = QPainter(self)
@@ -152,16 +152,17 @@ class _BannerCrumbItem(BreadcrumbItem):
                          | QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
 
+        ink, _ = banner_text_colors()
         sw = self.spacing * 2
         if not self.isRoot():
             iw = self.font().pixelSize() / 14 * 8
             rect = QRectF((sw - iw) / 2, (self.height() - iw) / 2 + 1, iw, iw)
             p.setOpacity(0.6)
-            FIF.CHEVRON_RIGHT_MED.render(p, rect, fill="#FFFFFF")
+            FIF.CHEVRON_RIGHT_MED.render(p, rect, fill=ink.name())
 
         p.setOpacity(1.0 if (self.isSelected or self.isHover) else 0.82)
         p.setFont(self.font())
-        p.setPen(QColor(255, 255, 255))
+        p.setPen(ink)
         rect = (self.rect() if self.isRoot()
                 else QRectF(sw, 0, self.width() - sw, self.height()))
         p.drawText(rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -176,9 +177,12 @@ class CrumbBar(BreadcrumbBar):
     这里补 sizeHint 给偏好宽度，并在显示后强制重排一次。"""
 
     def addItem(self, routeKey: str, text: str):
-        """节点换成白字版：面包屑只出现在 banner 里，恒为深色底。"""
+        """节点换成跟着头图底色取色的一版：面包屑只出现在 banner 里。"""
         if routeKey in self.itemMap:
             return
+        if not getattr(self, "_theme_hooked", False):
+            qconfig.themeChanged.connect(lambda *_: self._repaint_items())
+            self._theme_hooked = True
         item = _BannerCrumbItem(routeKey, text, len(self.items), self)
         item.setFont(self.font())
         item.setSpacing(self.spacing)
@@ -189,6 +193,11 @@ class CrumbBar(BreadcrumbBar):
         self.setFixedHeight(max(i.height() for i in self.items))
         self.setCurrentItem(routeKey)
         self.updateGeometry()
+
+    def _repaint_items(self):
+        """切主题后节点自己重绘：字色在 paintEvent 里按当前头图取。"""
+        for item in self.items:
+            item.update()
 
     def sizeHint(self):
         w = sum(i.width() for i in self.items) + 4
