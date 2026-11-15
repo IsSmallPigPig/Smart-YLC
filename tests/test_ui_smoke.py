@@ -120,6 +120,50 @@ def test_export_dialog_builds(app, isolated_store):
     assert dialog.scope == "merged"  # 一个入口里换范围，不再两个按钮
 
 
+def test_home_reopen_keeps_page_instead_of_covering_it(app, isolated_store):
+    """从托盘回来、切回首页时不再铺白色过渡页：概览已经在屏幕上，盖一层只会整页闪白。"""
+    from PySide6.QtGui import QShowEvent
+
+    from app.ui.home_page import HomePage
+
+    home = HomePage(FakeWindow())
+    home._stats_shown = True
+    home.showEvent(QShowEvent())
+    overlay = getattr(home, "_loading", None)
+    assert overlay is None or overlay.isHidden()
+
+
+def test_home_first_show_still_covers_page(app, isolated_store):
+    """首次显示（还没算过概览）仍要过渡页，遮住未就绪的内容。"""
+    from app.ui.home_page import HomePage
+
+    home = HomePage(FakeWindow())
+    assert home._stats_shown is False
+    home._show_loading()
+    assert not home._loading.isHidden()
+
+
+def test_home_snapshot_failure_drops_loading_overlay(app, isolated_store, monkeypatch):
+    """快照抛异常时撤掉过渡页：否则整页停在「正在加载概览…」，看起来像没渲染出来。"""
+    import time
+
+    from app.services import org_snapshot
+    from app.ui.home_page import HomePage
+
+    def boom(_cfg):
+        raise RuntimeError("配置读不了")
+
+    monkeypatch.setattr(org_snapshot, "snapshot", boom)
+    home = HomePage(FakeWindow())
+    home.refresh_stats(animate=False, show_loading=True)
+    end = time.monotonic() + 3
+    while time.monotonic() < end and not home._loading.isHidden():
+        app.processEvents()
+        time.sleep(0.01)
+    assert home._loading.isHidden()
+    assert home._stats_shown is False
+
+
 def test_home_and_upload_build(app, isolated_store):
     from app.ui.home_page import HomePage
     from app.ui.upload_page import UploadPage

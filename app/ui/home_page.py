@@ -259,16 +259,21 @@ class HomePage(FluentPage):
         lay.addWidget(body, 1)
         lay.addLayout(row)
 
+        self._stats_shown = False
         self._apply_font()
         self._load_header()
-        self.refresh_stats(animate=False)
+        self.refresh_stats(animate=False, show_loading=False)
 
     # ---------- 概览 ----------
 
     def showEvent(self, event):
         super().showEvent(event)
         self._align_hero_ink()
-        self.refresh_stats()
+        # 已经算过一次就不再铺过渡页：从托盘回来、或从别的页切回首页时，
+        # 概览本来就在屏幕上，盖一层不透明底只会让整页先变白再长回来。
+        # 首次显示（还没算过）才需要这层遮住未就绪的内容。
+        self.refresh_stats(animate=not self._stats_shown,
+                           show_loading=not self._stats_shown)
 
     def _align_hero_ink(self):
         """把「团委管理员」的墨迹左缘对齐到「欢迎，」那一行。
@@ -313,8 +318,16 @@ class HomePage(FluentPage):
 
         worker = CallbackWorker(_snapshot, self)
         worker.ok.connect(_on_done)
+        # 快照读配置失败时也要收掉过渡页：否则整页停在加载态，看起来就是没渲染出来。
+        # 旧数字仍然有效（只是没刷新），不弹提示，等下一轮同步重试。
+        worker.fail.connect(lambda _msg, t=token: self._on_stats_failed(t))
         self._workers.append(worker)
         worker.start()
+
+    def _on_stats_failed(self, token: int):
+        if token != self._stats_token:
+            return
+        self._stop_loading()
 
     def _show_loading(self):
         """铺一层加载过渡页：盖住首页内容，挡住快照延迟与布局未稳。
@@ -340,7 +353,17 @@ class HomePage(FluentPage):
         ov.ring.stop()
         fade_out(ov, duration=160, on_done=lambda: ov.hide())
 
+    def _stop_loading(self):
+        """异常路径直接撤掉过渡页，别让页面卡在加载态。"""
+        ov = getattr(self, "_loading", None)
+        if ov is None:
+            return
+        ov.ring.stop()
+        ov.setGraphicsEffect(None)
+        ov.hide()
+
     def _apply_stats(self, data: dict, animate: bool = True):
+        self._stats_shown = True
         total = data["total"]
         self.tiles["upload"].set_value(
             f"{data['uploaded']}/{total}" if total else "—",
