@@ -373,8 +373,8 @@ class SettingsPage(FluentPage):
         row(look_card, SettingRow("明暗模式",
                                   icon=FIF.BRIGHTNESS, control=controls(self.theme_combo)))
         self.material_combo = ComboBox()
-        # 只提供 fluent widgets 官方的两种材质：Acrylic 毛玻璃 与 Mica
-        for label in ("关闭", "Acrylic 毛玻璃", "Mica"):
+        # 只提供 fluent widgets 官方的两种材质；这一栏只用英文（材质名与 Off 都是通用写法）
+        for label in ("Off", "Acrylic", "Mica"):
             self.material_combo.addItem(label)
         _cfg = store.load()
         from app.services.materials import normalize
