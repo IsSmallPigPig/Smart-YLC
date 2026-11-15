@@ -10,6 +10,10 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.11"
+  # Windows runner 的 Python 默认按 locale 编码写 stdout（cp1252），
+  # 打印含中文的路径会 UnicodeEncodeError；统一按 UTF-8
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
   # 内部标识：bundle id、可执行文件名保持 ASCII，避免签名/路径上的麻烦
   APP_NAME: SmartYouth
   # 用户看到的名字：.app / .exe / 安装镜像里的显示名
@@ -154,8 +158,20 @@ jobs:
             main.py
 
       - name: 改成中文应用名
+        # onedir 产物是 dist/<APP_NAME>/<APP_NAME>.exe；只改 exe 文件名，
+        # 目录保持 ASCII（安装脚本按 dist\SmartYouth 取文件）
+        shell: pwsh
         run: |
-          python -c "import os; d=os.path.join('dist', os.environ['APP_NAME']); src=os.path.join(d, os.environ['APP_NAME']+'.exe'); dst=os.path.join(d, os.environ['APP_DISPLAY_NAME']+'.exe'); os.replace(src, dst); print(dst, os.path.getsize(dst))"
+          $dir = Join-Path "dist" $env:APP_NAME
+          $src = Join-Path $dir ($env:APP_NAME + ".exe")
+          $dst = Join-Path $dir ($env:APP_DISPLAY_NAME + ".exe")
+          if (-not (Test-Path -LiteralPath $src)) {
+            Write-Host "dist 内容：" ; Get-ChildItem "dist" -Recurse -Depth 1 | Select-Object FullName
+            throw "找不到 $src"
+          }
+          Move-Item -LiteralPath $src -Destination $dst -Force
+          $info = Get-Item -LiteralPath $dst
+          Write-Host ("重命名完成：{0}（{1:N0} 字节）" -f $info.FullName, $info.Length)
 
       - name: 准备代码签名证书
         id: cert
