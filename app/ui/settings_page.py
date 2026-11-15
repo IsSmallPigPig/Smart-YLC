@@ -1500,6 +1500,8 @@ class SettingsPage(FluentPage):
                 action=f"accounts:{user}",
                 action_text="去设置",
                 tone="error",
+                # 消息条只报「哪个账号异常」，原因留给公告面板
+                brief=f"{remark or user} 账号异常",
             ))
         center.replace_prefix("account:", notices)
 
@@ -1652,7 +1654,8 @@ class SettingsPage(FluentPage):
         from app.services.notices import Notice
 
         center.upsert(Notice(key=key, title=f"工作区：{name}", detail=message,
-                             action="upload", action_text="去上传", tone="warning"))
+                             action="upload", action_text="去上传", tone="warning",
+                             brief=f"{name} 需要处理"))
 
     # ---------- 首页头图（设置入口在此，生效于工具首页） ----------
 

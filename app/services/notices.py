@@ -29,6 +29,7 @@ class Notice:
     action_text: str = ""     # 操作按钮文案，如「去设置」「查看」
     tone: str = ""            # 浮层配色：info / success / warning / error（空则按 level 推）
     silent: bool = False      # True 时只进公告列表，不弹新问题提示
+    brief: str = ""           # 短文案：消息条与系统通知只说这一句，细节留在公告面板
 
 
 class NoticeCenter(QObject):
