@@ -311,6 +311,7 @@ class BrowserWindow(FluentWindowBase):
         # 登录看门狗的分代号：重登一次就 +1，旧定时器到点自动作废
         self._login_token: dict[str, int] = {}
         self._current = ""
+        self._engine_warm = False
 
         # FluentWindowBase 自带一个没进布局的 stackedWidget，它就停在窗口左上角
         # 画一块不透明的白底（截图里左上角那块）。浏览区用的是自建的 stack，
@@ -516,6 +517,21 @@ class BrowserWindow(FluentWindowBase):
     def showEvent(self, e):
         super().showEvent(e)
         QTimer.singleShot(0, self._apply_native_chrome)
+        # 窗口一出现就在空闲期把 Chromium 引擎拉起来（见 _warm_engine）
+        QTimer.singleShot(120, self._warm_engine)
+
+    def _warm_engine(self):
+        """预热 Chromium：第一次建 QWebEngineProfile 要初始化引擎。
+
+        实测这一下 170~550ms（打包后冷启动更久），以前它落在「选完支部」的点击处理里，
+        整个窗口就定住一段时间。窗口显示后先把它做掉，之后建标签只剩几十毫秒。
+        只建默认 profile，不碰各账号的存储分区。"""
+        if self._engine_warm:
+            return
+        self._engine_warm = True
+        from PySide6.QtWebEngineCore import QWebEngineProfile
+
+        QWebEngineProfile.defaultProfile()
 
     def _apply_native_chrome(self):
         """接管标题栏 + 挂毛玻璃。每次显示后都要重来一次。
@@ -673,9 +689,35 @@ class BrowserWindow(FluentWindowBase):
             return
         self._set_welcome_hint("")
         self._creds[user] = self._cred_sig(acc)
+        # 建 Chromium 视图要初始化引擎（引擎没预热时几百毫秒）。先把等待页铺出来，
+        # 点击处理立刻返回，视图留到下一轮事件循环再建——否则选完支部整个窗口定住。
+        self._show_loading(user, f"正在打开 {acc.get('remark') or user}…")
+        self._set_status(f"{self._label_of(user)}：正在打开…")
+        QTimer.singleShot(0, lambda u=user: self._mount_tab(u))
+
+    def _mount_tab(self, user: str):
+        """真正建标签：上一轮的空闲里窗口已经画过等待页，这里只干活不再等绘制。"""
+        if user in self._views:      # 期间已经被别处打开
+            self._activate(user)
+            return
+        if self.tab_count() >= MAX_TABS:   # 连点两下可能同时排进两个
+            self._set_welcome_hint(f"最多同时打开 {MAX_TABS} 个标签，先关掉一个再来")
+            self._raise_page("")
+            return
         self._ensure_view(user)
         self._activate(user)
         self._login(user)
+
+    def _show_loading(self, user: str, text: str):
+        """等待页：盖住浏览区，先给个「正在……」的画面，别让人对着空白。"""
+        loading = self._loadings.get(user)
+        if loading is None:
+            loading = LoginView(self.area)
+            loading.setGeometry(self.area.rect())
+            self._loadings[user] = loading
+        loading.set_text(text)
+        loading.show()
+        loading.raise_()
 
     def refresh_accounts(self):
         """把系统里最新的账号信息注入已打开的标签。
@@ -886,14 +928,7 @@ class BrowserWindow(FluentWindowBase):
         self.progress.setValue(0)
         self.progress.show()
         # 登录接口的正文是 JSON，整片盖住换成进度环；接口仍要在网页视图里真加载
-        loading = self._loadings.get(user)
-        if loading is None:
-            loading = LoginView(self.area)
-            loading.setGeometry(self.area.rect())
-            self._loadings[user] = loading
-        loading.set_text(f"正在登录 {self._short_name(user)}…")
-        loading.show()
-        loading.raise_()
+        self._show_loading(user, f"正在登录 {self._short_name(user)}…")
         if user == self._current:
             self._raise_page(user)
         # 旧会话先清掉：域级与主机级两条同名 SESSION 同时到达会被判「登录状态已失效」
