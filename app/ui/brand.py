@@ -1,7 +1,7 @@
 """品牌图标：窗口、托盘、欢迎页、主页与打包图标都取这里。
 
 资源放在 app/assets/：
-- smart-ylc@512.png   完整应用图标（带白色底板），窗口与托盘用
+- smart-ylc@512.png   完整应用图标（圆角矩形白底，所有效果都收在边界内），窗口与托盘用
 - smart-ylc-icon.svg  应用图标的矢量版
 - smart-ylc-mark.svg  透明底的团徽标记，欢迎页与标题栏用
 - smart-ylc.ico      Windows 打包用的多尺寸图标
@@ -52,11 +52,11 @@ def app_pixmap(size: int = 256) -> QPixmap:
 
 
 def app_tile_pixmap(size: int = 64) -> QPixmap:
-    """只要白底方块本身，裁掉投影和四周留白。
+    """只要圆角矩形本身，裁掉四周留白。
 
-    方块在 icon.svg 的 viewBox 里占 (4, 4, 92, 92)，外面那一圈是投影与描边余量；
-    app_pixmap 是完整图标（带投影与边距），放进正文当 logo 时那圈留白会让方块
-    缩进去，左缘和同一列的文字对不上（512 的图左边空了 54px）。
+    方块在 icon.svg 的 viewBox 里占 (4, 4, 92, 92)，外面那一圈是 4% 的透明边距；
+    app_pixmap 是完整图标（带边距），放进正文当 logo 时那圈留白会让方块
+    缩进去，左缘和同一列的文字对不上。
 
     优先用矢量按目标尺寸栅格化：位图缩到 64 再由 2× 屏放大，边缘一圈是插值糊影。
     """
@@ -67,8 +67,8 @@ def app_tile_pixmap(size: int = 64) -> QPixmap:
         renderer = QSvgRenderer(str(svg))
         if renderer.isValid():
             renderer.setViewBox(QRectF(4, 4, 92, 92))
-            # 斜向反光条与投影是照着「完整图标」画的，压在方块外的部分会从圆角
-            # 边上渗出来，在深色背景上看成一圈白雾；按方块圆角裁掉
+            # 图标本身已经把内容裁进圆角矩形了，这里再按同一个圆角裁一次：
+            # 以后往 svg 里加效果时，正文 logo 也不会在深色背景上渗出一圈白雾
             radius = 22 / 92 * size
 
             def paint(p: QPainter):
