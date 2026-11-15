@@ -1502,6 +1502,7 @@ class SettingsPage(FluentPage):
                 tone="error",
                 # 消息条只报「哪个账号异常」，原因留给公告面板
                 brief=f"{remark or user} 账号异常",
+                scope="settings",   # 账号问题在系统配置处理，不出现在上传页的公告里
             ))
         center.replace_prefix("account:", notices)
 
@@ -1655,7 +1656,7 @@ class SettingsPage(FluentPage):
 
         center.upsert(Notice(key=key, title=f"工作区：{name}", detail=message,
                              action="upload", action_text="去上传", tone="warning",
-                             brief=f"{name} 需要处理"))
+                             brief=f"{name} 需要处理", scope="upload"))
 
     # ---------- 首页头图（设置入口在此，生效于工具首页） ----------
 

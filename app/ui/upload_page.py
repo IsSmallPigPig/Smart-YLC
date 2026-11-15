@@ -403,6 +403,7 @@ class UploadPage(FluentPage):
 
     def refresh(self):
         directory = self._workspace_dir()
+        self._clear_inspect_error()
         if not directory:
             self.statuses = []
             self._empty_text = "还没有选择工作目录"
@@ -435,10 +436,27 @@ class UploadPage(FluentPage):
         QTimer.singleShot(0, lambda: self._apply_statuses(list(statuses)))
 
     def _on_inspect_failed(self, message: str):
+        """检查失败不弹一次就没了：这类错误会一直存在，收进公告等它被修好。"""
         self._hide_busy()
         self.rescan_btn.setEnabled(True)
         self.summary.setText("")
-        InfoBar.error("档案检查失败", message, duration=8000, parent=self)
+        self._set_inspect_error(message)
+
+    def _set_inspect_error(self, message: str):
+        center = getattr(self, "_notice_center", None)
+        if center is None:
+            InfoBar.error("档案检查失败", message, duration=8000, parent=self)
+            return
+        from app.services.notices import Notice
+
+        center.upsert(Notice(
+            key="upload:inspect", title="档案检查失败", detail=message,
+            action="", action_text="", tone="error", silent=True, scope="upload"))
+
+    def _clear_inspect_error(self):
+        center = getattr(self, "_notice_center", None)
+        if center is not None:
+            center.remove("upload:inspect")
 
     def _apply_statuses(self, statuses):
         self.rescan_btn.setEnabled(True)
@@ -476,12 +494,17 @@ class UploadPage(FluentPage):
             action_text="去组织管理",
             tone="warning",
             silent=True,
+            scope="upload",
         ))
 
     def _sync_notices(self):
+        """只列与上传有关的问题：账号异常在系统配置处理，不该出现在这页。"""
         center = getattr(self, "_notice_center", None)
-        if center is not None and getattr(self, "notice_panel", None) is not None:
-            self.notice_panel.set_notices(center.snapshot())
+        panel = getattr(self, "notice_panel", None)
+        if center is None or panel is None:
+            return
+        panel.set_notices([n for n in center.snapshot()
+                           if n.scope in ("", "upload")])
 
     def _on_notice_action(self, action: str):
         handler = getattr(self.window_ref, "handle_notice_action", None)

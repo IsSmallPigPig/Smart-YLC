@@ -301,7 +301,9 @@ class MessagesPage(FluentPage):
             self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
 
     def _sync_notices(self):
-        """清单变化：面板按 key 增量刷新（不清空重建，避免闪烁）。"""
+        """清单变化：面板按 key 增量刷新（不清空重建，避免闪烁）。
+
+        这一页是消息总览，不过滤归属；各处理页自己的面板只列属于它的那几类。"""
         center = getattr(self, "_notice_center", None)
         if center is not None and getattr(self, "notice_panel", None) is not None:
             self.notice_panel.set_notices(center.snapshot())

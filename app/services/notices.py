@@ -16,6 +16,11 @@ from PySide6.QtCore import QObject, Signal
 LEVEL_ISSUE = "issue"
 LEVEL_INFO = "info"
 
+# 归属页面：公告面板按这个过滤，每个页面只列自己该处理的问题。
+# 空字符串表示「全局」，任何页面的面板都会显示。
+SCOPE_UPLOAD = "upload"
+SCOPE_SETTINGS = "settings"
+
 
 @dataclass(frozen=True)
 class Notice:
@@ -30,6 +35,7 @@ class Notice:
     tone: str = ""            # 浮层配色：info / success / warning / error（空则按 level 推）
     silent: bool = False      # True 时只进公告列表，不弹新问题提示
     brief: str = ""           # 短文案：消息条与系统通知只说这一句，细节留在公告面板
+    scope: str = ""           # 归属页面（SCOPE_*），决定显示在哪一页的公告面板
 
 
 class NoticeCenter(QObject):
