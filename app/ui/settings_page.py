@@ -731,9 +731,7 @@ class SettingsPage(FluentPage):
             autostart.uninstall()
             InfoBar.info("已关闭自启动", "后台托盘不再开机运行", duration=3000, parent=self)
         else:
-            if not self.accounts:
-                InfoBar.warning("先配置账号", "先添加团支部账号", duration=4000, parent=self)
-                return
+            # 自启只是「开机把托盘跑起来」，跟有没有账号无关：账号可以之后再配
             path = autostart.install()
             InfoBar.success("已开启自启动", f"LaunchAgent：{path}", duration=4000, parent=self)
         self._refresh_autostart_btn()

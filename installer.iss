@@ -25,6 +25,10 @@
 #ifndef OutputDir
   #define OutputDir "dist\installer"
 #endif
+; 自签名打包时 workflow 传 /DSelfSigned=1：多出一个「信任证书」可选项
+#ifndef SelfSigned
+  #define SelfSigned 0
+#endif
 
 [Setup]
 ; 固定的 AppId：升级时靠它识别「这是同一个应用」，不要改
@@ -56,12 +60,21 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+#if SelfSigned
+; 安装时可选把本安装包的签名证书装进「受信任的根证书颁发机构」，
+; 之后运行不再提示「未知发布者」。需要管理员权限，所以单独提权、单独一步。
+Name: "trustcert"; Description: "信任本次安装包的签名证书（会请求一次管理员授权，之后不再提示「未知发布者」）"; Flags: unchecked
+#endif
 
 [Files]
 ; onedir 产物：主程序 + _internal 运行时，整份复制进安装目录
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; GPLv3 要求随二进制分发许可证全文
 Source: "LICENSE"; DestDir: "{app}"; DestName: "LICENSE-GPLv3.txt"; Flags: ignoreversion
+#if SelfSigned
+; 证书只在勾选「信任证书」时用到；装到临时目录，安装完删掉
+Source: "dist\installer\SmartYouth-CodeSigning.cer"; DestDir: "{tmp}"; Flags: deleteafterinstall
+#endif
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppName}.exe"
@@ -69,3 +82,42 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppName}.exe"; Tasks: deskt
 
 [Run]
 Filename: "{app}\{#AppName}.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+{ 勾选了「信任证书」时，单独提权跑 certutil：安装本身仍是每用户、不弹 UAC，
+  只有装证书这一步会请求管理员授权，取消也不影响应用可用 }
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  CertPath: String;
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+#if SelfSigned
+  if not WizardIsTaskSelected('trustcert') then
+    Exit;
+
+  CertPath := ExpandConstant('{tmp}\SmartYouth-CodeSigning.cer');
+  if not FileExists(CertPath) then
+  begin
+    MsgBox('安装包里没有找到签名证书，跳过证书安装。', mbInformation, MB_OK);
+    Exit;
+  end;
+
+  if ShellExec('runas', ExpandConstant('{sys}\certutil.exe'),
+               '-addstore -f Root "' + CertPath + '"', '', SW_HIDE,
+               ewWaitUntilTerminated, ResultCode) then
+  begin
+    if ResultCode = 0 then
+      MsgBox('证书已装进「受信任的根证书颁发机构」，之后打开应用不再提示未知发布者。',
+             mbInformation, MB_OK)
+    else
+      MsgBox('证书安装失败（certutil 返回 ' + IntToStr(ResultCode) +
+             '）。可以手动双击安装目录里的 SmartYouth-CodeSigning.cer 导入。',
+             mbError, MB_OK);
+  end
+  else
+    MsgBox('已取消管理员授权，证书未安装；应用本身可以正常使用。',
+           mbInformation, MB_OK);
+#endif
+end;

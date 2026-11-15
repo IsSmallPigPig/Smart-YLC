@@ -785,6 +785,10 @@ class MainWindow(MSFluentWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
+        # 无边框窗口不会自动获得 DWM 圆角（Windows 11），补一次
+        from app.services.materials import apply_rounded_corners
+
+        apply_rounded_corners(self)
         splash = getattr(self, "splash", None)
         if splash is not None and not self._splash_done:
             splash.setGeometry(self.rect())
@@ -861,6 +865,9 @@ class MainWindow(MSFluentWindow):
                 self._material_applied = True
         elif sys.platform == "win32" and self._translucent:
             self._material_applied = apply_windows_effect(self, material)
+            from app.services.materials import apply_rounded_corners
+
+            apply_rounded_corners(self)  # 重挂混合层会重置圆角偏好
             if not self._material_applied:
                 # Win10 等不支持时回退纯色底，不让窗口裸透明发黑
                 self._translucent = False

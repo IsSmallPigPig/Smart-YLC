@@ -241,7 +241,10 @@ jobs:
           if (-not $ver -or $ver -eq 'workflow_dispatch') { $ver = "1.0.0" }
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "找不到 ISCC.exe（Inno Setup 未装好）" }
-          & $iscc "/DAppVersion=$ver" "installer.iss"
+          # 自签名时多给安装包一个「信任证书」选项（安装时可选择提权把证书装进根存储）
+          $defs = @("/DAppVersion=$ver")
+          if ('${{ steps.cert.outputs.mode }}' -eq 'selfsigned') { $defs += "/DSelfSigned=1" }
+          & $iscc @defs "installer.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译安装包失败" }
           Get-Item "dist\installer\SmartYouth-Windows-x64-setup.exe" | Select-Object Name, Length
 
