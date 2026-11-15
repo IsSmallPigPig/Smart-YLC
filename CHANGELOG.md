@@ -2,7 +2,7 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
-## 未发布
+## v1.5.0
 
 ### 通知与消息
 - 新增应用内通知中心：已知问题集中成清单，弹窗只对**新出现**的问题发一次，内容不变不重复提示。
@@ -70,6 +70,14 @@
 - 修复「选完支部后窗口卡住一段时间」：第一次建 QWebEngineProfile 要初始化 Chromium 引擎（实测 170~550ms，
   冷启动更久），原先落在点击处理里。现在浏览器窗口一显示就在空闲期预热引擎，建标签只剩几毫秒；同时把建视图
   与登录移出点击回调，先铺「正在打开…」等待页再干活，点击立即返回。
+
+### 打包与发布
+- Windows 不再出单文件 exe，改为 Inno Setup 安装包（`SmartYouth-Windows-x64-setup.exe`）：
+  每用户安装到 `%LOCALAPPDATA%\Programs\智慧团委`，不需要管理员、不弹 UAC；
+  程序本体按 onedir 打包，启动不再解压运行时。
+- 构建产物自动签名：配了 `WIN_CERT_PFX_B64` / `WIN_CERT_PASSWORD` 就用真实证书；
+  没配则生成自签名证书签名，并把公钥 `SmartYouth-CodeSigning.cer` 随 Release 分发。
+- macOS 只出 Apple Silicon（dmg），Windows 只出 64 位。
 
 ### 工程
 - 新增通知中心/公告面板/浮层提示单测（去重语义、更新不重复触发、行复用）。
