@@ -109,14 +109,16 @@ jobs:
             echo "::warning::SetFile 不可用，卷图标可能不生效"
           fi
           hdiutil detach "$MOUNT" > /dev/null
+          # 产物名只用 ASCII：中文文件名在 Release 上会被剥成 "-macOS-arm64.dmg"，
+          # 卷名与包内 .app 仍是「智慧团委」
           hdiutil convert "$RW" -format UDZO \
-            -o "dist/$APP_DISPLAY_NAME-macOS-arm64.dmg" > /dev/null
+            -o "dist/$APP_NAME-macOS-arm64.dmg" > /dev/null
           rm -rf "$RW" "$DMGROOT"
 
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ env.APP_NAME }}-macOS-arm64
-          path: dist/${{ env.APP_DISPLAY_NAME }}-macOS-arm64.dmg
+          path: dist/${{ env.APP_NAME }}-macOS-arm64.dmg
           if-no-files-found: error
 
   build-windows:
@@ -176,6 +178,8 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+          # 少一个安装包就让任务红掉：action-gh-release 默认只警告，会静默发出单品 Release
+          fail_on_unmatched_files: true
           body: |
             ## 下载
             - **macOS（Apple Silicon / M 系列）**：`SmartYouth-macOS-arm64.dmg`
