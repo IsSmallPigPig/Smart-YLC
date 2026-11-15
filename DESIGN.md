@@ -90,10 +90,13 @@
 - `InfoBarPosition.TOP_RIGHT`，多条自动向下堆叠；5–8 秒自动消失，可手动关闭。
 - 配色由 `InfoBarIcon` 决定：`SUCCESS` 绿、`WARNING` 橙、`ERROR` 红、`INFORMATION` 蓝；
   通知的 `tone` 映射到对应图标。
-- 单行展示（`InfoBar` 只显示首行内容）；`title` 为空时自动隐藏，站内信只显示内容。
-- 有处理入口时把 `TransparentPushButton(action_text)` 插到图标与文字之间（最左），
-  点击执行动作并关闭该条；不用 `addWidget`（它会把按钮放到文字右侧）。
-- 只在**前台**用；后台改走系统通知（macOS osascript / 托盘气泡）。
+- **只说一句**：优先用 `Notice.brief`（如「初中部初三二班 账号异常」），`title` 留空；
+  具体原因只进公告面板，消息条不显示。
+- 同一批新问题合并后再弹：一轮检查里多个账号异常合成一条「N 个账号异常」，
+  其余问题最多 3 条；靠 `_bar_timer` 攒 250ms 再发，避免右上角一次堆满。
+- 有处理入口时用 `addWidget(TransparentPushButton(action_text))`，按钮落在文字右侧
+  （消息条最右、紧邻关闭按钮）；点击执行动作并关闭该条。
+- 只在**前台**用；后台改走系统通知（macOS osascript / 托盘气泡），同样只发短文案。
 
 ### 表格
 - 圆角 10，隐藏左侧行号列；列宽用 `fit_table_columns` 一次性算，

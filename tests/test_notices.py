@@ -64,3 +64,42 @@ def test_panel_reuses_rows_and_empties_cleanly(app):
     assert panel._rows["a"] is row        # 同一行复用，不整块重建（不闪烁）
     panel.set_notices([])
     assert panel._rows == {}
+
+
+class _BarStub:
+    """只提供 _flush_bars 用到的东西：待发清单 + 记录实际弹出的条目。"""
+
+    def __init__(self, pending):
+        self._pending_bars = list(pending)
+        self.shown = []
+
+    def _show_notice_bar(self, notice):
+        self.shown.append(notice)
+
+
+def test_same_batch_account_issues_merge_into_one_bar(app):
+    from app.ui.main_window import MainWindow
+
+    pending = [Notice(key=f"account:{i}", title=f"账号 {i}：需验证码",
+                      detail="图片验证码错误！(本轮跳过该账号的数据刷新，稍后自动重试)",
+                      action=f"accounts:{i}", action_text="去设置", tone="error",
+                      brief=f"初中部初三{i}班 账号异常")
+               for i in (2, 3, 4)]
+    stub = _BarStub(pending)
+    MainWindow._flush_bars(stub)
+
+    assert len(stub.shown) == 1                  # 13 个账号同时异常也只弹一条
+    bar = stub.shown[0]
+    assert bar.detail == "3 个账号异常"           # 只报个数，不列原因
+    assert bar.brief == "" and bar.title == ""
+    assert bar.action == "accounts:2"            # 点「去设置」定位到第一个异常账号
+
+
+def test_single_account_issue_keeps_brief_text(app):
+    from app.ui.main_window import MainWindow
+
+    stub = _BarStub([Notice(key="account:x", title="账号 x：需验证码", detail="原因",
+                            action="accounts:x", action_text="去设置", tone="error",
+                            brief="x 账号异常")])
+    MainWindow._flush_bars(stub)
+    assert [n.brief for n in stub.shown] == ["x 账号异常"]

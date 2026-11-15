@@ -170,6 +170,14 @@ class MainWindow(MSFluentWindow):
         self._sync_timer.start()
         QTimer.singleShot(15 * 1000, self._tick_sync)
 
+        # 新问题先攒 250ms 再弹：一轮检查里十几个账号同时异常时合并成一条，
+        # 否则右上角会一次堆满十几条消息条
+        self._pending_bars: list = []
+        self._bar_timer = QTimer(self)
+        self._bar_timer.setSingleShot(True)
+        self._bar_timer.setInterval(250)
+        self._bar_timer.timeout.connect(self._flush_bars)
+
         # 启动闪屏：盖住整个窗口（侧边栏、标题栏都在下面）。首屏快照回来后
         # 由 home_page.stats_ready 收起；5 秒兜底，快照失败也不会卡住界面。
         from app.ui.splash import SplashScreen
@@ -211,21 +219,42 @@ class MainWindow(MSFluentWindow):
         self.refresh_all(silent=True, fast=True)
 
     def _on_new_issue(self, notice):
-        """新问题：前台用 InfoBar 消息条（带处理按钮），后台用系统通知。"""
+        """新问题：前台攒成一条消息条，后台用系统通知（都只发短文案）。"""
         if not getattr(self, "_splash_done", False):
             return  # 启动闪屏还没收，先不弹；公告面板会显示
         if self._is_foreground():
-            self._show_notice_bar(notice)
+            self._pending_bars.append(notice)
+            self._bar_timer.start()
         else:
             from app.services.notify import send
 
-            send(notice.title, notice.detail or notice.title)
+            send(notice.brief or notice.title, notice.detail or "")
+
+    def _flush_bars(self):
+        """把这一批新问题合成最多几条消息条：同类账号异常只报个数。"""
+        pending, self._pending_bars = self._pending_bars, []
+        if not pending:
+            return
+        accounts = [n for n in pending if n.action.startswith("accounts:")]
+        others = [n for n in pending if not n.action.startswith("accounts:")]
+
+        if len(accounts) == 1:
+            self._show_notice_bar(accounts[0])
+        elif accounts:
+            from app.services.notices import Notice
+
+            self._show_notice_bar(Notice(
+                key="accounts", title="", detail=f"{len(accounts)} 个账号异常",
+                action=accounts[0].action, action_text="去设置", tone="error"))
+
+        for notice in others[:3]:  # 其余问题逐条，最多 3 条；全部在公告面板里
+            self._show_notice_bar(notice)
 
     def _show_notice_bar(self, notice):
         """用 qfluentwidgets 的 InfoBar 呈现一条通知。
 
         配色由 InfoBarIcon 决定（success 绿 / warning 橙 / error 红 / info 蓝），
-        右上角自动堆叠、内容只显示首行；有处理入口时用 addWidget 挂按钮。"""
+        右上角自动堆叠、内容只显示首行；有处理入口时按钮贴最右。"""
         from PySide6.QtCore import Qt
         from qfluentwidgets import (
             InfoBar,
@@ -239,10 +268,14 @@ class MainWindow(MSFluentWindow):
             "warning": InfoBarIcon.WARNING,
             "error": InfoBarIcon.ERROR,
         }.get(notice.tone, InfoBarIcon.INFORMATION)
-        content = notice.detail or notice.title
+        # 有短文案就只显示短文案：消息条是用来提醒的，具体原因留在公告面板
+        if notice.brief:
+            title, content = "", notice.brief
+        else:
+            title, content = notice.title, (notice.detail or notice.title)
         bar = InfoBar(
             icon=icon,
-            title=notice.title,
+            title=title,
             content=content,
             orient=Qt.Horizontal,
             isClosable=True,
@@ -253,8 +286,7 @@ class MainWindow(MSFluentWindow):
         if notice.action and notice.action_text:
             btn = TransparentPushButton(text=notice.action_text, parent=bar)
             btn.clicked.connect(lambda: (self.handle_notice_action(notice.action), bar.close()))
-            # InfoBar 的 addWidget 会把按钮放到文字右侧；插到图标与文字之间，动作落在最左
-            bar.hBoxLayout.insertWidget(1, btn, 0, Qt.AlignmentFlag.AlignVCenter)
+            bar.addWidget(btn)   # 文字右侧：动作贴在消息条最右
         bar.show()
         return bar
 
@@ -416,23 +448,31 @@ class MainWindow(MSFluentWindow):
         return True
 
     def _notify_new_messages(self, items: list):
-        """新站内信：前台用带「查看」按钮的浮层，后台用系统通知。"""
+        """新站内信：前台用带「查看」按钮的消息条，后台用系统通知。"""
         if not items:
             return
         first = items[0]
-        body = f"{first.get('account', '')}：{(first.get('content') or '').strip() or first.get('title', '')}"
+        account = str(first.get("account", "")).strip()
+        text = (first.get("content") or "").strip() or str(first.get("title", "")).strip()
+        # 消息条只放一行：账号 + 半句内容，长文进系统消息页看
+        if len(items) > 1:
+            brief = f"{len(items)} 条新站内信"
+        elif text:
+            brief = f"{account}：{text[:24]}" if account else text[:28]
+        else:
+            brief = f"{account}：收到新站内信" if account else "收到新站内信"
+
         if self._is_foreground() and getattr(self, "_splash_done", False):
             from app.services.notices import Notice
 
             # 站内信不设标题、只显示内容；用 InfoBar 呈现（标题为空会自动隐藏）
             self._show_notice_bar(
-                Notice(key="messages", title="",
-                       detail=body[:120] or f"收到 {len(items)} 条新站内信",
+                Notice(key="messages", title="", detail=brief, brief=brief,
                        action="messages", action_text="查看", tone="info"))
         else:
             from app.services.notify import send
 
-            send(f"收到 {len(items)} 条新站内信", body[:120])
+            send(f"收到 {len(items)} 条新站内信", f"{account}：{text[:60]}".strip("："))
 
     def _on_visit_branch(self):
         """侧边栏「访问支部」：打开浏览器窗口，没有标签时先问要访问哪个支部。"""
