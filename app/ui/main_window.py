@@ -391,9 +391,11 @@ class MainWindow(MSFluentWindow):
         if self._is_foreground() and getattr(self, "_splash_done", False):
             from app.services.notices import Notice
 
+            # 站内信不设标题，直接把内容放一行；动作「查看」在最左
             self.notice_toasts.show(
-                Notice(key="messages", title=f"收到 {len(items)} 条新站内信",
-                       detail=body[:120], action="messages", action_text="查看"),
+                Notice(key="messages", title="",
+                       detail=body[:120] or f"收到 {len(items)} 条新站内信",
+                       action="messages", action_text="查看", tone="info"),
                 self.handle_notice_action)
         else:
             from app.services.notify import send

@@ -27,6 +27,7 @@ class Notice:
     level: str = LEVEL_ISSUE
     action: str = ""          # 目标：accounts:<账号> / org:<支部> / messages / upload
     action_text: str = ""     # 操作按钮文案，如「去设置」「查看」
+    tone: str = ""            # 浮层配色：info / success / warning / error（空则按 level 推）
 
 
 class NoticeCenter(QObject):
