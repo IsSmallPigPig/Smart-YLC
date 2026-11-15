@@ -1,7 +1,7 @@
 """系统配置的「关于」分组：作者主页、反馈、检查更新、下载加速。
 
-检查结果用右下角浮动信息条反馈：检查中常驻，已是最新自动收起，发现新版时
-信息条上直接给「立即下载」，不再往分组里塞第二个下载按钮。
+检查与下载用右下角的浮动进度条反馈（和「同步数据」同一种），下载时按百分比
+推进；按钮本身依次变成「下载 x.y.z」「打开目录」，动作不漂在窗口边缘。
 """
 
 from __future__ import annotations
@@ -58,7 +58,9 @@ class AboutCard(CollapsibleCard):
         self._info: updater.UpdateInfo | None = None
         self._check_worker = None
         self._download_worker = None
-        self._bar = None
+        self._toast = None
+        self._downloaded = ""      # 已下载的更新包路径；有值时按钮变成「打开目录」
+        self._fallback = ""        # 加速失败改直连时的原因，收尾文案里带上
 
         author_btn = _button(FIF.GITHUB, "作者主页")
         author_btn.clicked.connect(
@@ -81,7 +83,7 @@ class AboutCard(CollapsibleCard):
             control=_fill(feedback_btn)))
 
         self.check_btn = _button(FIF.UPDATE, "检查更新")
-        self.check_btn.clicked.connect(self._check)
+        self.check_btn.clicked.connect(self._on_action)
         self.update_row = SettingRow(
             "检查更新", icon=FIF.UPDATE, control=_fill(self.check_btn))
         self.body_lay.addWidget(self.update_row)
@@ -105,81 +107,88 @@ class AboutCard(CollapsibleCard):
         self.update_row.set_desc(
             f"当前版本 {__version__}，来自 {updater.REPO}，{status}")
 
-    # ------------------------------------------------------------ 浮动信息条
+    # ------------------------------------------------------------ 浮动进度
 
-    def _close_bar(self):
-        bar, self._bar = self._bar, None
-        if bar is None:
+    def _open_toast(self, title: str):
+        """右下角浮动进度条：与「同步数据」同一个组件，不挡页面。"""
+        from app.ui.widgets import ProgressToast
+
+        self._close_toast()
+        toast = ProgressToast(title, self.window())
+        self._toast = toast
+        toast.show()
+        return toast
+
+    def _close_toast(self, text: str = "", hold_ms: int = 800):
+        """收掉浮层。text 非空时先补满并停留一下，把结果留在屏幕上。"""
+        toast, self._toast = self._toast, None
+        if toast is None:
             return
         try:
-            bar.close()
+            if text:
+                toast.finish(hold_ms=hold_ms, text=text)
+            else:
+                toast.close()
         except RuntimeError:
-            pass
-
-    def _show_bar(self, level: str, title: str, content: str, *,
-                  duration: int = 4000, widget=None, sticky: bool = False):
-        """右下角信息条；sticky 的条常驻，供检查中与发现新版本使用。"""
-        if sticky:
-            self._close_bar()
-        bar = getattr(InfoBar, level)(
-            title, content, duration=-1 if sticky else duration,
-            position=InfoBarPosition.BOTTOM_RIGHT, parent=self.window())
-        if widget is not None:
-            bar.addWidget(widget)
-        if sticky:
-            self._bar = bar
-        return bar
-
-    def _set_bar_content(self, text: str):
-        if self._bar is None:
-            return
-        try:
-            self._bar.contentLabel.setText(text)
-        except RuntimeError:
-            pass
+            pass  # 用户已点掉浮层
 
     def _notice(self, level: str, title: str, content: str, duration: int = 7000):
-        self._show_bar(level, title, content, duration=duration)
+        getattr(InfoBar, level)(
+            title, content, duration=duration,
+            position=InfoBarPosition.BOTTOM_RIGHT, parent=self.window())
 
     # ------------------------------------------------------------ 检查更新
 
     def _on_proxy_changed(self, index: int):
         update_check.set_proxy_mode("ghproxy" if index == 0 else "direct")
 
+    def _on_action(self):
+        """一个按钮依次承担：检查更新 → 下载新版本 → 打开下载目录。"""
+        if self._downloaded:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(self._downloaded)))
+            # 打开过目录就回到「检查更新」，别把按钮卡成只能开文件夹
+            self._downloaded = ""
+            self._info = None
+            self.check_btn.setText("检查更新")
+            self._refresh_status()
+        elif self._info is not None:
+            self._download()
+        else:
+            self._check()
+
     def _check(self):
         if self._check_worker is not None and self._check_worker.isRunning():
             return
+        self._downloaded = ""
         self.check_btn.setEnabled(False)
         self.check_btn.setText("正在检查")
-        self._show_bar("info", "检查更新", "正在检查更新…", sticky=True)
+        self._open_toast("检查更新").set_indeterminate("正在检查更新…")
         worker = update_check.CheckWorker()
         self._check_worker = worker
         worker.found.connect(self._on_checked)
         worker.failed.connect(self._on_check_failed)
         worker.start()
 
-    def _finish_check(self):
+    def _on_checked(self, info):
+        update_check.record("update" if info else "latest", info.version if info else "")
+        self._info = info
+        self.check_btn.setEnabled(True)
+        self._refresh_status()
+        if info is None:
+            self.check_btn.setText("检查更新")
+            self._close_toast(text=f"已是最新版本 {__version__}")
+            return
+        self._close_toast()
+        self.check_btn.setText(f"下载 {info.version}")
+        self.update_row.set_desc(f"发现新版本 {info.version}，点右侧按钮下载（当前 {__version__}）")
+
+    def _on_check_failed(self, message: str):
+        update_check.record("error", message[:180])
+        self._info = None
         self.check_btn.setEnabled(True)
         self.check_btn.setText("检查更新")
         self._refresh_status()
-
-    def _on_checked(self, info):
-        self._finish_check()
-        update_check.record("update" if info else "latest", info.version if info else "")
-        self._info = info
-        if info is None:
-            self._close_bar()
-            self._notice("success", "已是最新版本", f"当前版本 {__version__}", 3500)
-            return
-        dl = _button(FIF.DOWNLOAD, "立即下载")
-        dl.clicked.connect(self._download)
-        self._download_action = dl
-        self._show_bar("success", "检测到新版本",
-                       f"最新版本: {info.version}", widget=dl, sticky=True)
-
-    def _on_check_failed(self, message: str):
-        self._finish_check()
-        update_check.record("error", message[:180])
+        self._close_toast()
         self._notice("error", "检查更新失败", message, 8000)
 
     # ------------------------------------------------------------ 下载更新
@@ -189,25 +198,44 @@ class AboutCard(CollapsibleCard):
             return
         if self._download_worker is not None and self._download_worker.isRunning():
             return
-        self._show_bar("info", "下载更新", "正在下载更新包…", sticky=True)
+        self._downloaded = ""
+        self._fallback = ""
+        self.check_btn.setEnabled(False)
+        self.check_btn.setText("正在下载")
+        self._open_toast("下载更新").set_progress(0, 100, "正在下载更新包 0%")
         worker = update_check.DownloadWorker(
             self._info, update_check.proxy_mode() == "ghproxy")
         self._download_worker = worker
-        worker.progress.connect(lambda n: self._set_bar_content(f"正在下载更新包 {n}%"))
+        worker.progress.connect(self._on_download_progress)
         worker.fallback.connect(self._on_proxy_fallback)
         worker.done.connect(self._on_downloaded)
         worker.failed.connect(self._on_download_failed)
         worker.start()
 
+    def _on_download_progress(self, percent: int):
+        toast = self._toast
+        if toast is None:
+            return
+        try:
+            toast.set_progress(percent, 100, f"正在下载更新包 {percent}%")
+        except RuntimeError:
+            self._toast = None
+
     def _on_proxy_fallback(self, reason: str):
-        self._notice("warning", "加速下载不可用", f"{reason}，已改用直连下载")
+        # 下载中再弹一条信息条会压在进度浮层上；回退这件事记下来，收尾时说
+        self._fallback = reason
 
     def _on_downloaded(self, path: str):
-        open_btn = _button(FIF.FOLDER, "打开目录")
-        open_btn.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path))))
-        self._show_bar("success", "更新包已下载", os.path.basename(path),
-                       widget=open_btn, sticky=True)
+        self._downloaded = path
+        self.check_btn.setEnabled(True)
+        self.check_btn.setText("打开目录")
+        self.update_row.set_desc(f"更新包已下载：{os.path.basename(path)}")
+        text = "更新包已下载（已改用直连）" if self._fallback else "更新包已下载"
+        self._close_toast(text=text)
 
     def _on_download_failed(self, message: str):
+        self.check_btn.setEnabled(True)
+        self.check_btn.setText(f"重新下载 {self._info.version}" if self._info else "检查更新")
+        # 失败也要收掉「正在下载」，否则浮层会一直停在下载中
+        self._close_toast()
         self._notice("error", "下载失败", message, 10000)

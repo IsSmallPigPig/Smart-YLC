@@ -349,6 +349,8 @@ class ProgressToast(QWidget):
         self._title = title
         self._done = 0
         self._total = 0
+        self._indeterminate = False
+        self._phase = 0.0
         self._on_close = on_close
         self.setFixedSize(self.CARD_W + self.PAD * 2, self.CARD_H + self.PAD * 2)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
@@ -381,6 +383,11 @@ class ProgressToast(QWidget):
         self._close_timer.setSingleShot(True)
         self._close_timer.timeout.connect(self.close)
 
+        # 总量未知时进度线改成来回扫的一段（检查更新这种没有百分比的活儿）
+        self._marquee = QTimer(self)
+        self._marquee.setInterval(16)
+        self._marquee.timeout.connect(self._advance_marquee)
+
         qconfig.themeChanged.connect(lambda *_: self.update())
         if parent is not None:
             parent.installEventFilter(self)
@@ -388,16 +395,39 @@ class ProgressToast(QWidget):
 
     # ---------- 进度 ----------
 
-    def set_progress(self, done: int, total: int):
+    def set_progress(self, done: int, total: int, text: str | None = None):
+        """确定总量：done/total 之外可以给一句自定文案（如「正在下载 42%」）。"""
+        self._indeterminate = False
+        self._marquee.stop()
         self._done, self._total = done, max(0, total)
         pct = int(min(done, self._total) / self._total * 100) if self._total else 0
-        self._label.setText(f"{self._title} {done}/{self._total}（{pct}%）" if self._total
-                            else self._title)
+        if text is not None:
+            self._label.setText(text)
+        else:
+            self._label.setText(f"{self._title} {done}/{self._total}（{pct}%）" if self._total
+                                else self._title)
         self.update()
 
-    def finish(self, hold_ms: int = 800):
+    def set_indeterminate(self, text: str | None = None):
+        """总量未知：进度线画成一段来回扫的光条，表示还在跑。"""
+        self._indeterminate = True
+        self._total = self._done = 0
+        self._phase = 0.0
+        self._label.setText(text or self._title)
+        self._marquee.start()
+        self.update()
+
+    def _advance_marquee(self):
+        self._phase = (self._phase + 0.008) % 1.0
+        self.update()
+
+    def finish(self, hold_ms: int = 800, text: str | None = None):
         """补满并停留一小会儿再关，让「已完成」有个被看见的瞬间。"""
-        if self._total:
+        self._marquee.stop()
+        self._indeterminate = False
+        if text:
+            self._label.setText(text)
+        elif self._total:
             self._label.setText(f"{self._title}（100%）")
         self._done = self._total
         self.update()
@@ -436,6 +466,7 @@ class ProgressToast(QWidget):
         parent = self.parentWidget()
         if parent is not None:
             parent.removeEventFilter(self)
+        self._marquee.stop()
         self.closed.emit()
         super().closeEvent(e)
 
@@ -458,7 +489,15 @@ class ProgressToast(QWidget):
         painter.setBrush(QColor(255, 255, 255, 30) if dark else QColor(0, 0, 0, 24))
         painter.drawRoundedRect(track, 1.5, 1.5)
 
-        if self._total:
+        if self._indeterminate:
+            span = track.width() * 0.34
+            x = track.left() - span + (track.width() + span) * self._phase
+            painter.save()
+            painter.setClipRect(track)
+            painter.setBrush(QColor(P.BRAND))
+            painter.drawRoundedRect(QRectF(x, track.top(), span, track.height()), 1.5, 1.5)
+            painter.restore()
+        elif self._total:
             ratio = min(1.0, self._done / self._total)
             if ratio > 0:
                 fill = QRectF(track)
