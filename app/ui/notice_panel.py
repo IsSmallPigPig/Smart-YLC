@@ -2,16 +2,18 @@
 
 对应「不重复弹窗、公告面板要稳」：
 - 空清单时整块隐藏，正常情况不出现在界面上；
-- 默认折叠，只留一行「N 项待处理」，不占地方；
-- 每条问题是一张错误样式的卡片（背景取 InfoBar 的错误态配色，无圆点）；
+- **整块是一张折叠卡片**：标题行与各条问题同属一张卡，行与行之间只有一条分隔线，
+  不再每条各画一张卡片（那样看着像一堆碎片）；
+- 卡片底色是半透明的，mica / 毛玻璃下能透出窗口背景；
+- 展开收起带高度动画，不是一下子弹开；
 - 每条按 key 复用行控件，只改文字与按钮，不整块清空重建——展开/切页/刷新都不会闪。
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import QEasingCurve, Qt, QTimer, QVariantAnimation
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
@@ -27,33 +29,48 @@ from app.services.notices import LEVEL_ISSUE, Notice
 from app.ui.page import chevron_icon, note_label, set_tip, theme_font
 
 HEADER_H = 48
-RADIUS = 8
-# 与 qfluentwidgets InfoBar 的错误态背景一致（实测取样）
-ERROR_BG_DARK = "#442726"
-ERROR_BG_LIGHT = "#fde7e9"
+RADIUS = 10
+EXPAND_MS = 180
+PAD_X = 16        # 行内左右边距：标题与卡片边缘、按钮与右边缘都按这个对齐
+ROW_PAD_Y = 10
 
 
-def _error_bg() -> QColor:
-    return QColor(ERROR_BG_DARK if isDarkTheme() else ERROR_BG_LIGHT)
+def _card_bg() -> QColor:
+    """卡片底：半透明，让 mica / 毛玻璃透上来。"""
+    return QColor(255, 255, 255, 20) if isDarkTheme() else QColor(255, 255, 255, 170)
+
+
+def _card_border() -> QColor:
+    return QColor(255, 255, 255, 34) if isDarkTheme() else QColor(0, 0, 0, 20)
+
+
+def _divider() -> QColor:
+    return QColor(255, 255, 255, 26) if isDarkTheme() else QColor(0, 0, 0, 18)
+
+
+def _title_color() -> QColor:
+    """错误态标题色：与 InfoBar 的 ERROR 文字同色系，不再是整块红底。"""
+    return QColor("#FF99A4") if isDarkTheme() else QColor("#C42B1C")
 
 
 class _NoticeRow(QWidget):
-    """一条问题：错误样式卡片（标题 + 具体原因 + 右侧处理入口），无圆点。"""
+    """一条问题：标题 + 具体原因 + 右侧处理入口。行本身不画卡片，只在底部画分隔线。"""
 
     def __init__(self, notice: Notice, on_action, parent=None):
         super().__init__(parent)
         self._notice = notice
         self._on_action = on_action
+        self._last = False
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 10, 10, 10)
+        lay.setContentsMargins(PAD_X, ROW_PAD_Y, PAD_X - 10, ROW_PAD_Y)
         lay.setSpacing(12)
 
         text = QVBoxLayout()
         text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(2)
+        text.setSpacing(3)
         self.title_lbl = theme_font(BodyLabel(notice.title), 13, int(QFont.Weight.DemiBold))
         text.addWidget(self.title_lbl)
         self.detail_lbl = note_label(notice.detail)
@@ -74,6 +91,7 @@ class _NoticeRow(QWidget):
     def apply(self, notice: Notice):
         self._notice = notice
         self.title_lbl.setText(notice.title)
+        self.title_lbl.setTextColor(_title_color(), _title_color())
         self.detail_lbl.setText(notice.detail)
         self.detail_lbl.setVisible(bool(notice.detail))
         has_action = bool(notice.action and notice.action_text)
@@ -81,16 +99,35 @@ class _NoticeRow(QWidget):
         if has_action:
             self.action_btn.setText(notice.action_text)
 
+    def set_last(self, last: bool):
+        """最后一条不画分隔线，卡片底边就是它的收口。"""
+        if self._last != last:
+            self._last = last
+            self.update()
+
+    def drop(self):
+        """从面板里移除：先把焦点挪走，再交给 Qt 延迟销毁。
+
+        不 setParent(None)——那会让它短暂变成顶层控件，碰巧握着焦点时
+        后续的 clearFocus 会踩空。"""
+        focus = QApplication.focusWidget()
+        if focus is not None and (focus is self or self.isAncestorOf(focus)):
+            focus.clearFocus()
+        self.hide()
+        self.deleteLater()
+
     def paintEvent(self, _e):
+        if self._last:
+            return
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(_error_bg())
-        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), RADIUS, RADIUS)
+        p.setPen(QPen(_divider(), 1))
+        y = self.height() - 1
+        p.drawLine(PAD_X, y, self.width() - PAD_X, y)
 
 
 class NoticePanel(QWidget):
-    """问题公告：标题行 + 可展开的问题列表。空清单时隐藏，默认折叠。"""
+    """问题公告：一张折叠卡片，标题行 + 可展开的问题列表。空清单时隐藏。"""
 
     def __init__(self, on_action=None, parent=None):
         super().__init__(parent)
@@ -108,7 +145,7 @@ class NoticePanel(QWidget):
         self._header.setFixedHeight(HEADER_H)
         self._header.setCursor(Qt.CursorShape.PointingHandCursor)
         hl = QHBoxLayout(self._header)
-        hl.setContentsMargins(14, 0, 10, 0)
+        hl.setContentsMargins(PAD_X, 0, PAD_X - 10, 0)
         hl.setSpacing(10)
         self._icon = IconWidget(FIF.INFO, self._header)
         self._icon.setFixedSize(18, 18)
@@ -126,13 +163,20 @@ class NoticePanel(QWidget):
         self._body = QWidget(self)
         self._body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._list = QVBoxLayout(self._body)
-        self._list.setContentsMargins(0, 0, 0, 8)
-        self._list.setSpacing(6)
+        self._list.setContentsMargins(0, 0, 0, 6)
+        self._list.setSpacing(0)
         outer.addWidget(self._body)
         self._body.setVisible(False)
 
+        # 高度动画：展开/收起是滑出来的，不是一下弹开
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(EXPAND_MS)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.valueChanged.connect(lambda v: self.setFixedHeight(int(v)))
+        self._anim.finished.connect(self._after_anim)
+
         self.setVisible(False)
-        qconfig.themeChanged.connect(lambda *_: self.update())
+        qconfig.themeChanged.connect(self._restyle)
 
     # ---------- 内容 ----------
 
@@ -142,8 +186,8 @@ class NoticePanel(QWidget):
         keys = {n.key for n in issues}
         for key in [k for k in self._rows if k not in keys]:
             row = self._rows.pop(key)
-            row.setParent(None)
-            row.deleteLater()
+            self._list.removeWidget(row)
+            row.drop()
         for notice in issues:
             row = self._rows.get(notice.key)
             if row is None:
@@ -152,8 +196,13 @@ class NoticePanel(QWidget):
                 self._list.addWidget(row)
             else:
                 row.apply(notice)
+        for i, row in enumerate(self._rows.values()):
+            row.set_last(i == len(self._rows) - 1)
+
         self._notices = issues
         if not issues:
+            self._anim.stop()
+            self._body.setVisible(False)
             self.setVisible(False)
             return
         self._summary.setText(f"{len(issues)} 项待处理")
@@ -165,30 +214,56 @@ class NoticePanel(QWidget):
     def _toggle(self):
         self._expanded = not self._expanded
         self._toggle_btn.setIcon(chevron_icon(self._expanded))
-        self._body.setVisible(self._expanded)
-        self._sync_height()
+        if self._expanded:
+            self._body.setVisible(True)
+        self._sync_height(animate=True)
 
-    def _sync_height(self):
-        # 只定面板高度；不要 adjustSize()，那会把 _body 强制缩成 sizeHint 的窄宽度
-        if not self._expanded:
-            self.setFixedHeight(HEADER_H)
+    def _sync_height(self, animate: bool = False):
+        """折叠时只到标题行；展开时到「标题 + 全部行」。
+
+        不要 adjustSize()：那会把 _body 压成 sizeHint 的窄宽度，行就只剩半截。
+        """
+        target = HEADER_H
+        if self._expanded:
+            target = HEADER_H + max(0, self._body.sizeHint().height())
+        if not animate:
+            self._anim.stop()
+            self.setFixedHeight(target)
             return
-        self.setFixedHeight(HEADER_H + max(0, self._body.sizeHint().height()))
+        self._anim.stop()
+        self._anim.setStartValue(max(self.height(), HEADER_H))
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    def _restyle(self):
+        """主题切换后行标题的错误色要跟着变（颜色是按当前主题算的）。"""
+        for row in self._rows.values():
+            row.apply(row._notice)
+        self.update()
+
+    def _after_anim(self):
+        """收起动画走完再把 body 藏掉，展开过程中它必须可见。"""
+        if not self._expanded:
+            self._body.setVisible(False)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self._expanded:
+        if self._expanded and self._anim.state() != QVariantAnimation.State.Running:
             self._sync_height()
 
     # ---------- 外观 ----------
 
     def paintEvent(self, _e):
+        """整块卡片：圆角 + 半透明底 + 细边框，行与行之间只靠分隔线区隔。"""
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect().adjusted(0, 0, -1, -1)
-        dark = isDarkTheme()
-        bg = QColor(45, 45, 48) if dark else QColor(252, 252, 253)
-        border = QColor(255, 255, 255, 18) if dark else QColor(0, 0, 0, 16)
-        p.setPen(border)
-        p.setBrush(bg)
+        p.setPen(QPen(_card_border(), 1))
+        p.setBrush(_card_bg())
         p.drawRoundedRect(r, RADIUS, RADIUS)
+
+        # 标题行与问题列表之间也有一条分隔线
+        if self._expanded and self._rows:
+            p.setPen(QPen(_divider(), 1))
+            y = HEADER_H
+            p.drawLine(PAD_X, y, self.width() - PAD_X, y)

@@ -404,7 +404,6 @@ class UploadPage(FluentPage):
     def refresh(self):
         directory = self._workspace_dir()
         if not directory:
-            self.header.set_desc("")  # 空态写在正文里，标题下不再重复一遍
             self.statuses = []
             self._empty_text = "还没有选择工作目录"
             self.summary.setText("")
@@ -412,12 +411,12 @@ class UploadPage(FluentPage):
             self._rebuild_branches()
             return
         files = self._gather(directory)
-        self.header.set_desc(
-            f"正在监听 {os.path.basename(directory) or directory}，{len(files)} 份待处理")
+        # 头图下的说明常驻；「在监听哪个目录」属于状态，放摘要行，不占说明位
+        watching = f"正在监听 {os.path.basename(directory) or directory}，{len(files)} 份待处理"
         if not files:
             self.statuses = []
             self._empty_text = "工作目录里还没有 PDF"
-            self.summary.setText("")
+            self.summary.setText(watching)
             self.upload_btn.setEnabled(False)
             self._rebuild_branches()
             return
