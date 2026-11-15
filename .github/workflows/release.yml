@@ -96,6 +96,8 @@ jobs:
           DMGROOT="dist/dmgroot"
           rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
           cp -R "dist/$APP_DISPLAY_NAME.app" "$DMGROOT/"
+          # GPLv3 要求随二进制一并分发许可证全文
+          cp LICENSE "$DMGROOT/许可证.txt"
           # 卷图标：不设的话挂载后的磁盘显示成通用磁盘图标，看不到应用 LOGO
           cp "build/$APP_NAME.icns" "$DMGROOT/.VolumeIcon.icns"
           RW="dist/$APP_NAME-rw.dmg"
@@ -156,7 +158,7 @@ jobs:
           Get-Item $target | Select-Object Name, Length
           # 资源名不能带中文（GitHub 会把中文剥掉，只剩 "-Windows-x64.exe"），
           # 所以对外用 ASCII 的 zip，解压出来的程序仍叫「智慧团委.exe」
-          python -c "import os, zipfile; d='dist'; n=os.environ['APP_DISPLAY_NAME']; z=zipfile.ZipFile(os.path.join(d, os.environ['APP_NAME']+'-Windows-x64.zip'), 'w', zipfile.ZIP_DEFLATED); z.write(os.path.join(d, n+'.exe'), arcname=n+'.exe'); z.close()"
+          python -c "import os, zipfile; d='dist'; n=os.environ['APP_DISPLAY_NAME']; z=zipfile.ZipFile(os.path.join(d, os.environ['APP_NAME']+'-Windows-x64.zip'), 'w', zipfile.ZIP_DEFLATED); z.write(os.path.join(d, n+'.exe'), arcname=n+'.exe'); z.write('LICENSE', arcname='LICENSE-GPLv3.txt'); z.close()"
           Get-Item "dist/${env:APP_NAME}-Windows-x64.zip" | Select-Object Name, Length
 
       - uses: actions/upload-artifact@v6
