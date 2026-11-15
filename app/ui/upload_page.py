@@ -1,11 +1,14 @@
-"""上传档案：工作区取件 → 自动检查命名与页数 → 按支部预组织 → 压缩并逐支部提交。
+"""上传档案：来源目录取件 → 自动检查命名与页数 → 按支部预组织 → 压缩并逐支部提交。
 
 流程：
-  1. 选择工作目录：目录里的 PDF 与待上传列表合并去重
+  1. 来源目录：可以把多个文件夹拖到窗口里（也可以「选择目录」逐个加），子文件夹
+     一并扫描；文件名解析不出「姓名+手机号」的 PDF 判定为无关文件，列在目录卡片里
+     但不进上传计划
   2. 文档检查：命名能解析但格式不标准的直接改成标准名；页数不符、命名解析
      不出、路由不到支部的标为异常，上传前拦下
-  3. 结果用状态列表呈现，并按团支部收进折叠卡片，未通过的单列一组
-  4. 点「开始上传」：先把超限文件压到目标大小，再逐个支部登录提交、自动审核
+  3. 重复：同一团员有多份档案时每组只留一份，其余标「重复」并排除
+  4. 结果按来源目录收进一张折叠卡片，并按团支部再收一层，未通过的单列一组
+  5. 点「开始上传」：先把超限文件压到目标大小，再逐个支部登录提交、自动审核
 """
 
 from __future__ import annotations
@@ -14,9 +17,9 @@ import os
 import shutil
 import tempfile
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QPainter
-from PySide6.QtWidgets import QFileDialog, QVBoxLayout, QWidget
+from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     FluentIcon as FIF,
@@ -25,19 +28,23 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     ToolButton,
+    isDarkTheme,
 )
 
 from app.constants import LIMITS, MB
 from app.domain.account_health import excluded_summary, split_accounts
+from app.domain.archive_scan import FolderScan, relative_to, scan_folders
 from app.domain.naming import analyze_file_name
 from app.domain.upload_inspect import (archived_index, group_by_branch, inspect,
                                        member_index,
                                        split_branch_label, summarize)
 from app.domain.upload_routing import upload_skip_reason
 from app.services import store
-from app.services.workspace import load_pending, remove_pending
+from app.services.workspace import (load_pending, load_workspace_dirs,
+                                    remove_pending, save_workspace_dirs)
+from app.ui import palette as P
 from app.ui.page import (BatchedBuild, CollapsibleCard, FluentPage, PageBanner,
-                         PageHeader, note_label, set_tip)
+                         PageHeader, note_label, section_title, set_tip)
 from app.ui.widgets import StatusList
 
 # 页面背景色（与首页 LoadingOverlay 同源），用于加载遮罩铺底
@@ -66,20 +73,131 @@ class _BusyOverlay(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), page_bg_color())
 
+
+class _DropZone(QWidget):
+    """空态拖放区：虚线框 + 两行说明，点一下等同「选择目录」。"""
+
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(112)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.setSpacing(4)
+        title = note_label("把文件夹拖到这里")
+        f = title.font()
+        f.setPixelSize(14)
+        f.setWeight(QFont.Weight.DemiBold)
+        title.setFont(f)
+        lay.addWidget(title, 0, Qt.AlignmentFlag.AlignHCenter)
+        hint = note_label("可以一次拖多个；子文件夹会一并扫描，点这里也能选")
+        hint.setWordWrap(False)   # 居中单行，折行会把这个框撑成两截
+        lay.addWidget(hint, 0, Qt.AlignmentFlag.AlignHCenter)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(P.MUTED))
+        pen.setWidth(1)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setColor(QColor(154, 160, 172) if not isDarkTheme() else QColor(96, 102, 112))
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 10, 10)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+
+
+class _DropOverlay(QWidget):
+    """拖动文件夹经过窗口时盖在内容区的提示层：虚线框 + 一句话说明松手会发生什么。
+
+    文字直接画在 paintEvent 里（不用子控件）：这一层只活几百毫秒，
+    交给布局反而会因为它自己的尺寸变化把文案裁掉半行。"""
+
+    TITLE = "松开以添加这些文件夹"
+    HINT = "子文件夹一并扫描；已在列表里的目录会自动跳过"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+        box = self.rect().adjusted(10, 10, -10, -10)
+        p.setPen(Qt.PenStyle.NoPen)
+        # 不透明页面底色：底下那层空态提示的字会从半透明里透出来，两层字叠在一起
+        p.setBrush(page_bg_color())
+        p.drawRoundedRect(box, 14, 14)
+
+        pen = QPen(QColor(P.BRAND))
+        pen.setWidth(2)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(box.adjusted(2, 2, -2, -2), 14, 14)
+
+        ink = QColor("#12212e") if not isDarkTheme() else QColor("#f2f2f2")
+        dim = QColor("#33495e") if not isDarkTheme() else QColor("#c8c8c8")
+
+        title_font = QFont(self.font())
+        title_font.setPixelSize(15)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        hint_font = QFont(self.font())
+        hint_font.setPixelSize(12)
+
+        # 标题底边、说明顶边各自贴住中线留 4px：两行才不会挤到一起去
+        title_rect = QRectF(box.left(), box.top(), box.width(), box.height() / 2 - 4)
+        p.setFont(title_font)
+        p.setPen(ink)
+        p.drawText(title_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                   self.TITLE)
+
+        hint_rect = QRectF(box.left(), box.center().y() + 4, box.width(), 40)
+        p.setFont(hint_font)
+        p.setPen(dim)
+        p.drawText(hint_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                   self.HINT)
+
+
+class _FolderCard(CollapsibleCard):
+    """来源目录卡片：展开时才铺文件行（几十个目录一次全建会拖慢首屏）。"""
+
+    def __init__(self, *args, on_expand=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._on_expand = on_expand
+
+    def set_expanded(self, value, animate: bool = True):
+        super().set_expanded(value, animate)
+        if value and self._on_expand is not None:
+            self._on_expand()
+
+
 # 站点单文件上限 10MB，统一压到 9.5MB 留余量；不再提供可选项
 COMPRESS_TARGET = LIMITS["PDF_DEFAULT_TARGET_BYTES"]
 MAX_BATCH = LIMITS["MAX_UPLOAD_PER_BATCH"]
 RESULT_TONE = {"成功": "ok", "跳过": "warn", "失败": "error"}
 
 
-class InspectWorker(QThread):
-    done = Signal(object)
+class ScanWorker(QThread):
+    """后台扫描：递归收 PDF → 按命名过滤 → 逐份检查（含重复团员）。
+
+    走子目录、读页数、改名都可能慢（几百份档案），放主线程会把界面顶住。"""
+
+    done = Signal(object, object)   # scans, statuses
     failed = Signal(str)
 
-    def __init__(self, files, expected_pages: int, accounts: list[dict], roster,
-                 members: dict | None = None, archived: dict | None = None):
+    def __init__(self, dirs: list[str], expected_pages: int, accounts: list[dict],
+                 roster, members: dict | None = None, archived: dict | None = None):
         super().__init__()
-        self.files = files
+        self.dirs = list(dirs)
         self.expected_pages = expected_pages
         self.accounts = accounts
         self.roster = roster
@@ -88,9 +206,22 @@ class InspectWorker(QThread):
 
     def run(self):
         try:
-            self.done.emit(inspect(self.files, self.expected_pages,
-                                   self.accounts, self.roster,
-                                   members=self.members, archived=self.archived))
+            scans = scan_folders(self.dirs)
+            roots: dict[str, str] = {}
+            files: list[str] = []
+            for scan in scans:
+                for path in scan.files:
+                    roots[path] = scan.root
+                    files.append(path)
+            # 设置页「工作区」自动处理过的散件也一并算上（路径不在目录里的那种）
+            for entry in load_pending():
+                path = entry.get("path", "")
+                if path and os.path.isfile(path) and path not in roots:
+                    files.append(path)
+            statuses = inspect(files, self.expected_pages, self.accounts, self.roster,
+                               members=self.members, archived=self.archived,
+                               roots=roots)
+            self.done.emit(scans, statuses)
         except Exception as e:  # 整体失败要显式报出来，不静默留空列表
             self.failed.emit(str(e))
 
@@ -259,12 +390,18 @@ class UploadPage(FluentPage):
         super().__init__("page-upload", parent)
         self.window_ref = window
         self.worker: UploadWorker | None = None
-        self.inspector: InspectWorker | None = None
+        self.inspector: ScanWorker | None = None
         self.statuses = []
-        self._branch_rows: dict[str, tuple[StatusList, int]] = {}
+        # 一份档案可能在「来源目录」卡片和「按支部」卡片里各出现一次，
+        # 上传进度要同时更新两处，所以每个路径记一组行号
+        self._branch_rows: dict[str, list[tuple[StatusList, int]]] = {}
         # 支部卡片分批建：档案多时一次性建几十个卡片会卡住界面（200 份约 580ms）
         self._branch_builder = BatchedBuild(self, batch=2)
         self._busy: _BusyOverlay | None = None  # 加载遮罩（渲染/检查期间盖住内容，避免闪屏）
+        self._drop_overlay: _DropOverlay | None = None
+        self._dirs: list[str] = []          # 来源目录（配置文件里的 workspaceDirs）
+        self._scans: list[FolderScan] = []  # 每个来源目录的扫描结果
+        self._folder_cards: dict[str, CollapsibleCard] = {}
 
         lay = self.vBoxLayout
         # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐
@@ -277,10 +414,15 @@ class UploadPage(FluentPage):
         self.header.set_image_path(store.load().get("headerImage", ""))
         self._place_banner()
 
+        # 窗口任意位置都能接住拖进来的文件夹（拖动时盖一层虚线提示）
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+
         self.pick_btn = PushButton(FIF.FOLDER, "选择目录")
-        self.pick_btn.clicked.connect(self._pick_dir)
+        self.pick_btn.clicked.connect(self._pick_dirs)
+        set_tip(self.pick_btn, "添加来源文件夹；可以反复点选，也可以直接把文件夹拖进窗口")
         self.rescan_btn = PushButton(FIF.SYNC, "刷新目录")
-        set_tip(self.rescan_btn, "重新检查工作目录")
+        set_tip(self.rescan_btn, "重新扫描所有来源目录（含子文件夹）")
         self.rescan_btn.clicked.connect(self.refresh)
         self.upload_btn = PrimaryPushButton(FIF.CLOUD, "开始上传")
         self.upload_btn.setEnabled(False)
@@ -306,9 +448,31 @@ class UploadPage(FluentPage):
         self.summary = note_label("")
         lay.addWidget(self.summary)
 
-        # 上方不再放不按支部分组的扁平列表：文件只按团支部收进下方折叠卡片，
-        # 单一入口避免「同一份档案上面一张卡、下面又一张卡」的重复。
-        self._empty_text = "工作目录里还没有 PDF"
+        # ---------- 来源目录 ----------
+        # 每个来源一张折叠卡片：标题是文件夹名、灰字是完整路径，展开才列文件。
+        # 目录卡片回答「这批档案是从哪些文件夹来的、每个目录里有多少、忽略了什么」，
+        # 下面的支部卡片回答「每份档案去哪个支部」。收起状态只占一行，不抢视线。
+        sources_head = QHBoxLayout()
+        sources_head.setContentsMargins(0, 8, 0, 0)
+        sources_head.setSpacing(8)
+        self.sources_title = section_title("来源目录")
+        sources_head.addWidget(self.sources_title)
+        self.sources_hint = note_label("")
+        sources_head.addWidget(self.sources_hint, 0, Qt.AlignmentFlag.AlignBottom)
+        sources_head.addStretch(1)
+        lay.addLayout(sources_head)
+
+        self.folder_box = QWidget()
+        self.folder_lay = QVBoxLayout(self.folder_box)
+        self.folder_lay.setContentsMargins(0, 0, 0, 0)
+        self.folder_lay.setSpacing(10)
+        lay.addWidget(self.folder_box)
+
+        # ---------- 按支部 ----------
+        self.branch_title = section_title("待上传档案")
+        lay.addSpacing(6)
+        lay.addWidget(self.branch_title)
+        self._empty_text = "还没有添加来源目录"
 
         self.branch_box = QWidget()
         self.branch_lay = QVBoxLayout(self.branch_box)
@@ -323,6 +487,7 @@ class UploadPage(FluentPage):
         super().resizeEvent(e)
         self._place_banner()
         self._place_busy()
+        self._place_drop_overlay()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -361,10 +526,6 @@ class UploadPage(FluentPage):
                                max(0, self.viewport().height() - top))
         self._busy.raise_()
 
-    def _workspace_dir(self) -> str:
-        path = str(store.load().get("workspaceDir") or "").strip()
-        return path if path and os.path.isdir(path) else ""
-
     def _expected_pages(self) -> int:
         return self.window_ref.settings_page.expected_pages()
 
@@ -374,65 +535,173 @@ class UploadPage(FluentPage):
     def _roster(self):
         return self.window_ref.settings_page.roster
 
-    def _gather(self, directory: str) -> list[str]:
-        files = [os.path.join(directory, name) for name in sorted(os.listdir(directory))
-                 if name.lower().endswith(".pdf")
-                 and os.path.isfile(os.path.join(directory, name))]
-        for entry in load_pending():
-            path = entry.get("path", "")
-            if path and os.path.isfile(path) and path not in files:
-                files.append(path)
-        return files
+    # ---------- 来源目录 ----------
 
-    # ---------- 检查 ----------
+    def _pick_dirs(self):
+        """选文件夹加进来源列表；系统面板支持多选时一次能加多个。"""
+        dlg = QFileDialog(self, "选择来源文件夹（可多选）")
+        dlg.setFileMode(QFileDialog.FileMode.Directory)
+        dlg.setOption(QFileDialog.Option.ShowDirsOnly, True)
+        if dlg.exec():
+            self.add_dirs(dlg.selectedFiles())
 
-    def _pick_dir(self):
-        directory = QFileDialog.getExistingDirectory(self, "选择工作目录")
-        if not directory:
-            return
-        store.update(lambda cfg: cfg.__setitem__("workspaceDir", directory))
-        settings = self.window_ref.settings_page
-        settings.ws_edit.setText(directory)
-        settings._setup_watcher(directory)
+    def add_dirs(self, paths: list[str]) -> int:
+        """把文件夹加进来源列表并重扫；返回真正新增的个数。
+
+        已在列表里的、以及位于已添加目录之下的都跳过——重复添加只会让同一份
+        档案在列表里出现两次，重复团员的提示就没法看了。"""
+        current = list(self._dirs) or load_workspace_dirs()
+        added, skipped = [], 0
+        for raw in paths:
+            path = os.path.abspath(str(raw or "").strip())
+            if not path or not os.path.isdir(path):
+                continue
+            covered = any(path == d or path.startswith(d.rstrip(os.sep) + os.sep)
+                          for d in current + added)
+            if covered:
+                skipped += 1
+                continue
+            added.append(path)
+
+        if not added:
+            if skipped:
+                InfoBar.info("没有添加新目录",
+                             "选中的文件夹已在列表里，或被已添加的目录包含",
+                             duration=4000, parent=self)
+            return 0
+
+        self._dirs = save_workspace_dirs(current + added)
+        # 设置页只有「一个目录」的输入框，这里跟着同步，两处不打架
+        settings = getattr(self.window_ref, "settings_page", None)
+        if settings is not None and hasattr(settings, "_setup_watcher"):
+            settings.ws_edit.setText(self._dirs[0] if self._dirs else "")
+            settings._setup_watcher(self._dirs)
+        if skipped:
+            InfoBar.info("已跳过重复目录", f"新增 {len(added)} 个，跳过 {skipped} 个",
+                         duration=4000, parent=self)
+        self.refresh()
+        return len(added)
+
+    def remove_dir(self, path: str):
+        """从列表移除一个来源目录；磁盘上的文件一个都不动。"""
+        self._dirs = save_workspace_dirs([d for d in self._dirs if d != path])
         self.refresh()
 
+    # 拖放：窗口任意位置都能接住文件夹（也接住 PDF，按它所在的文件夹算）
+
+    @staticmethod
+    def _drop_payload(mime) -> tuple[list[str], list[str]]:
+        dirs: list[str] = []
+        parents: list[str] = []
+        if not mime.hasUrls():
+            return dirs, parents
+        for url in mime.urls():
+            path = url.toLocalFile()
+            if not path:
+                continue
+            if os.path.isdir(path):
+                dirs.append(path)
+            elif path.lower().endswith(".pdf") and os.path.isfile(path):
+                parents.append(os.path.dirname(path))
+        return dirs, parents
+
+    def _has_drop(self, mime) -> bool:
+        dirs, parents = self._drop_payload(mime)
+        return bool(dirs or parents)
+
+    def dragEnterEvent(self, e):
+        if self._has_drop(e.mimeData()):
+            e.acceptProposedAction()
+            self._show_drop_hint(True)
+        else:
+            e.ignore()
+
+    def dragMoveEvent(self, e):
+        if self._has_drop(e.mimeData()):
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
+    def dragLeaveEvent(self, e):
+        self._show_drop_hint(False)
+        super().dragLeaveEvent(e)
+
+    def dropEvent(self, e):
+        self._show_drop_hint(False)
+        dirs, parents = self._drop_payload(e.mimeData())
+        if not dirs and not parents:
+            e.ignore()
+            return
+        e.acceptProposedAction()
+        self.add_dirs(dirs + parents)
+
+    def _show_drop_hint(self, active: bool):
+        if active:
+            if self._drop_overlay is None:
+                self._drop_overlay = _DropOverlay(self)
+            self._place_drop_overlay()
+            self._drop_overlay.show()
+            self._drop_overlay.raise_()
+        elif self._drop_overlay is not None:
+            self._drop_overlay.hide()
+
+    def _place_drop_overlay(self):
+        """只盖内容区：头图（以及上面的标题与按钮）保持在提示层之外。"""
+        if self._drop_overlay is None:
+            return
+        top = PageBanner.HEIGHT
+        self._drop_overlay.setGeometry(0, top, self.viewport().width(),
+                                       max(0, self.viewport().height() - top))
+        self._drop_overlay.raise_()
+
+    # ---------- 扫描 ----------
+
     def refresh(self):
-        directory = self._workspace_dir()
+        dirs = load_workspace_dirs()
+        self._dirs = dirs
         self._clear_inspect_error()
-        if not directory:
+        if not dirs:
+            self._scans = []
             self.statuses = []
-            self._empty_text = "还没有选择工作目录"
+            # 空态只说一遍：虚线框里已经写了「把文件夹拖到这里」，摘要行与分区标题都收起来
+            self._empty_text = ""
             self.summary.setText("")
+            self.summary.setVisible(False)   # 空摘要行会撑出一段没用的留白
+            self.sources_hint.setText("")
+            self.branch_title.setVisible(False)
             self.upload_btn.setEnabled(False)
+            self._rebuild_sources()
             self._rebuild_branches()
             return
-        files = self._gather(directory)
-        # 头图下的说明常驻；「在监听哪个目录」属于状态，放摘要行，不占说明位
-        watching = f"正在监听 {os.path.basename(directory) or directory}，{len(files)} 份待处理"
-        if not files:
-            self.statuses = []
-            self._empty_text = "工作目录里还没有 PDF"
-            self.summary.setText(watching)
-            self.upload_btn.setEnabled(False)
-            self._rebuild_branches()
-            return
+
+        self.branch_title.setVisible(True)
+        self.summary.setVisible(True)
+        names = "、".join(os.path.basename(d.rstrip(os.sep)) or d for d in dirs[:3])
+        more = f" 等 {len(dirs)} 个目录" if len(dirs) > 3 else ""
+        self.sources_hint.setText(f"{names}{more}")
         self.rescan_btn.setEnabled(False)
-        self.summary.setText(f"正在检查 {len(files)} 份档案…")
-        self._show_busy("正在检查档案…")
+        self.summary.setText("正在扫描来源目录…")
+        self._show_busy("正在扫描与检查档案…")
         cached_members = (store.load().get("memberCache") or {})
-        self.inspector = InspectWorker(files, self._expected_pages(),
-                                       self._accounts(), self._roster(),
-                                       member_index(cached_members),
-                                       archived_index(cached_members))
-        self.inspector.done.connect(self._on_inspected)
-        self.inspector.failed.connect(self._on_inspect_failed)
-        self.inspector.start()
+        worker = ScanWorker(dirs, self._expected_pages(),
+                            self._accounts(), self._roster(),
+                            member_index(cached_members),
+                            archived_index(cached_members))
+        self.inspector = worker
+        worker.done.connect(
+            lambda scans, statuses, w=worker: self._on_inspected(w, scans, statuses))
+        worker.failed.connect(lambda msg, w=worker: self._on_inspect_failed(w, msg))
+        worker.start()
 
-    def _on_inspected(self, statuses):
-        QTimer.singleShot(0, lambda: self._apply_statuses(list(statuses)))
+    def _on_inspected(self, worker, scans, statuses):
+        if worker is not self.inspector:
+            return      # 连点刷新时，先发的那次晚回来，不能盖掉新结果
+        QTimer.singleShot(0, lambda: self._apply_statuses(list(scans), list(statuses)))
 
-    def _on_inspect_failed(self, message: str):
+    def _on_inspect_failed(self, worker, message: str):
         """检查失败不弹一次就没了：这类错误会一直存在，收进公告等它被修好。"""
+        if worker is not self.inspector:
+            return
         self._hide_busy()
         self.rescan_btn.setEnabled(True)
         self.summary.setText("")
@@ -454,10 +723,14 @@ class UploadPage(FluentPage):
         if center is not None:
             center.remove("upload:inspect")
 
-    def _apply_statuses(self, statuses):
+    def _apply_statuses(self, scans, statuses):
         self.rescan_btn.setEnabled(True)
+        self._scans = scans
         self.statuses = statuses
         stats = summarize(statuses)
+        ignored = sum(len(scan.ignored) for scan in scans)
+        missing_dirs = [scan for scan in scans if scan.missing]
+
         parts = [f"正常 {stats['ok']}"]
         if stats["fixed"]:
             parts.append(f"已纠正 {stats['fixed']}")
@@ -465,14 +738,103 @@ class UploadPage(FluentPage):
             parts.append(f"已有档案 {stats['archive']}")
         if stats["missing"]:
             parts.append(f"缺团员 {stats['missing']}")
+        if stats["duplicate"]:
+            parts.append(f"重复 {stats['duplicate']}")
         parts.append(f"异常 {stats['error']}")
-        self.summary.setText(
-            f"共 {stats['total']} 份：" + "，".join(parts)
-            + f"，分 {stats['branches']} 个支部")
+        line = (f"共 {stats['total']} 份：" + "，".join(parts)
+                + f"，分 {stats['branches']} 个支部")
+        if ignored:
+            line += f"；另有 {ignored} 个 PDF 命名不是档案格式，已排除"
+        if missing_dirs:
+            line += f"；{len(missing_dirs)} 个目录已不存在"
+        self.summary.setText(line)
+
+        self._empty_text = "来源目录里还没有命名合规的档案"
         self.upload_btn.setEnabled(any(s.usable for s in statuses))
+        self._rebuild_sources()
         # 卡片建完再收起加载遮罩，避免中途露出半截内容导致闪屏
         self._rebuild_branches(on_done=self._hide_busy)
         self._set_missing_notice(stats["missing"])
+        self._set_duplicate_notice(stats["duplicate"])
+
+    # ---------- 来源目录卡片 ----------
+
+    def _rebuild_sources(self):
+        """按来源目录建折叠卡片：标题是文件夹名，灰字是完整路径。"""
+        while self.folder_lay.count():
+            item = self.folder_lay.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._folder_cards = {}
+
+        if not self._dirs:
+            zone = _DropZone(self.folder_box)
+            zone.clicked.connect(self._pick_dirs)
+            self.folder_lay.addWidget(zone)
+            self.sources_title.setText("来源目录")
+            return
+        self.sources_title.setText(f"来源目录（{len(self._dirs)}）")
+        for scan in self._scans or [FolderScan(root=d) for d in self._dirs]:
+            self._add_folder_card(scan)
+
+    def _add_folder_card(self, scan: FolderScan):
+        statuses = [s for s in self.statuses if s.root == scan.root]
+        if scan.missing:
+            tags = [("目录不存在", "orange")]
+        else:
+            tags = [(f"{len(statuses)} 份", "gray")]
+            if scan.ignored:
+                tags.append((f"忽略 {len(scan.ignored)}", "gray"))
+        card = _FolderCard(scan.name, expanded=False, tags=tags,
+                           parent=self.folder_box, desc=scan.root)
+        card._on_expand = lambda: self._fill_folder_card(card, scan)
+        if scan.root:
+            remove = ToolButton(FIF.DELETE)
+            set_tip(remove, "从这个列表移除（磁盘上的文件不动）")
+            remove.clicked.connect(lambda _=False, r=scan.root: self.remove_dir(r))
+            card.add_action(remove)
+        card.body_lay.addWidget(note_label("正在读取…"))
+        card.set_expanded(False, animate=False)
+        self.folder_lay.addWidget(card)
+        self._folder_cards[scan.root] = card
+
+    def _fill_folder_card(self, card, scan: FolderScan):
+        """第一次展开时才铺文件行：几十个目录一次全建会把首屏拖慢。"""
+        if getattr(card, "_filled", False):
+            return
+        card._filled = True
+        while card.body_lay.count():
+            item = card.body_lay.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        if scan.missing:
+            card.body_lay.addWidget(note_label(
+                "这个目录不在了：可能被移动、改名，或移动硬盘没插上。移除后重新添加即可。"))
+            return
+
+        statuses = [s for s in self.statuses if s.root == scan.root]
+        if statuses:
+            listing = StatusList()
+            listing.set_items([self._row_item(s) for s in statuses])
+            card.body_lay.addWidget(listing)
+            for index, status in enumerate(statuses):
+                self._branch_rows.setdefault(status.path, []).append((listing, index))
+        if scan.ignored:
+            card.body_lay.addWidget(note_label(
+                f"以下 {len(scan.ignored)} 个文件命名里没有「姓名+手机号」，"
+                "按与档案无关处理，不参与上传"))
+            ignored_list = StatusList()
+            ignored_list.set_items([
+                {"title": relative_to(scan.root, path),
+                 "note": "命名里没有姓名与手机号，已按无关文件排除",
+                 "tone": "muted", "status": "已忽略", "meta": []}
+                for path in scan.ignored])
+            card.body_lay.addWidget(ignored_list)
+        if not statuses and not scan.ignored:
+            card.body_lay.addWidget(note_label("这个目录（含子文件夹）里没有 PDF"))
 
     def _set_missing_notice(self, missing: int):
         """缺团员只进公告列表（不重复弹窗）；数量变 0 时移除。"""
@@ -490,6 +852,27 @@ class UploadPage(FluentPage):
             detail="这些档案的团员不在对应支部名单里，仍可上传；名单请到组织管理核对",
             action="org",
             action_text="去组织管理",
+            tone="warning",
+            silent=True,
+            scope="upload",
+        ))
+
+    def _set_duplicate_notice(self, count: int):
+        """重复档案只进公告列表：数量变 0 时移除。"""
+        center = getattr(self, "_notice_center", None)
+        if center is None:
+            return
+        if not count:
+            center.remove("upload:duplicate")
+            return
+        from app.services.notices import Notice
+
+        center.upsert(Notice(
+            key="upload:duplicate",
+            title=f"重复档案：{count} 份",
+            detail="同一团员有多份档案，每组已只保留一份；删掉多余的再点「刷新目录」",
+            action="",
+            action_text="",
             tone="warning",
             silent=True,
             scope="upload",
@@ -522,6 +905,10 @@ class UploadPage(FluentPage):
         meta = []
         if status.pages:
             meta.append(f"{status.pages} 页")
+        if status.root:
+            sub = os.path.dirname(relative_to(status.root, status.path))
+            if sub:
+                meta.append(sub)   # 子文件夹里的档案：标出它在哪一层
         note = status.problem
         if not note and status.renamed_from:
             note = f"原名 {status.renamed_from}，已自动改名"
@@ -564,7 +951,8 @@ class UploadPage(FluentPage):
         if not groups:
             empty = ("没有匹配的档案" if needle
                      else getattr(self, "_empty_text", "工作目录里还没有 PDF"))
-            self.branch_lay.addWidget(note_label(empty))
+            if empty:      # 空态文案为空表示「已经由上面的拖放区说明过了」
+                self.branch_lay.addWidget(note_label(empty))
             if on_done is not None:
                 on_done()
             return
@@ -591,7 +979,7 @@ class UploadPage(FluentPage):
         card.body_lay.addWidget(listing)
         self.branch_lay.addWidget(card)
         for row_index, s in enumerate(bstatuses):
-            self._branch_rows[s.path] = (listing, row_index)
+            self._branch_rows.setdefault(s.path, []).append((listing, row_index))
 
     # ---------- 上传 ----------
 
@@ -622,9 +1010,8 @@ class UploadPage(FluentPage):
 
         for status in self.statuses:
             if status.usable:
-                ref = self._branch_rows.get(status.path)
-                if ref is not None:
-                    ref[0].set_row_state(ref[1], "等待", "muted")
+                for listing, row_index in self._branch_rows.get(status.path, []):
+                    listing.set_row_state(row_index, "等待", "muted")
         self.upload_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.rescan_btn.setEnabled(False)
@@ -639,10 +1026,9 @@ class UploadPage(FluentPage):
         QTimer.singleShot(0, lambda: self._apply_row(account, path, result, reason))
 
     def _apply_row(self, account: str, path: str, result: str, reason: str):
-        ref = self._branch_rows.get(path)
-        if ref is not None:
-            ref[0].set_row_state(
-                ref[1], result, RESULT_TONE.get(result, "muted"), reason)
+        for listing, row_index in self._branch_rows.get(path, []):
+            listing.set_row_state(row_index, result,
+                                  RESULT_TONE.get(result, "muted"), reason)
         if result == "成功":
             remove_pending(path)
 

@@ -16,9 +16,10 @@ from app.domain.naming import analyze_file_name
 
 
 def _pending_path() -> str:
-    from app.constants import CONFIG_FILE
+    """待上传列表放在配置旁边；路径跟 store 走，测试里换配置目录时一起隔离。"""
+    from app.services import store
 
-    return os.path.join(os.path.dirname(CONFIG_FILE), "pending_uploads.json")
+    return os.path.join(os.path.dirname(store.CONFIG_FILE), "pending_uploads.json")
 
 
 def load_pending() -> list[dict]:
@@ -31,9 +32,7 @@ def load_pending() -> list[dict]:
 
 
 def save_pending(entries: list[dict]) -> None:
-    from app.constants import CONFIG_FILE
-
-    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(_pending_path()), exist_ok=True)
     with open(_pending_path(), "w", encoding="utf-8") as f:
         json.dump(entries, f, ensure_ascii=False, indent=2)
 
@@ -56,11 +55,55 @@ def remove_pending(path: str) -> None:
     save_pending([e for e in load_pending() if e.get("path") != path])
 
 
-def new_pdf_files(directory: str, known: set[str]) -> list[str]:
-    """目录里新出现的 PDF（不在 known 集合里的绝对路径）。"""
+def load_workspace_dirs(cfg: dict | None = None) -> list[str]:
+    """参与扫描的目录列表。
+
+    `workspaceDirs` 是正式字段（可多个）；只有旧的单值 `workspaceDir` 时
+    把它当成唯一一个目录，老配置不用迁移也能直接用。"""
+    if cfg is None:
+        from app.services import store
+
+        cfg = store.load()
+    dirs = [str(d).strip() for d in (cfg.get("workspaceDirs") or []) if str(d).strip()]
+    if not dirs:
+        single = str(cfg.get("workspaceDir") or "").strip()
+        dirs = [single] if single else []
+    return list(dict.fromkeys(dirs))
+
+
+def save_workspace_dirs(dirs: list[str]) -> list[str]:
+    """写入目录列表（去重保序）；`workspaceDir` 跟着第一个目录走。
+
+    旧字段留着是因为设置页只有一个输入框、托盘启动也读它；两者写在同一处，
+    不会出现「列表有 A、单值却是 B」的分叉。"""
+    from app.services import store
+
+    clean = list(dict.fromkeys(str(d).strip() for d in dirs if str(d).strip()))
+
+    def _write(cfg: dict):
+        cfg["workspaceDirs"] = clean
+        cfg["workspaceDir"] = clean[0] if clean else ""
+
+    store.update(_write)
+    return clean
+
+
+def new_pdf_files(directory: str, known: set[str], recursive: bool = True) -> list[str]:
+    """目录里新出现的 PDF（不在 known 集合里的绝对路径）。
+
+    recursive 时连子目录一起找：来源目录允许是「整个年级」这种带层次的文件夹，
+    只扫一层会漏掉子文件夹里的档案。"""
     if not os.path.isdir(directory):
         return []
     out = []
+    if recursive:
+        for dirpath, dirnames, filenames in os.walk(directory):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            for f in sorted(filenames):
+                p = os.path.join(dirpath, f)
+                if f.lower().endswith(".pdf") and p not in known:
+                    out.append(p)
+        return out
     for f in sorted(os.listdir(directory)):
         p = os.path.join(directory, f)
         if f.lower().endswith(".pdf") and os.path.isfile(p) and p not in known:

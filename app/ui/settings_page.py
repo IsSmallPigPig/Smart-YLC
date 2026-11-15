@@ -448,6 +448,7 @@ class SettingsPage(FluentPage):
         lay.addWidget(AboutCard(self))
 
         self._watcher = None
+        self._ws_dirs: list[str] = []   # 来源目录列表（上传页可以加多个）
         self._scan_timer = QTimer(self)
         self._scan_timer.setSingleShot(True)
         self._scan_timer.setInterval(800)
@@ -541,15 +542,19 @@ class SettingsPage(FluentPage):
             w.start()
         self._refresh_roster()
 
-        # 工作区
-        ws_dir = cfg.get("workspaceDir", "")
-        self.ws_edit.setText(ws_dir)
-        if ws_dir and os.path.isdir(ws_dir):
-            self._setup_watcher(ws_dir)
+        # 工作区：来源目录可能有多个（上传页可以拖入多个文件夹），这里显示第一个，
+        # 监听与自动处理覆盖全部
+        from app.services.workspace import load_workspace_dirs
+
+        ws_dirs = load_workspace_dirs(cfg)
+        self._ws_dirs = ws_dirs
+        self.ws_edit.setText(ws_dirs[0] if ws_dirs else "")
+        if ws_dirs:
+            self._setup_watcher(ws_dirs)
             # 把已在待上传列表里的路径当作「已知」：否则启动后第一次扫目录会把
             # 存量 PDF 全当新文件重处理一遍，每次都提示「已加入待上传列表」。
             self._ws_known = {e.get("path") for e in self._pending_entries()}
-        elif not ws_dir:
+        else:
             self.workspace_row.set_desc("")
 
         # 文档检查：预期页数
@@ -600,11 +605,17 @@ class SettingsPage(FluentPage):
             return
 
         def _write(cfg: dict):
+            ws = self.ws_edit.text().strip()
+            dirs = list(cfg.get("workspaceDirs") or [])
+            if ws != (dirs[0] if dirs else ""):
+                # 输入框被改过：这就是「只用一个目录」的意图，列表收成这一个
+                dirs = [ws] if ws else []
             cfg.update({
                 "activeUser": self.active_user,
                 "accounts": self.accounts,
                 "rosters": dict(self._roster_paths),
-                "workspaceDir": self.ws_edit.text().strip(),
+                "workspaceDir": ws,
+                "workspaceDirs": dirs,
                 "notifyTime": self.notify_time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME,
                 "notifyMode": self._notify_mode(),
                 "notifyInterval": self.notify_interval.currentData()
@@ -1691,22 +1702,35 @@ class SettingsPage(FluentPage):
         if not d:
             return
         self.ws_edit.setText(d)
-        self._setup_watcher(d)
+        self._ws_dirs = [d]
+        self._setup_watcher(self._ws_dirs)
         self._save_config()
         # 立即扫一遍存量 PDF
         self._ws_known = {e.get("path") for e in self._pending_entries()}
         self._scan_workspace()
 
-    def _setup_watcher(self, d: str):
+    def _setup_watcher(self, dirs):
+        """监听所有来源目录（只监听顶层，子文件夹的变化靠上传页刷新兜住）。"""
         from PySide6.QtCore import QFileSystemWatcher
 
+        if isinstance(dirs, str):
+            dirs = [dirs]
+        dirs = [d for d in (dirs or []) if d]
+        self._ws_dirs = list(dirs)
         if self._watcher is None:
             self._watcher = QFileSystemWatcher(self)
             self._watcher.directoryChanged.connect(lambda _: self._scan_timer.start())
         for p in self._watcher.directories():
             self._watcher.removePath(p)
-        if self._watcher.addPath(d):
-            self.workspace_row.set_desc(f"正在监听 {os.path.basename(d) or d}，新 PDF 自动处理")
+        watching = [d for d in dirs if self._watcher.addPath(d)]
+        if not watching:
+            self.workspace_row.set_desc("")
+            return
+        if len(watching) == 1:
+            name = os.path.basename(watching[0].rstrip(os.sep)) or watching[0]
+            self.workspace_row.set_desc(f"正在监听 {name}（含子文件夹），新 PDF 自动处理")
+        else:
+            self.workspace_row.set_desc(f"正在监听 {len(watching)} 个目录（含子文件夹），新 PDF 自动处理")
 
     def _pending_entries(self) -> list[dict]:
         from app.services.workspace import load_pending
@@ -1716,10 +1740,12 @@ class SettingsPage(FluentPage):
     def _scan_workspace(self):
         from app.services.workspace import new_pdf_files
 
-        d = self.ws_edit.text().strip()
-        if not d or not os.path.isdir(d):
-            return
-        files = new_pdf_files(d, self._ws_known)
+        dirs = list(getattr(self, "_ws_dirs", []) or [])
+        if not dirs:
+            d = self.ws_edit.text().strip()
+            dirs = [d] if d else []
+        files = [path for d in dirs if os.path.isdir(d)
+                 for path in new_pdf_files(d, self._ws_known)]
         if not files:
             return
         self._ws_known.update(files)

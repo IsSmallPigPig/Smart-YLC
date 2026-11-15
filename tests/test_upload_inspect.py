@@ -109,7 +109,7 @@ def test_group_and_summary(tmp_path):
     assert "普通高中高三七班" in groups and "未归类" in groups
     stats = summarize(statuses)
     assert stats == {"total": 2, "ok": 1, "fixed": 0, "missing": 0,
-                     "archive": 0, "error": 1, "branches": 1}
+                     "archive": 0, "duplicate": 0, "error": 1, "branches": 1}
 
 
 def _members(*pairs):
@@ -181,3 +181,61 @@ def test_report_approved_member_marked_as_archived(tmp_path):
 
     stats = summarize(statuses)
     assert stats["archive"] == 1 and stats["ok"] == 1 and stats["error"] == 0
+
+
+def test_duplicate_member_across_folders_is_excluded(tmp_path):
+    """同一团员在两个文件夹各有一份：只留能传的那份，另一份标重复、不上传。"""
+    a = tmp_path / "高一1班"
+    b = tmp_path / "高一2班"
+    a.mkdir()
+    b.mkdir()
+    name = standard_name("张三+13800000001")
+    first = make(a, name)
+    second = make(b, name)
+
+    statuses = inspect([first, second], 0, ACCOUNTS, roster(), counter=lambda p: 4,
+                       roots={first: str(a), second: str(b)})
+
+    kept, dup = statuses
+    assert kept.usable and not dup.usable
+    assert dup.status_text == "重复"
+    assert "高一1班" in dup.problem     # 说明重复的是哪一份，方便定位删掉
+    assert "重复档案" in kept.notice
+
+    stats = summarize(statuses)
+    assert stats["duplicate"] == 1
+    assert stats["error"] == 0          # 重复不算异常：它不是格式或路由问题
+    assert stats["ok"] == 1
+
+
+def test_duplicate_keeps_the_usable_copy(tmp_path):
+    """先出现的那份页数不对时，留下能传的那份，而不是按扫描顺序硬留第一份。"""
+    a = tmp_path / "A"
+    b = tmp_path / "B"
+    a.mkdir()
+    b.mkdir()
+    name = standard_name("张三+13800000001")
+    broken = make(a, name)
+    good = make(b, name)
+
+    pages = {broken: 3, good: 4}      # 预期 4 页：第一份少了页
+    statuses = inspect([broken, good], 4, ACCOUNTS, roster(),
+                       counter=lambda p: pages[p],
+                       roots={broken: str(a), good: str(b)})
+
+    assert statuses[0].duplicate_of == good     # 坏的那份让位
+    assert statuses[1].usable
+
+
+def test_duplicate_within_one_folder(tmp_path):
+    """同一个文件夹里放了两份（常见于「补交」再拷一遍）：同样只留一份。"""
+    name = standard_name("张三+13800000001")
+    one = make(tmp_path, name)
+    copy_dir = tmp_path / "副本"
+    copy_dir.mkdir()
+    two = make(copy_dir, name)
+
+    statuses = inspect([one, two], 0, ACCOUNTS, roster(), counter=lambda p: 4,
+                       roots={one: str(tmp_path), two: str(tmp_path)})
+    assert statuses[1].duplicate_of == one
+    assert statuses[0].name in statuses[1].problem      # 指出去重后留下的那一份

@@ -135,7 +135,7 @@ def test_home_and_upload_build(app, isolated_store):
 
     assert COMPRESS_TARGET == LIMITS["PDF_DEFAULT_TARGET_BYTES"]
     assert not hasattr(upload, "target_combo")
-    upload._apply_statuses([])
+    upload._apply_statuses([], [])
     assert not upload.upload_btn.isEnabled()
 
 
@@ -224,7 +224,7 @@ def test_upload_branch_cards_use_tags(app, isolated_store):
     from app.ui.upload_page import UploadPage
 
     upload = UploadPage(FakeWindow())
-    upload._apply_statuses([
+    upload._apply_statuses([], [
         FileStatus(path="/tmp/a.pdf", name="张三+13800000001+入团志愿书.pdf",
                    pages=4, member="ok", account="ssfz12407",
                    branch="普通高中高三十二班"),
@@ -452,6 +452,94 @@ def test_banner_light_theme_is_pale_with_dark_text(app, isolated_store):
     setTheme(Theme.DARK)                                 # 切主题后字要跟着换回白色
     assert banner_stops() != BANNER_STOPS_LIGHT
     assert banner.title_label._darkColor.lightness() > 200
+
+
+def test_upload_add_dirs_dedupes_nested(app, isolated_store, tmp_path):
+    """加文件夹：已添加目录之下的子目录跳过，重复点选不重复计入。"""
+    from app.services.workspace import load_workspace_dirs
+    from app.ui.upload_page import UploadPage
+
+    root = tmp_path / "年级"
+    child = root / "高一1班"
+    other = tmp_path / "高一2班"
+    child.mkdir(parents=True)
+    other.mkdir()
+
+    upload = UploadPage(FakeWindow())
+    upload.refresh = lambda: None        # 不启动扫描线程，只看列表怎么变
+
+    assert upload.add_dirs([str(root)]) == 1
+    assert upload.add_dirs([str(child), str(other)]) == 1   # 子目录被跳过
+    assert upload.add_dirs([str(root)]) == 0                # 完全重复
+    assert load_workspace_dirs() == [str(root), str(other)]
+
+
+def test_upload_remove_dir_keeps_others(app, isolated_store, tmp_path):
+    from app.services.workspace import load_workspace_dirs, save_workspace_dirs
+    from app.ui.upload_page import UploadPage
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    save_workspace_dirs([str(a), str(b)])
+
+    upload = UploadPage(FakeWindow())
+    upload.refresh = lambda: None
+    upload._dirs = load_workspace_dirs()
+    upload.remove_dir(str(a))
+    assert load_workspace_dirs() == [str(b)]
+
+
+def test_upload_drop_payload_takes_folders_and_pdf_parents(app, isolated_store, tmp_path):
+    """拖进来的文件夹直接加；拖的是 PDF 就用它所在的文件夹。"""
+    from PySide6.QtCore import QMimeData, QUrl
+
+    from app.ui.upload_page import UploadPage
+
+    folder = tmp_path / "高一1班"
+    folder.mkdir()
+    pdf = folder / "张三+13800000001+入团志愿书.pdf"
+    pdf.write_bytes(b"x")
+    zipped = tmp_path / "名单.zip"
+    zipped.write_bytes(b"x")
+
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(folder)), QUrl.fromLocalFile(str(pdf)),
+                  QUrl.fromLocalFile(str(zipped))])
+    dirs, parents = UploadPage._drop_payload(mime)
+    assert dirs == [str(folder)]
+    assert parents == [str(folder)]      # PDF 归到它所在的文件夹
+    assert UploadPage._drop_payload(QMimeData()) == ([], [])
+
+
+def test_upload_folder_card_shows_ignored_files(app, isolated_store, tmp_path):
+    """来源目录卡片：标题是文件夹名、灰字是路径，展开后才列出文件与排除项。"""
+    from app.domain.archive_scan import scan_folder
+    from app.domain.upload_inspect import FileStatus
+    from app.ui.upload_page import UploadPage
+
+    folder = tmp_path / "高一1班"
+    folder.mkdir()
+    (folder / "关于放假的通知.pdf").write_bytes(b"x")
+
+    upload = UploadPage(FakeWindow())
+    upload._dirs = [str(folder)]
+    upload._scans = [scan_folder(str(folder))]
+    upload.statuses = [FileStatus(path=str(folder / "张三.pdf"), name="张三.pdf",
+                                  root=str(folder), pages=4, account="ssfz12407",
+                                  branch="普通高中高三七班")]
+    upload._rebuild_sources()
+
+    card = upload._folder_cards[str(folder)]
+    assert card.title_label.text() == "高一1班"
+    assert card.desc_label.text() == str(folder)
+    assert [p.text() for p in card._tags] == ["1 份", "忽略 1"]
+    assert card.body.isHidden()               # 收起状态不铺行
+
+    card.set_expanded(True)
+    _pump(app, 30)
+    assert card._filled
+    assert not card.body.isHidden()
 
 
 def test_update_download_failure_clears_progress(app, isolated_store):
