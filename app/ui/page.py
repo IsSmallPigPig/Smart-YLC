@@ -475,10 +475,14 @@ class CollapsibleCard(CardWidget):
     用法：content = CollapsibleCard("标题", expanded=True)；往
     content.body_lay 里加 SettingRow / FullRow 即可，行间分割线由行自己画。
     tags 是标题右侧的胶囊标签 [(文字, 色调)]，份数、学段这类属性放这里，
-    不再用「·」拼进标题。"""
+    不再用「·」拼进标题。
+
+    desc 是标题下面那行灰字（完整路径这类「说明但不抢眼」的信息）；
+    add_action 往标题行右端插按钮（移除、打开目录），插在箭头左边。"""
 
     def __init__(self, title: str, expanded: bool = True,
-                 tags: list[tuple[str, str]] | None = None, parent=None):
+                 tags: list[tuple[str, str]] | None = None, parent=None,
+                 desc: str = ""):
         super().__init__(parent)
         # 圆角与窗口圆角一致（约 10px），卡片四角与窗口四角同心，视觉更整
         self.setBorderRadius(10)
@@ -498,7 +502,13 @@ class CollapsibleCard(CardWidget):
         self.toggle_btn.clicked.connect(self.toggle)
         header.addWidget(self.toggle_btn)
         outer.addLayout(header)
+
+        self.desc_label = note_label("")
+        self.desc_label.setVisible(False)
+        outer.addWidget(self.desc_label)
+
         self.set_tags(tags or [])
+        self.set_desc(desc)
         self.body = QWidget(self)
         self.body_lay = QVBoxLayout(self.body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
@@ -508,6 +518,18 @@ class CollapsibleCard(CardWidget):
         # 主题切换时箭头颜色要按新主题重烘焙（旋转图标是像素级副本）
         qconfig.themeChanged.connect(self._sync)
 
+    def set_desc(self, text: str):
+        """标题下的灰字说明（如完整路径）；空字符串就整行收起来。"""
+        text = (text or "").strip()
+        self.desc_label.setText(text)
+        self.desc_label.setVisible(bool(text))
+
+    def add_action(self, widget):
+        """往标题行右端插一个操作按钮，位置在折叠箭头左边。"""
+        self._tag_lay.insertWidget(self._tag_lay.count() - 1, widget, 0,
+                                   Qt.AlignmentFlag.AlignVCenter)
+        return widget
+
     def set_tags(self, tags: list[tuple[str, str]]):
         """替换标题右侧的标签；插在标题与弹簧之间，靠左紧贴标题。"""
         from app.ui.widgets import PillLabel
@@ -516,11 +538,10 @@ class CollapsibleCard(CardWidget):
             self._tag_lay.removeWidget(pill)
             pill.deleteLater()
         self._tags = []
-        stretch_index = self._tag_lay.count() - 2  # 弹簧与箭头之间
-        for text, tone in tags:
+        # 紧贴标题右侧：标题占 0 位，弹簧在最后，标签从 1 开始顺次插入
+        for index, (text, tone) in enumerate(tags, start=1):
             pill = PillLabel(str(text), tone)
-            self._tag_lay.insertWidget(stretch_index, pill, 0, Qt.AlignmentFlag.AlignVCenter)
-            stretch_index += 1
+            self._tag_lay.insertWidget(index, pill, 0, Qt.AlignmentFlag.AlignVCenter)
             self._tags.append(pill)
 
     def toggle(self):
