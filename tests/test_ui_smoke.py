@@ -522,18 +522,31 @@ def test_main_window_close_shuts_browser(app, isolated_store):
 
 
 def test_reveal_branch_opens_matching_detail(app, isolated_store):
-    """组织状况点错误团员：按支部名定位到组织管理的支部详情。"""
+    """组织状况点错误团员：按支部名定位到组织管理的支部详情。
+
+    reveal_branch 已改为异步（树没算好时挂到后台刷新完成后再开，绝不阻塞点击），
+    返回 None；找不到支部由 on_missing 兜底。这里走「树已就绪」的同步打开路径。"""
+    import time
+
     from app.domain.org_manage import BranchNode
     from app.ui.org_manage_page import OrgManagePage
 
     page = OrgManagePage(FakeWindow())
     page._branches = [BranchNode(code="ssfz12407", label="普通高中高三七班"),
                       BranchNode(code="ssfz12408", label="普通高中高三八班")]
-    assert page.reveal_branch("普通高中高三八班")
+    page._refreshed_at = time.monotonic()  # 树已就绪：直接同步打开
+
+    missing = []
+    page.reveal_branch("普通高中高三八班", on_missing=lambda: missing.append(1))
     assert page._detail_code == "ssfz12408"
-    assert page.reveal_branch("高三七班")       # 备注被截短也能对上
+    page.reveal_branch("高三七班", on_missing=lambda: missing.append(1))  # 备注被截短也能对上
     assert page._detail_code == "ssfz12407"
-    assert not page.reveal_branch("不存在的支部")
+
+    # 找不到支部：不打开详情，on_missing 兜底
+    page._detail_code = ""
+    page.reveal_branch("不存在的支部", on_missing=lambda: missing.append(1))
+    assert page._detail_code == ""
+    assert len(missing) == 1
 
 
 def test_member_card_click_emits(app, isolated_store):
@@ -555,8 +568,9 @@ def test_member_card_click_emits(app, isolated_store):
 def test_config_dialog_release_keeps_widgets_parented(app, isolated_store):
     """齿轮弹窗关掉后，控件不能变成顶层窗口。
 
-    控件用 setParent(None) 归还时在 macOS 上会变成带交通灯的独立小窗
-    （通知频率下拉框曾因此浮在屏幕左上角），这里断言它仍挂在原父级下。"""
+    旧实现用 setParent(None) 归还控件，会在 Windows/macOS 上变成带标题栏的独立小窗
+    （通知设置里的「08:00」时间框曾因此浮在屏幕左上角）。新实现：弹窗完全拥有内容
+    控件，关窗时随弹窗一起销毁，控件自始至终不是顶层窗口。"""
     from qfluentwidgets import ComboBox
 
     from app.ui.dialogs import ConfigDialog
@@ -569,10 +583,12 @@ def test_config_dialog_release_keeps_widgets_parented(app, isolated_store):
     dialog.add_row(combo)
     dialog.show()
     assert combo.parentWidget() is not host  # 已挪进弹窗
+    assert not combo.isWindow()              # 不是顶层窗口
 
     dialog._release()
-    assert combo.parentWidget() is host
+    # 控件仍属于弹窗子树，绝不是顶层窗口；弹窗销毁时一并清理
     assert not combo.isWindow()
+    assert combo.parentWidget() is not host
 
 
 @pytest.mark.skipif(

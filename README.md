@@ -40,7 +40,7 @@
 
 ### 安装包
 
-到 [Releases][release-url] 下载对应平台的安装包：macOS 用 dmg，Windows 用 exe。首次启动在「系统配置」里填入团支部账号，或导入账号模板 xlsx。
+到 [Releases][release-url] 下载对应平台的安装包：macOS 用 dmg，Windows 用 `setup.exe`（每用户安装，不需要管理员权限，不弹 UAC）。首次启动在「系统配置」里填入团支部账号，或导入账号模板 xlsx。
 
 ### 从源码运行
 
@@ -64,6 +64,22 @@ pyinstaller -n 智慧团建管理员辅助 --windowed --onedir \
 > [!TIP]
 > `--icon` 指定应用图标（Windows 用 ico，macOS 用 icns），`--add-data` 把图标资源带进包里；
 > 界面上的团徽、窗口与托盘图标都取自 `app/assets/`。
+
+### Windows 安装包与代码签名
+
+Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 PyInstaller 的 `--onedir` 产物打成正式安装程序：脚本是 `installer.iss`，构建时由 workflow 调用 `ISCC.exe` 编译。
+
+- **不用 `--onefile`**：单文件每次启动都要把整个运行时解压到临时目录，冷启动明显慢；`--onedir` 把运行时铺在安装目录里，启动只加载 DLL，快得多。
+- **每用户安装**：装到 `%LOCALAPPDATA%\Programs\智慧团委`，不需要管理员权限、不弹 UAC，因此不会出现「未知发布者」的提权提示。
+- **SmartScreen**：双击下载来的安装包时，Windows 仍可能提示「已保护你的电脑」——这是对「下载来的 exe」的通行评判，与安装本身无关，点「更多信息 → 仍要运行」即可。
+
+代码签名在 workflow 里自动完成：
+
+- 配了仓库 Secrets `WIN_CERT_PFX_B64`（pfx 文件的 base64）和 `WIN_CERT_PASSWORD`，就用这把真实证书签名，终端不再提示未知发布者；
+- 没配时，每次构建生成一把自签名证书并签名，同时把公钥 `SmartYouth-CodeSigning.cer` 随 Release 分发。内部分发时把它双击装进「受信任的根证书颁发机构」，本地运行与安装就不再提示未知发布者。
+
+> [!TIP]
+> 要彻底免提示，建议用真实证书。开源项目可申请 [SignPath.io](https://signpath.io/) 的免费代码签名（云端签名，需改用它的 GitHub Action）；或购买商业代码签名证书，把 pfx 的 base64 与密码放进上面两个 Secrets，签名步骤会自动接管。找不到证书或签名失败时该步骤只告警、不失败，安装包照常产出。
 
 ## 页面
 

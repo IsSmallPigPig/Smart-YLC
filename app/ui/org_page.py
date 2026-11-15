@@ -38,7 +38,7 @@ from app.ui.charts import BarRowWidget, ProgressDonut
 from app.ui import palette as P
 from app.ui.widgets import PillLabel
 from app.domain.check_templates import default_identity_template, default_report_template
-from app.ui.page import (CallbackWorker, FluentPage, PageHeader, note_label,
+from app.ui.page import (CallbackWorker, FluentPage, PageBanner, PageHeader, note_label,
                          set_tip,
                          section_title, theme_font)
 
@@ -155,9 +155,16 @@ class OrgPage(FluentPage):
         QTimer.singleShot(0, self._restore_persisted)  # 重启后恢复上次的组织状况
 
         lay = self.vBoxLayout
+        # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐
+        lay.setContentsMargins(32, PageBanner.HEIGHT + 16, 32, 24)
 
-        # 标题与工具条在背景上，仪表盘卡片只装图表
-        self.header = PageHeader("组织状况")
+        # 头图通栏贴顶（overlay，不占布局），标题与操作控件叠在 banner 上
+        self.header = PageBanner("组织状况", "团员信息核对与异常统计", self.scrollWidget)
+        self.banner = self.header
+        from app.services import store
+        self.header.set_image_path(store.load().get("headerImage", ""))
+        self._place_banner()
+
         self.start_btn = PrimaryPushButton(FIF.SYNC, "开始统计")
         self.start_btn.clicked.connect(self._start)
         self.export_btn = ToolButton(FIF.SAVE)
@@ -167,7 +174,6 @@ class OrgPage(FluentPage):
         self.export_btn.clicked.connect(self._export)
         self.header.add_control(self.export_btn)
         self.header.add_control(self.start_btn)
-        lay.addWidget(self.header)
 
         card = CardWidget()
         card_lay = QVBoxLayout(card)
@@ -213,8 +219,18 @@ class OrgPage(FluentPage):
             bar.set_value(self._by_kind.get(kind, 0), self._total)
         self.transfer_bar.set_value(self._transfer_applied, self._total)
 
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_banner()
+
+    def _place_banner(self):
+        """头图几何：铺满页面宽度、贴顶，跟随窗口宽度变化。"""
+        if getattr(self, "header", None) is not None:
+            self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
+
     def showEvent(self, e):
         super().showEvent(e)
+        self._place_banner()
         # 打开页面时图表做一次入场动画：条形与圆环从零长到当前值（与支部详情一致）
         max_n = max(self._total, 1)
         for kind, bar in self.bars.items():
@@ -550,15 +566,23 @@ class OrgPage(FluentPage):
         self.error_lay.addWidget(card)
 
     def _goto_branch(self, branch: str):
-        """跳到组织管理，并打开这个支部的详情。"""
+        """跳到组织管理，并打开这个支部的详情。
+
+        先切页（立刻出画面），再把「按支部名打开详情」推迟到下一轮事件循环——
+        组织管理页首显会异步算分支树，这一步不阻塞点击，树算好后自动补开。
+        找不到支部时由 reveal_branch 的 on_missing 兜底提示。"""
+        from PySide6.QtCore import QTimer
+
         window = getattr(self, "window_ref", None)
         page = getattr(window, "org_manage_page", None)
         if page is None:
             return
         window.switchTo(page)
-        if not page.reveal_branch(branch):
-            InfoBar.warning("没有找到支部", f"组织管理里没有「{branch}」这个支部",
-                            duration=4000, parent=self)
+        QTimer.singleShot(0, lambda: page.reveal_branch(
+            branch,
+            on_missing=lambda: InfoBar.warning(
+                "没有找到支部", f"组织管理里没有「{branch}」这个支部",
+                duration=4000, parent=self)))
 
     def _export(self):
         if not self._error_rows:

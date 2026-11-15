@@ -79,7 +79,19 @@ class ConfigDialog(FluentPanelDialog):
     """配置弹窗：一列控件，只有「完成」一个按钮。
 
     设置页把一行里放不下的次要项收进这里——行上留一个四字主按钮和一个齿轮图标，
-    齿轮打开这个弹窗。控件由调用方持有并塞进来，弹窗只负责摆。"""
+    齿轮打开这个弹窗。
+
+    关键约定：弹窗**完全拥有**它的内容控件——调用方在打开弹窗时新建控件并塞进来
+    （每次打开都是全新实例、直接挂在弹窗自身之下），关窗随弹窗一起销毁。
+    绝不复用设置页上的持久控件、也绝不做 reparent 还原：
+
+    - 把持久控件 reparent 进弹窗再 setParent(None) 还回去，会把它变成顶层控件，
+      在 Windows / macOS 上就是一个带标题栏的独立小窗（通知设置里的「08:00」时间框
+      就曾这样浮在屏幕左上角）；
+    - 还原到原父级再 hide()，持久控件会从原页面消失（账号文件弹窗偷走「批量导入」
+      等按钮后，关窗它们就从设置页不见了）。
+
+    内容控件都是弹窗的子节点，弹窗 deleteLater 时一并销毁，从根上杜绝上述两类问题。"""
 
     def __init__(self, title: str, parent=None, note: str = "", width: int = 420,
                  yes_text: str = "完成"):
@@ -100,28 +112,14 @@ class ConfigDialog(FluentPanelDialog):
         self.viewLayout.addLayout(self.body)
         self.yesButton.setText(yes_text)
         self.cancelButton.hide()
-        self._items: list = []
-        self._orig_parents: dict[int, object] = {}
+        self._releasing = False
         self.finished.connect(self._release)
 
     def add(self, widget) -> None:
-        """塞一个控件进来。控件仍归调用方所有，关窗时还回去而不是跟着销毁。"""
-        self._items.append(widget)
-        self._remember_parent(widget)
+        """塞一个控件进来（调用方新建的实例，归弹窗所有）。"""
         widget.setParent(self.widget)
         widget.show()
         self.body.addWidget(widget)
-
-    def _remember_parent(self, widget):
-        """记下控件原来的父级。
-
-        关窗时用 setParent(None) 还控件会把它变成顶层控件——在 macOS 上就是一个
-        带交通灯按钮的独立小窗（通知频率下拉框曾这样浮在屏幕左上角）。
-        正确的做法是装回原来的父级再隐藏。"""
-        parent = widget.parentWidget()
-        if parent is None:
-            parent = self.parentWidget()
-        self._orig_parents[id(widget)] = parent
 
     def add_row(self, *widgets, spacing: int = 8):
         """一排并排的控件；按钮横向填满弹窗宽度。"""
@@ -132,8 +130,6 @@ class ConfigDialog(FluentPanelDialog):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(spacing)
         for widget in widgets:
-            self._items.append(widget)
-            self._remember_parent(widget)
             widget.setParent(box)
             widget.show()
             lay.addWidget(widget, 1)
@@ -142,7 +138,7 @@ class ConfigDialog(FluentPanelDialog):
 
     def add_field(self, label: str, widget):
         """一个带说明的输入项：说明在上，控件在下。"""
-        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
 
         from app.ui.page import note_label
 
@@ -150,10 +146,7 @@ class ConfigDialog(FluentPanelDialog):
         lay = QVBoxLayout(box)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
-        hint = note_label(label)
-        lay.addWidget(hint)
-        self._items.append(widget)
-        self._remember_parent(widget)
+        lay.addWidget(note_label(label))
         widget.setParent(box)
         widget.show()
         lay.addWidget(widget)
@@ -161,13 +154,10 @@ class ConfigDialog(FluentPanelDialog):
         return box
 
     def _release(self, *_):
-        """弹窗关闭：把控件装回原父级并藏起来，再销毁弹窗本身。"""
-        for widget in self._items:
-            parent = self._orig_parents.pop(id(widget), None)
-            if parent is not None:
-                widget.setParent(parent)
-            widget.hide()
-        self._items.clear()
+        """弹窗关闭：内容控件都是子节点，随弹窗一起销毁，这里只需删掉弹窗自身。"""
+        if self._releasing:
+            return
+        self._releasing = True
         self.deleteLater()
 
 
