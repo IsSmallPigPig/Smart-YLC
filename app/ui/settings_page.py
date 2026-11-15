@@ -899,14 +899,18 @@ class SettingsPage(FluentPage):
         避免控件被反复 reparent 后变成顶层浮动小窗、或关窗后被隐藏从设置页消失。"""
         from qfluentwidgets import PushButton
 
-        dialog = self._config_dialog("账号文件", "导入或导出配置，便于换机迁移")
+        dialog = self._config_dialog("账号文件", "批次导入账号，或整份导入导出配置（换机迁移）")
         import_btn = PushButton(FIF.DOCUMENT, "批量导入")
         import_btn.clicked.connect(self._import_accounts)
         tpl_btn = PushButton(FIF.DOWNLOAD, "账号模板")
         tpl_btn.clicked.connect(self._download_account_template)
-        export_btn = PushButton(FIF.SHARE, "导出配置")
-        export_btn.clicked.connect(self._export_config_json)
-        dialog.add_row(import_btn, tpl_btn, export_btn)
+        dialog.add_row(import_btn, tpl_btn)
+
+        cfg_in_btn = PushButton(FIF.FOLDER, "导入配置")
+        cfg_in_btn.clicked.connect(self._import_config_json)
+        cfg_out_btn = PushButton(FIF.SHARE, "导出配置")
+        cfg_out_btn.clicked.connect(self._export_config_json)
+        dialog.add_row(cfg_in_btn, cfg_out_btn)
         dialog.show()
 
     def _open_notify_dialog(self):
@@ -1099,6 +1103,101 @@ class SettingsPage(FluentPage):
             "配置已导出",
             f"{path}（{n} 个账号等全部配置；文件含密码，请妥善保管）",
             duration=6000, parent=self)
+
+    def _import_config_json(self):
+        """从导出的 JSON 恢复整份配置：先看清要覆盖什么，再替换并即时重载。"""
+        from PySide6.QtWidgets import QFileDialog
+
+        import json
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入系统配置", "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                cfg = json.load(f)
+        except (OSError, ValueError) as e:
+            InfoBar.error("读取失败", str(e), duration=6000, parent=self)
+            return
+        if not isinstance(cfg, dict) or not isinstance(cfg.get("accounts"), list):
+            InfoBar.error("不是有效的配置文件",
+                          "这个 JSON 里没有 accounts 列表，不像是本程序导出的系统配置。",
+                          duration=6000, parent=self)
+            return
+
+        accounts = cfg.get("accounts") or []
+        rosters = cfg.get("rosters") or {}
+        dialogs.confirm(
+            self.window(), "导入系统配置",
+            f"将用这份文件替换当前配置：{len(accounts)} 个账号、{len(rosters)} 份名单，"
+            f"以及工作区、通知、外观与编号规则。\n当前配置会先另存一份备份。",
+            yes="导入", cancel="取消",
+            on_result=lambda ok: ok and self._do_import_config(cfg))
+
+    def _do_import_config(self, cfg: dict):
+        """整份替换配置，然后把页面与窗口状态一起重载。"""
+        from datetime import datetime
+
+        import shutil
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        cfg_file = store.CONFIG_FILE
+        backup = f"{cfg_file}.before-import-{stamp}.json"
+        try:
+            shutil.copyfile(cfg_file, backup)
+        except OSError:
+            backup = ""      # 首次运行还没有配置文件，没有可备份的东西
+        try:
+            store.save(cfg)
+        except (OSError, ValueError) as e:
+            InfoBar.error("导入失败", f"写入配置出错：{e}", duration=8000, parent=self)
+            return
+
+        # 重载：构造期那套「未载入不许回写」的闸门这里同样要合上，
+        # 否则控件初始化过程中的信号会用空值把刚导入的配置写回去
+        self._loading = True
+        try:
+            self._load_config()
+        finally:
+            self._loading = False
+        self._loaded = True
+        self._refresh_table()
+        self._apply_imported_look()
+
+        window = getattr(self, "window_ref", None)
+        if window is not None and hasattr(window, "sync_browser_accounts"):
+            window.sync_browser_accounts()
+        self.refresh_notices()
+
+        n = len(cfg.get("accounts") or [])
+        extra = f"；原配置备份在 {backup}" if backup else ""
+        InfoBar.success("配置已导入", f"{n} 个账号与名单、外观设置已生效{extra}",
+                        duration=8000, parent=self)
+
+    def _apply_imported_look(self):
+        """把导入的明暗模式、材质、头图立即应用到窗口（这三项不在 _load_config 里）。"""
+        from app.setup import apply_theme_mode
+        from app.services.materials import preferred
+
+        cfg = store.load()
+        mode = cfg.get("themeMode", "auto")
+        material = preferred(cfg)
+        for combo, value in ((self.theme_combo, mode), (self.material_combo, material)):
+            combo.blockSignals(True)
+            if combo is self.theme_combo:
+                combo.setCurrentIndex(THEME_INDEX.get(value, 0))
+            else:
+                combo.setCurrentIndex(("none", "acrylic", "mica").index(material))
+            combo.blockSignals(False)
+
+        apply_theme_mode(mode)
+        window = getattr(self, "window_ref", None)
+        if window is not None and hasattr(window, "apply_material"):
+            window.apply_material(material)
+        header = cfg.get("headerImage", "")
+        self.header.set_image_path(header)
+        self._refresh_banners(header)
 
     def _remove_accounts(self, rows: list[int]):
         users = [self.accounts[r]["userName"] for r in rows if 0 <= r < len(self.accounts)]
