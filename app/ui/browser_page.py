@@ -424,6 +424,11 @@ class BrowserWindow(FluentWindowBase):
         title = theme_font(BodyLabel("还没有打开支部", box), 20, int(QFont.Weight.DemiBold))
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(title, 0, Qt.AlignmentFlag.AlignHCenter)
+        # 标题下的一行灰字：给这页一点人情味，不承担功能说明
+        self.welcome_sub = note_label("让我们拜访一下支部的同志们")
+        self.welcome_sub.setWordWrap(False)
+        self.welcome_sub.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(self.welcome_sub, 0, Qt.AlignmentFlag.AlignHCenter)
         # 平时不显示任何说明：图标 + 标题 + 按钮已经说明了这一页要做什么，
         # 只有「没有可用账号」这类不影响按钮的差错才写这一行
         self.welcome_hint = note_label("")
