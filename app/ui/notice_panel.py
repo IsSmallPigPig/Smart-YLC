@@ -1,74 +1,61 @@
-"""banner 下方的公告面板：只列「已知问题」，可展开看全部。
+"""banner 下方的公告面板：只列「已知问题」，默认折叠，点标题展开。
 
 对应「不重复弹窗、公告面板要稳」：
 - 空清单时整块隐藏，正常情况不出现在界面上；
-- 每条按 key 复用行控件，只改文字与按钮，不整块清空重建——展开/切页/刷新都不会闪；
-- 标题行点击展开或收起；问题变化时才增删对应行。
+- 默认折叠，只留一行「N 项待处理」，不占地方；
+- 每条问题是一张错误样式的卡片（背景取 InfoBar 的错误态配色，无圆点）；
+- 每条按 key 复用行控件，只改文字与按钮，不整块清空重建——展开/切页/刷新都不会闪。
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
     FluentIcon as FIF,
-    TransparentPushButton,
     IconWidget,
+    TransparentPushButton,
     TransparentToolButton,
     isDarkTheme,
     qconfig,
 )
 
 from app.services.notices import LEVEL_ISSUE, Notice
-from app.ui import palette as P
 from app.ui.page import chevron_icon, note_label, set_tip, theme_font
 
 HEADER_H = 48
-ROW_H = 52
-RADIUS = 10
+RADIUS = 8
+# 与 qfluentwidgets InfoBar 的错误态背景一致（实测取样）
+ERROR_BG_DARK = "#442726"
+ERROR_BG_LIGHT = "#fde7e9"
 
 
-class _Dot(QWidget):
-    """问题标记：一个 8px 圆点，颜色随严重度。"""
-
-    def __init__(self, color: str, parent=None):
-        super().__init__(parent)
-        self._color = color
-        self.setFixedSize(8, 8)
-
-    def paintEvent(self, _e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(self._color))
-        p.drawEllipse(self.rect())
+def _error_bg() -> QColor:
+    return QColor(ERROR_BG_DARK if isDarkTheme() else ERROR_BG_LIGHT)
 
 
 class _NoticeRow(QWidget):
-    """一条问题：色调点 + 标题/说明 + 右侧处理入口。"""
+    """一条问题：错误样式卡片（标题 + 具体原因 + 右侧处理入口），无圆点。"""
 
     def __init__(self, notice: Notice, on_action, parent=None):
         super().__init__(parent)
         self._notice = notice
         self._on_action = on_action
-        self.setFixedHeight(ROW_H)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 6, 10, 6)
-        lay.setSpacing(10)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
-        self._dot = _Dot(P.DANGER if notice.level == LEVEL_ISSUE else P.BRAND, self)
-        lay.addWidget(self._dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 10, 10, 10)
+        lay.setSpacing(12)
 
         text = QVBoxLayout()
         text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(1)
+        text.setSpacing(2)
         self.title_lbl = theme_font(BodyLabel(notice.title), 13, int(QFont.Weight.DemiBold))
         text.addWidget(self.title_lbl)
         self.detail_lbl = note_label(notice.detail)
-        self.detail_lbl.setWordWrap(False)
         text.addWidget(self.detail_lbl)
         lay.addLayout(text, 1)
 
@@ -92,17 +79,22 @@ class _NoticeRow(QWidget):
         self.action_btn.setVisible(has_action)
         if has_action:
             self.action_btn.setText(notice.action_text)
-        self._dot._color = P.DANGER if notice.level == LEVEL_ISSUE else P.BRAND
-        self._dot.update()
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(_error_bg())
+        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), RADIUS, RADIUS)
 
 
 class NoticePanel(QWidget):
-    """问题公告：标题行 + 可展开的问题列表。空清单时隐藏。"""
+    """问题公告：标题行 + 可展开的问题列表。空清单时隐藏，默认折叠。"""
 
     def __init__(self, on_action=None, parent=None):
         super().__init__(parent)
         self._on_action = on_action
-        self._expanded = True
+        self._expanded = False  # 默认折叠，只留一行摘要
         self._notices: list[Notice] = []
         self._rows: dict[str, _NoticeRow] = {}
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
@@ -133,8 +125,9 @@ class NoticePanel(QWidget):
         self._body = QWidget(self)
         self._list = QVBoxLayout(self._body)
         self._list.setContentsMargins(0, 0, 0, 8)
-        self._list.setSpacing(0)
+        self._list.setSpacing(6)
         outer.addWidget(self._body)
+        self._body.setVisible(False)
 
         self.setVisible(False)
         qconfig.themeChanged.connect(lambda *_: self.update())
@@ -174,9 +167,17 @@ class NoticePanel(QWidget):
         self._sync_height()
 
     def _sync_height(self):
-        rows = len(self._notices)
-        h = HEADER_H + (rows * ROW_H + 8 if self._expanded else 0)
-        self.setFixedHeight(max(HEADER_H, h))
+        if not self._expanded:
+            self.setFixedHeight(HEADER_H)
+            return
+        self._body.adjustSize()
+        h = HEADER_H + max(0, self._body.sizeHint().height())
+        self.setFixedHeight(h)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if self._expanded:
+            self._sync_height()
 
     # ---------- 外观 ----------
 
@@ -190,7 +191,3 @@ class NoticePanel(QWidget):
         p.setPen(border)
         p.setBrush(bg)
         p.drawRoundedRect(r, RADIUS, RADIUS)
-        # 左侧 3px 强调竖线，表明这是「待处理」区
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(P.DANGER))
-        p.drawRoundedRect(QRectF(r.left() + 1, r.top() + 8, 3, r.height() - 16), 1.5, 1.5)

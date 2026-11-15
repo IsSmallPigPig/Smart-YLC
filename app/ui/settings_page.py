@@ -1489,10 +1489,13 @@ class SettingsPage(FluentPage):
                 continue
             label = HEALTH_LABEL.get(status, "状态异常")
             remark = str(acc.get("remark") or "").strip()
+            # 只带具体原因；没有具体信息就不放空泛的操作说明（避免「太抽象」）
+            msg = str((acc.get("health") or {}).get("message") or "").strip()
+            detail = msg if msg and msg != label else ""
             notices.append(Notice(
                 key=f"account:{user}",
                 title=f"账号 {remark or user}：{label}",
-                detail="打开网页端重新登录，或在系统配置里修改",
+                detail=detail,
                 action=f"accounts:{user}",
                 action_text="去设置",
                 tone="error",
