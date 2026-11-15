@@ -286,7 +286,10 @@ class BrowserWindow(FluentWindowBase):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("账号网页")
-        self.resize(1180, 800)
+        # 站点是固定宽度的老式布局，窗口窄了内容会被截断；默认给足宽度，
+        # 只有屏幕装不下时才收到可用区域（否则窗口会超出屏幕、标题栏被顶到屏幕外）
+        avail = self.screen().availableGeometry()
+        self.resize(min(1450, avail.width()), min(870, avail.height()))
         self.setMinimumSize(900, 560)
         self.setMicaEffectEnabled(False)
         self.setStyleSheet("BrowserWindow{background: transparent}")
