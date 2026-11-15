@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QRadialGradient
+from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath,
+                           QRadialGradient)
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -340,6 +341,8 @@ class ProgressToast(QWidget):
     closed = Signal()
 
     MARGIN = 16
+    CARD_W, CARD_H = 320, 52
+    PAD = 10          # 四周留给投影的空白：靠阴影和页面分开，不画描边
 
     def __init__(self, title: str, parent=None, on_close=None):
         super().__init__(parent)
@@ -347,11 +350,23 @@ class ProgressToast(QWidget):
         self._done = 0
         self._total = 0
         self._on_close = on_close
-        self.setFixedSize(320, 52)
+        self.setFixedSize(self.CARD_W + self.PAD * 2, self.CARD_H + self.PAD * 2)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(0, 0, 0, 90 if isDarkTheme() else 55))
+        self.setGraphicsEffect(shadow)
+        self._shadow = shadow
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 8, 8, 8)
+        # 文字这一行让开底部的进度线，垂直重心略偏上
+        lay.setContentsMargins(self.PAD + 12, self.PAD + 4,
+                               self.PAD + 8, self.PAD + 16)
         lay.setSpacing(8)
         self._label = BodyLabel(title, self)
         lay.addWidget(self._label, 1)
@@ -398,11 +413,12 @@ class ProgressToast(QWidget):
         return super().eventFilter(obj, e)
 
     def _reposition(self):
+        """贴住右下角：按卡片本身（不含投影留白）算边距，跟页面留 16px。"""
         parent = self.parentWidget()
         if parent is None:
             return
-        self.move(parent.width() - self.width() - self.MARGIN,
-                  parent.height() - self.height() - self.MARGIN)
+        self.move(parent.width() - self.width() + self.PAD - self.MARGIN,
+                  parent.height() - self.height() + self.PAD - self.MARGIN)
         self.raise_()
 
     def show(self):
@@ -426,26 +442,26 @@ class ProgressToast(QWidget):
     def paintEvent(self, e):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = self.rect().adjusted(0, 0, -1, -1)
         dark = isDarkTheme()
+        card = QRectF(self.rect()).adjusted(self.PAD, self.PAD, -self.PAD, -self.PAD)
 
-        # 卡片：深色用略亮于页面底的灰，浅色用近白；都给一圈极淡描边界定边界
-        bg = QColor(45, 45, 48) if dark else QColor(252, 252, 253)
-        border = QColor(255, 255, 255, 18) if dark else QColor(0, 0, 0, 16)
-        painter.setPen(border)
-        painter.setBrush(bg)
-        painter.drawRoundedRect(r, 10, 10)
-
-        # 底部进度线：4px 高的轨道贴在卡片下沿，圆角只在外侧两角露出
-        track_h = 4
-        track = r.adjusted(1, r.height() - track_h, -1, -1)
+        # 卡片不描边：深色主题上一圈 1px 浅色描边会显成「白边」，
+        # 边界交给投影（QGraphicsDropShadowEffect）来交代
+        path = QPainterPath()
+        path.addRoundedRect(card, 10, 10)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(255, 255, 255, 22) if dark else QColor(0, 0, 0, 12))
-        painter.drawRoundedRect(track, 2, 2)
+        painter.setBrush(QColor(45, 45, 48) if dark else QColor(252, 252, 253))
+        painter.drawPath(path)
+
+        # 进度轨道收进卡片内侧：贴边画会跟卡片底缘混成一条多出来的线
+        track = QRectF(card.left() + 12, card.bottom() - 9, card.width() - 24, 3)
+        painter.setBrush(QColor(255, 255, 255, 30) if dark else QColor(0, 0, 0, 24))
+        painter.drawRoundedRect(track, 1.5, 1.5)
+
         if self._total:
             ratio = min(1.0, self._done / self._total)
             if ratio > 0:
                 fill = QRectF(track)
-                fill.setWidth(max(4.0, track.width() * ratio))
+                fill.setWidth(max(6.0, track.width() * ratio))
                 painter.setBrush(QColor(P.BRAND))
-                painter.drawRoundedRect(fill, 2, 2)
+                painter.drawRoundedRect(fill, 1.5, 1.5)

@@ -13,8 +13,9 @@ from __future__ import annotations
 import platform
 
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPainterPath
+from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout,
+                               QVBoxLayout, QWidget)
 
 from qfluentwidgets import CaptionLabel, StrongBodyLabel, TransparentToolButton, isDarkTheme
 from qfluentwidgets import FluentIcon as FIF
@@ -24,6 +25,7 @@ from app.ui import palette as P
 WIDTH = 372
 GAP = 10
 MARGIN = 16
+PAD = 10          # 四周留给投影的空白：靠阴影分层，不画描边
 TOP = 44          # 让开菜单栏 / 任务栏
 LIFETIME = 12000  # 12 秒后自动收起
 
@@ -77,10 +79,17 @@ class Toast(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._tone = _TONE.get(tone, P.BRAND)
         self._hover = False
+        self._card_h = 58 if body else 46
 
-        self.setFixedWidth(WIDTH)
+        self.setFixedSize(WIDTH + PAD * 2, self._card_h + PAD * 2)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 110 if isDarkTheme() else 60))
+        self.setGraphicsEffect(shadow)
+
         box = QHBoxLayout(self)
-        box.setContentsMargins(16, 10, 8, 10)
+        box.setContentsMargins(PAD + 16, PAD + 10, PAD + 8, PAD + 10)
         box.setSpacing(10)
 
         text = QVBoxLayout()
@@ -109,7 +118,6 @@ class Toast(QWidget):
         self.close_btn.clicked.connect(self.dismiss)
         box.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
 
-        self.setFixedHeight(58 if body else 46)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(LIFETIME)
@@ -120,10 +128,11 @@ class Toast(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        card = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        card = QRectF(self.rect()).adjusted(PAD, PAD, -PAD, -PAD)
         path = QPainterPath()
         path.addRoundedRect(card, 10, 10)
 
+        # 不描边：深色桌面上 1px 浅色描边会显成一条白边，边界交给投影
         p.setPen(Qt.PenStyle.NoPen)
         if isDarkTheme():
             p.setBrush(QColor(43, 43, 46, 246))
@@ -135,13 +144,8 @@ class Toast(QWidget):
         p.save()
         p.setClipPath(path)
         p.setBrush(QColor(self._tone))
-        p.drawRoundedRect(QRectF(0, 0, 4, self.height()), 2, 2)
+        p.drawRoundedRect(QRectF(card.left(), card.top(), 4, card.height()), 2, 2)
         p.restore()
-
-        border = QColor(255, 255, 255, 26) if isDarkTheme() else QColor(0, 0, 0, 26)
-        p.setPen(QPen(border, 1))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(path)
 
     # ---------- 交互 ----------
 
@@ -208,8 +212,9 @@ class _Host:
         area = screen.availableGeometry()
         y = area.top() + TOP
         for toast in self.items:
-            toast.move(area.right() - toast.width() - MARGIN, y)
-            y += toast.height() + GAP
+            # 按卡片本体算右边距（widget 还含投影留白）
+            toast.move(area.right() - toast.width() + PAD - MARGIN, y)
+            y += toast._card_h + GAP
 
 
 _host: _Host | None = None
