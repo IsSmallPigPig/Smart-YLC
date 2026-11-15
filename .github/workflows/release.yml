@@ -142,29 +142,117 @@ jobs:
           pip install pyinstaller
           pip install "PySide6>=6.12" "PySide6-Fluent-Widgets>=1.11" pypdf pillow openpyxl requests pymupdf
 
-      - name: PyInstaller 打包（单文件 exe）
+      - name: PyInstaller 打包（onedir，启动快）
+        # 不用 --onefile：单文件每次启动都要把整个运行时解压到临时目录，冷启动明显慢。
+        # onedir 把运行时铺在安装目录里，启动只加载 DLL，快得多。
         run: |
           pyinstaller --noconfirm --clean `
-            --onefile --windowed --name $env:APP_NAME `
+            --onedir --windowed --name $env:APP_NAME `
             --collect-all qfluentwidgets `
             --icon app/assets/smart-ylc.ico `
             --add-data "app/assets;assets" `
             main.py
 
-      - name: 改成中文应用名并打包
+      - name: 改成中文应用名
         run: |
-          $target = "dist/${env:APP_DISPLAY_NAME}.exe"
-          Move-Item "dist/${env:APP_NAME}.exe" $target
-          Get-Item $target | Select-Object Name, Length
-          # 资源名不能带中文（GitHub 会把中文剥掉，只剩 "-Windows-x64.exe"），
-          # 所以对外用 ASCII 的 zip，解压出来的程序仍叫「智慧团委.exe」
-          python -c "import os, zipfile; d='dist'; n=os.environ['APP_DISPLAY_NAME']; z=zipfile.ZipFile(os.path.join(d, os.environ['APP_NAME']+'-Windows-x64.zip'), 'w', zipfile.ZIP_DEFLATED); z.write(os.path.join(d, n+'.exe'), arcname=n+'.exe'); z.write('LICENSE', arcname='LICENSE-GPLv3.txt'); z.close()"
-          Get-Item "dist/${env:APP_NAME}-Windows-x64.zip" | Select-Object Name, Length
+          python -c "import os; d=os.path.join('dist', os.environ['APP_NAME']); src=os.path.join(d, os.environ['APP_NAME']+'.exe'); dst=os.path.join(d, os.environ['APP_DISPLAY_NAME']+'.exe'); os.replace(src, dst); print(dst, os.path.getsize(dst))"
+
+      - name: 准备代码签名证书
+        id: cert
+        shell: pwsh
+        env:
+          WIN_CERT_PFX_B64: ${{ secrets.WIN_CERT_PFX_B64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pwd = ""
+          if ($env:WIN_CERT_PFX_B64) {
+            $bytes = [Convert]::FromBase64String($env:WIN_CERT_PFX_B64)
+            [IO.File]::WriteAllBytes("cert.pfx", $bytes)
+            $pwd = $env:WIN_CERT_PASSWORD
+            $xc = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("cert.pfx", $pwd)
+            "mode=secret" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "使用仓库 Secrets 中的证书签名（真实证书，终端不再提示未知发布者）"
+          } else {
+            $pwd = "LocalSign!" + ([guid]::NewGuid().ToString('N').Substring(0, 10))
+            $xc = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=智慧团委 (SmartYouth)" `
+              -KeyUsage DigitalSignature -FriendlyName "SmartYouth Code Signing" `
+              -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable `
+              -NotAfter (Get-Date).AddYears(3) `
+              -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
+            $sp = ConvertTo-SecureString -String $pwd -Force -AsPlainText
+            Export-PfxCertificate -Cert $xc -FilePath "cert.pfx" -Password $sp | Out-Null
+            "mode=selfsigned" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "未配置证书 Secrets，已生成本次自签名证书"
+          }
+          # 导出公钥证书随包分发：内部分发时把它装进「受信任的根证书颁发机构」即可消除未知发布者
+          Export-Certificate -Cert $xc -FilePath "dist/SmartYouth-CodeSigning.cer" | Out-Null
+          "password=$pwd" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+          $candidates = @(
+            "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe",
+            "C:\Program Files (x86)\Windows Kits\10\bin\*\x86\signtool.exe"
+          )
+          $signtool = $null
+          foreach ($pat in $candidates) {
+            $found = Get-ChildItem $pat -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+            if ($found) { $signtool = $found.FullName; break }
+          }
+          if ($signtool) {
+            "signtool=$signtool" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "signtool: $signtool"
+          } else {
+            "signtool=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Warning "找不到 signtool，跳过签名（安装包照常产出，但为未签名）"
+          }
+
+      - name: 签名主程序
+        if: steps.cert.outputs.signtool != ''
+        shell: pwsh
+        env:
+          SIGN_PWD: ${{ steps.cert.outputs.password }}
+        run: |
+          $st = "${{ steps.cert.outputs.signtool }}"
+          $exe = "dist\SmartYouth\$($env:APP_DISPLAY_NAME).exe"
+          & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "带时间戳签名失败，改试不带时间戳"
+            & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 $exe
+          }
+          if ($LASTEXITCODE -ne 0) { Write-Warning "主程序签名失败，产物未签名" } else { Write-Host "主程序已签名" }
+
+      - name: 安装 Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: 编译安装包
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          if (-not $ver -or $ver -eq 'workflow_dispatch') { $ver = "1.0.0" }
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "找不到 ISCC.exe（Inno Setup 未装好）" }
+          & $iscc "/DAppVersion=$ver" "installer.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译安装包失败" }
+          Get-Item "dist\installer\SmartYouth-Windows-x64-setup.exe" | Select-Object Name, Length
+
+      - name: 签名安装包
+        if: steps.cert.outputs.signtool != ''
+        shell: pwsh
+        env:
+          SIGN_PWD: ${{ steps.cert.outputs.password }}
+        run: |
+          $st = "${{ steps.cert.outputs.signtool }}"
+          $setup = "dist\installer\SmartYouth-Windows-x64-setup.exe"
+          & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $setup
+          if ($LASTEXITCODE -ne 0) { & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 $setup }
+          if ($LASTEXITCODE -ne 0) { Write-Warning "安装包签名失败，产物未签名" } else { Write-Host "安装包已签名" }
 
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ env.APP_NAME }}-Windows
-          path: dist/${{ env.APP_NAME }}-Windows-x64.zip
+          path: |
+            dist/installer/SmartYouth-Windows-x64-setup.exe
+            dist/SmartYouth-CodeSigning.cer
           if-no-files-found: error
 
   release:
@@ -172,38 +260,39 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
         with:
           path: artifacts
 
-      - name: 发布 Release（notes 由 GitHub bot 自动生成）
+      - name: 组合 Release 说明（下载信息 + CHANGELOG）
+        # 说明直接贴变更日志，不用 GitHub 自动生成的 “What's Changed”
+        run: |
+          {
+            echo "## 下载"
+            echo "- **macOS（Apple Silicon / M 系列）**：\`SmartYouth-macOS-arm64.dmg\`（挂载后是「智慧团委.app」）"
+            echo "- **Windows（64 位）**：\`SmartYouth-Windows-x64-setup.exe\`（每用户安装，不需要管理员权限、不弹 UAC）"
+            echo
+            echo "> 仅支持 Apple Silicon；Windows 仅 64 位。安装包用英文名（GitHub 下载文件名不支持中文），装好后的应用名是「智慧团委」。"
+            echo
+            echo "首次运行：macOS 若提示「无法验证开发者」，右键 → 打开，或执行 \`xattr -cr /Applications/智慧团委.app\`；"
+            echo "Windows 双击安装包，SmartScreen 提示时点「更多信息 → 仍要运行」。"
+            echo
+            echo "Windows 若附带 \`SmartYouth-CodeSigning.cer\`，内部分发可把它装进「受信任的根证书颁发机构」以消除「未知发布者」。"
+            echo
+            echo "---"
+            echo
+            cat CHANGELOG.md
+          } > release_body.md
+
+      - name: 发布 Release
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
-          # 少一个安装包就让任务红掉：action-gh-release 默认只警告，会静默发出单品 Release
+          body_path: release_body.md
+          generate_release_notes: false
+          # 少一个产物就让任务红掉，避免静默发出残缺 Release
           fail_on_unmatched_files: true
-          body: |
-            ## 下载
-            - **macOS（Apple Silicon / M 系列）**：`SmartYouth-macOS-arm64.dmg`
-              （挂载后是「智慧团委.app」）
-            - **Windows（64 位）**：`SmartYouth-Windows-x64.zip`
-              （解压后运行「智慧团委.exe」）
-
-            GitHub 的下载文件名不支持非 ASCII 字符，所以安装包用英文名，
-            安装后的应用名是「智慧团委」。
-
-            仅支持 Apple Silicon（M 系列）。Intel Mac 不再提供安装包。
-                        Windows 不提供 32 位版本：PySide6 6.x 只发布 x64 与 arm64 轮子，
-            无法编译 32 位程序。
-
-            ## 首次运行说明
-            - **macOS**：应用未做签名与公证，首次打开若提示「无法验证开发者」，
-              请在访达中**右键 → 打开**，或终端执行：
-              `xattr -cr /Applications/智慧团委.app`
-            - **Windows**：同样无代码签名，SmartScreen 可能提示「已保护你的电脑」，
-              点「更多信息 → 仍要运行」。
-
-            完整变更列表见下方自动生成的更新日志（由 GitHub bot 生成）。
           files: |
             artifacts/SmartYouth-macOS-arm64/SmartYouth-macOS-arm64.dmg
-            artifacts/SmartYouth-Windows/SmartYouth-Windows-x64.zip
+            artifacts/SmartYouth-Windows/SmartYouth-Windows-x64-setup.exe
+            artifacts/SmartYouth-Windows/SmartYouth-CodeSigning.cer

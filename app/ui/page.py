@@ -6,8 +6,21 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QTransform
+import os
+
+from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+    QTransform,
+)
 from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
 from app.ui.hidpi import hidpi_canvas, ui_dpr
@@ -131,6 +144,125 @@ def section_title(text: str) -> StrongBodyLabel:
 def page_title(text: str) -> StrongBodyLabel:
     """页面主标题：整页最大最重的一行，卡片标题与正文都要明显弱于它。"""
     return theme_font(StrongBodyLabel(text), 26, int(QFont.Weight.Bold))
+
+
+class PageBanner(QWidget):
+    """页面头图：通栏贴顶的 banner，叠加页面标题（大字号白字）与右侧操作控件。
+
+    仿首页头图配色、参考 FluentUI 页头排版——标题落在 banner 左下，控件落在右下，
+    说明跟在标题下方。背景与首页 Banner 同源：未设置头图时用同色系蓝→深蓝渐变；
+    设置了头图（系统配置里统一设置）后用 cover 铺满。
+
+    白字叠在浅蓝渐变 / 图片上才读得清；底部叠一层很轻的暗化保证亮图也看得清，
+    不做全透明渐隐（否则标题会落到窗口底色上变成白字白底）。左上角切圆角，
+    与整窗圆角语言一致。
+
+    它取代 PageHeader 成为页面头：沿用同样的接口（title_label / desc_label /
+    set_title / set_desc / add_control / slot），页面里 self.header.add_control(...)
+    这类调用无需改动。"""
+
+    CORNER_RADIUS = 10
+    HEIGHT = 150
+
+    def __init__(self, title: str = "", desc: str = "", parent=None):
+        super().__init__(parent)
+        self._pixmap = None
+        self.setFixedHeight(self.HEIGHT)
+        self.setContentsMargins(0, 0, 0, 0)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(36, 14, 28, 14)
+        lay.setSpacing(4)
+        lay.addStretch(1)  # 把标题压到 banner 底部（FluentUI 页头把标题锚在底部）
+
+        top = QHBoxLayout()
+        top.setSpacing(12)
+        self.title_label = page_title(title)
+        self._set_light(self.title_label, 24)
+        top.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addStretch(1)
+        self.controls = QHBoxLayout()
+        self.controls.setSpacing(8)
+        top.addLayout(self.controls)
+        lay.addLayout(top)
+
+        self.slot = QHBoxLayout()  # 面包屑之类插这里，紧跟标题
+        self.slot.setSpacing(8)
+        lay.addLayout(self.slot)
+
+        self.desc_label = note_label("")
+        self._set_light(self.desc_label, dim=True)
+        lay.addWidget(self.desc_label)
+        self.set_desc(desc)
+
+    @staticmethod
+    def _set_light(label, size: int = 0, dim: bool = False):
+        if dim:
+            label.setTextColor(QColor(255, 255, 255, 222), QColor(255, 255, 255, 222))
+        else:
+            label.setTextColor(QColor(255, 255, 255), QColor(255, 255, 255))
+        if size:
+            f = label.font()
+            f.setPixelSize(size)
+            f.setWeight(QFont.Weight.Bold)
+            label.setFont(f)
+
+    def set_title(self, text: str):
+        self.title_label.setText(text)
+
+    def set_desc(self, text: str):
+        self.desc_label.setText(text)
+        self.desc_label.setVisible(bool(text))
+
+    def add_control(self, widget):
+        self.controls.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        return widget
+
+    def set_image_path(self, path: str):
+        if path and os.path.isfile(path):
+            self._pixmap = QPixmap(path)
+        else:
+            self._pixmap = None
+        self.update()
+
+    def paintEvent(self, e):
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+
+        # 左上角圆角：与整窗圆角语言一致
+        path = QPainterPath()
+        r = self.CORNER_RADIUS
+        path.moveTo(r, 0)
+        path.lineTo(w, 0)
+        path.lineTo(w, h)
+        path.lineTo(0, h)
+        path.lineTo(0, r)
+        path.arcTo(QRectF(0, 0, r * 2, r * 2), 180, -90)
+        path.closeSubpath()
+        p.setClipPath(path)
+
+        if self._pixmap and not self._pixmap.isNull():
+            pm = self._pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                     Qt.TransformationMode.SmoothTransformation)
+            p.drawPixmap((pm.width() - w) // 2 * -1, (pm.height() - h) // 2 * -1, pm)
+        else:
+            top = QColor(38, 84, 140) if isDarkTheme() else QColor(166, 199, 235)
+            bottom = QColor(24, 42, 68) if isDarkTheme() else QColor(84, 134, 196)
+            grad = QLinearGradient(0, 0, w * 0.25, h)
+            grad.setColorAt(0, top)
+            grad.setColorAt(1, bottom)
+            p.fillRect(self.rect(), grad)
+
+        # 底部轻暗化：保证白字在亮图 / 亮渐变上也读得清（不做全透明渐隐）
+        fade = QLinearGradient(0, h * 0.45, 0, h)
+        fade.setColorAt(0, QColor(0, 0, 0, 0))
+        fade.setColorAt(1, QColor(0, 0, 0, 70))
+        p.fillRect(self.rect(), fade)
+
 
 
 class PageHeader(QWidget):

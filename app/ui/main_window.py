@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
@@ -21,6 +22,7 @@ from qfluentwidgets import (
 from app import __version__ as VERSION
 from app.domain.account_health import excluded_summary, split_accounts
 from app.services import store
+from app.services.notices import NoticeCenter
 from app.ui.browser_page import BrowserWindow
 from app.ui.home_page import HomePage, page_bg_color
 from app.ui.org_manage_page import OrgManagePage
@@ -92,6 +94,8 @@ class MainWindow(MSFluentWindow):
         self._material_applied = False
         self.setStyleSheet("MainWindow{background: transparent}")
 
+        # 通知中心：问题清单的唯一持有者，公告面板与浮层提示都读它
+        self.notice_center = NoticeCenter(self)
         self.settings_page = SettingsPage()
         self.home_page = HomePage(self)
         self.upload_page = UploadPage(self)
@@ -101,6 +105,18 @@ class MainWindow(MSFluentWindow):
         self.browser_window: BrowserWindow | None = None
         self.settings_page.window_ref = self  # 毛玻璃开关与团支书导入后的页面刷新
         self.settings_page.home_page = self.home_page  # 系统配置里设置头图后即时刷新首页
+
+        # 右上角浮层提示：前台收到新问题时用它（带处理按钮）；系统通知没有可用的按钮
+        from app.ui.notice_toast import NoticeToastHost
+
+        self.notice_toasts = NoticeToastHost(self)
+        self._really_quit = False
+        self._splash_done = False
+        self._tray_hint_shown = False
+        self._setup_tray()
+        self.notice_center.new_issue.connect(self._on_new_issue)
+        # 启动即把已有账号异常收进通知清单（面板可见，但不弹窗——闪屏期间不打扰）
+        self.settings_page.refresh_notices()
 
         self.addSubInterface(self.home_page, FIF.HOME, "工具首页")
         self.addSubInterface(self.upload_page, FIF.CLOUD, "上传档案")
@@ -145,16 +161,18 @@ class MainWindow(MSFluentWindow):
         qconfig.themeChanged.connect(lambda *_: self.on_theme_changed())
 
         # 同步系统数据：成员缓存 → 站内信 → 组织状况统计，工作线程串行执行，
-        # 每 30 秒一轮、每轮都取数，只用已保存会话，不登录。刷新登录状态是
-        # 独立操作，由设置页按各账号最后刷新时间做 4 小时节流，不参与这里。
+        # 只用已保存会话取数，不登录。刷新登录状态是独立操作，由设置页按各账号
+        # 最后刷新时间做 4 小时节流，不参与这里。
+        # 节奏：前台可见 30 秒一轮；仅托盘后台 1 小时一轮（_tick_sync 按状态判断）。
         self._refreshing = False
         self._refresh_silent = True
         self._refresh_worker: "QThread | None" = None
+        self._last_sync_ts = 0.0
         self._sync_timer = QTimer(self)
         self._sync_timer.setInterval(30 * 1000)
-        self._sync_timer.timeout.connect(self._maybe_background_sync)
+        self._sync_timer.timeout.connect(self._tick_sync)
         self._sync_timer.start()
-        QTimer.singleShot(15 * 1000, self._maybe_background_sync)
+        QTimer.singleShot(15 * 1000, self._tick_sync)
 
         # 启动闪屏：盖住整个窗口（侧边栏、标题栏都在下面）。首屏快照回来后
         # 由 home_page.stats_ready 收起；5 秒兜底，快照失败也不会卡住界面。
@@ -177,11 +195,106 @@ class MainWindow(MSFluentWindow):
         self.home_page._startup_loading = False
         self.splash.finish()
 
-    def _maybe_background_sync(self):
-        """30 秒同步一次系统数据；上一轮未结束就跳过本轮，没有账号也跳过。"""
+    def _is_foreground(self) -> bool:
+        """前台 = 窗口可见且没最小化；仅托盘驻留时算后台。"""
+        return self.isVisible() and not self.isMinimized()
+
+    def _tick_sync(self):
+        """按前后台决定静默刷新节奏：前台 30 秒、仅后台 1 小时。
+
+        定时器每 30 秒轻量打点；未到间隔、上一轮未结束、没有账号都直接返回。
+        刷新只取网页数据（成员/站内信/组织状况），不重新登录。"""
         if not self.settings_page.accounts:
             return
+        interval = 30.0 if self._is_foreground() else 3600.0
+        if time.monotonic() - self._last_sync_ts < interval - 0.5:
+            return
+        if self._refreshing:
+            return
+        self._last_sync_ts = time.monotonic()
         self.refresh_all(silent=True, fast=True)
+
+    def _on_new_issue(self, notice):
+        """新问题：前台用带按钮的应用内浮层，后台用系统通知。"""
+        if not getattr(self, "_splash_done", False):
+            return  # 启动闪屏还没收，先不弹；公告面板会显示
+        if self._is_foreground():
+            self.notice_toasts.show(notice, self.handle_notice_action)
+        else:
+            from app.services.notify import send
+
+            send(notice.title, notice.detail or notice.title)
+
+    # ---------- 通知处理入口 ----------
+
+    def handle_notice_action(self, action: str):
+        """把通知的 action 解释成「切页 + 定位」：accounts:<账号> / org:<支部> / ..."""
+        if not action:
+            return
+        head, _, rest = action.partition(":")
+        if head == "accounts":
+            self.switchTo(self.settings_page)
+            QTimer.singleShot(0, lambda: self.settings_page.focus_accounts(rest))
+        elif head == "org":
+            self.switchTo(self.org_manage_page)
+            if rest:
+                QTimer.singleShot(0, lambda: self.org_manage_page.reveal_branch(rest))
+        elif head == "messages":
+            self.switchTo(self.messages_page)
+        elif head == "upload":
+            self.switchTo(self.upload_page)
+
+    # ---------- 托盘驻留 ----------
+
+    def _setup_tray(self):
+        from PySide6.QtWidgets import QSystemTrayIcon
+
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray = None
+            return
+        from PySide6.QtGui import QAction
+        from PySide6.QtWidgets import QMenu
+
+        from app.ui.brand import app_icon
+
+        self.tray = QSystemTrayIcon(app_icon(), self)
+        self.tray.setToolTip("智慧团委")
+        menu = QMenu()
+        act_show = QAction("显示主界面", self)
+        act_show.triggered.connect(self._restore_from_tray)
+        act_sync = QAction("立即同步", self)
+        act_sync.triggered.connect(self._sync_now)
+        act_quit = QAction("退出", self)
+        act_quit.triggered.connect(self._quit_app)
+        menu.addAction(act_show)
+        menu.addAction(act_sync)
+        menu.addSeparator()
+        menu.addAction(act_quit)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self._on_tray_activated)
+        self.tray.show()
+
+    def _on_tray_activated(self, reason):
+        from PySide6.QtWidgets import QSystemTrayIcon
+
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._restore_from_tray()
+
+    def _restore_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _sync_now(self):
+        self._last_sync_ts = time.monotonic()
+        self.refresh_all(silent=True, fast=True)
+
+    def _quit_app(self):
+        self._really_quit = True
+        if getattr(self, "tray", None) is not None:
+            self.tray.hide()
+        QApplication.quit()
 
     def refresh_all(self, silent: bool = True, fast: bool = False) -> bool:
         """同步系统数据：成员缓存、站内信、组织状况统计，每轮都取数。
@@ -270,28 +383,44 @@ class MainWindow(MSFluentWindow):
         return True
 
     def _notify_new_messages(self, items: list):
-        """线上来了新站内信 → 系统通知（macOS osascript）。"""
+        """新站内信：前台用带「查看」按钮的浮层，后台用系统通知。"""
         if not items:
             return
-        from app.services.notify import send
-
         first = items[0]
         body = f"{first.get('account', '')}：{(first.get('content') or '').strip() or first.get('title', '')}"
-        send(f"收到 {len(items)} 条新站内信", body[:120])
+        if self._is_foreground() and getattr(self, "_splash_done", False):
+            from app.services.notices import Notice
+
+            self.notice_toasts.show(
+                Notice(key="messages", title=f"收到 {len(items)} 条新站内信",
+                       detail=body[:120], action="messages", action_text="查看"),
+                self.handle_notice_action)
+        else:
+            from app.services.notify import send
+
+            send(f"收到 {len(items)} 条新站内信", body[:120])
 
     def _on_visit_branch(self):
         """侧边栏「访问支部」：打开浏览器窗口，没有标签时先问要访问哪个支部。"""
         self._ensure_browser_window().prompt()
 
     def closeEvent(self, e):
-        """关主窗口时把账号网页窗口一并收掉。
+        """关窗：有托盘就收进去继续后台刷新，没有托盘才真正退出。
 
-        主窗口关掉后程序还在托盘里跑，浏览器窗口若留着就成了一个没有主的窗口。
-        """
-        window = getattr(self, "browser_window", None)
-        if window is not None:
-            window.shutdown()
-        super().closeEvent(e)
+        真正退出时把账号网页窗口一并收掉（后台驻留时保留，从托盘回来还在）。"""
+        if self._really_quit or getattr(self, "tray", None) is None:
+            window = getattr(self, "browser_window", None)
+            if window is not None:
+                window.shutdown()
+            super().closeEvent(e)
+            return
+        e.ignore()
+        self.hide()
+        if not self._tray_hint_shown:
+            self._tray_hint_shown = True
+            from app.services.notify import send
+
+            send("智慧团委", "已缩到托盘继续后台刷新，右键托盘图标可退出")
 
     def _ensure_browser_window(self) -> BrowserWindow:
         if self.browser_window is None:

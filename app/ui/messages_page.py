@@ -48,6 +48,7 @@ from app.services.api import SiteClient
 from app.ui.page import (
     FluentPage,
     set_tip,
+    PageBanner,
     PageHeader,
     note_label,
     theme_font,
@@ -199,11 +200,16 @@ class MessagesPage(FluentPage):
         self._silent = False  # 自动拉取时不弹成功提示
 
         lay = self.vBoxLayout
+        # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐
+        lay.setContentsMargins(32, PageBanner.HEIGHT + 16, 32, 24)
 
-        # 标题与操作直接写在背景上，列表卡片铺在下面
-        self.header = PageHeader("系统消息")
+        # 头图通栏贴顶（overlay，不占布局），标题与操作叠在 banner 上；stat 行作副标题
+        self.header = PageBanner("系统消息", "站内信与系统通知", self.scrollWidget)
+        self.banner = self.header
+        from app.services import store
+        self.header.set_image_path(store.load().get("headerImage", ""))
+        self._place_banner()
         self.stat_label = self.header.desc_label
-        lay.addWidget(self.header)
 
         self.kind_seg = SegmentedWidget()
         for key in KINDS:
@@ -230,6 +236,17 @@ class MessagesPage(FluentPage):
         self.header.add_control(self.mark_read_btn)
 
         self.stat_label.setWordWrap(False)
+
+        # 已知问题公告（banner 下方、页签之上）：不重复弹窗，问题都收在这里；
+        # 空清单时整块隐藏，正常情况不出现。
+        from app.ui.notice_panel import NoticePanel
+
+        self._notice_center = getattr(window, "notice_center", None)
+        self.notice_panel = NoticePanel(self._on_notice_action, self)
+        lay.addWidget(self.notice_panel)
+        if self._notice_center is not None:
+            self._notice_center.changed.connect(self._sync_notices)
+        self._sync_notices()
 
         tools = QWidget()
         tools_lay = QHBoxLayout(tools)
@@ -276,8 +293,30 @@ class MessagesPage(FluentPage):
         self._search = text
         self._rebuild()
 
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_banner()
+
+    def _place_banner(self):
+        """头图几何：铺满页面宽度、贴顶，跟随窗口宽度变化。"""
+        if getattr(self, "header", None) is not None:
+            self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
+
+    def _sync_notices(self):
+        """清单变化：面板按 key 增量刷新（不清空重建，避免闪烁）。"""
+        center = getattr(self, "_notice_center", None)
+        if center is not None and getattr(self, "notice_panel", None) is not None:
+            self.notice_panel.set_notices(center.snapshot())
+
+    def _on_notice_action(self, action: str):
+        """公告里的处理入口 → 交给主窗口跳转定位。"""
+        handler = getattr(self.window_ref, "handle_notice_action", None)
+        if handler is not None:
+            handler(action)
+
     def showEvent(self, e):
         super().showEvent(e)
+        self._place_banner()
         self._load_cache()
         self.auto_fetch()
 
@@ -403,7 +442,7 @@ class MessagesPage(FluentPage):
         pages = max(1, (len(group) + PAGE_SIZE - 1) // PAGE_SIZE)
         self._filtered = group
         self._page = 0  # 换页签、换已读状态或改搜索词都从头看
-        self.stat_label.setText(
+        self.header.set_desc(
             f"共 {len(self._views)} 条，未读 {unread_total}，"
             f"{KIND_LABEL[kind]} {len(group)} 条")
         if not group:

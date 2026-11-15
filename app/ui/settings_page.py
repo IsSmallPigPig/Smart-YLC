@@ -45,7 +45,7 @@ from app.ui import dialogs
 from app.ui.browser_page import MAX_TABS as MAX_WEB_TABS
 from app.ui.page import (CONTROL_MAX_WIDTH, CallbackWorker, CollapsibleCard, FluentPage,
                           set_tip,
-                          FullRow, PageHeader, SettingRow, fit_table_columns,
+                          FullRow, PageBanner, PageHeader, SettingRow, fit_table_columns,
                           note_label)
 from app.ui.rule_dialog import RuleDialog
 from app.ui import palette as P
@@ -170,8 +170,8 @@ class SettingsPage(FluentPage):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("page-settings")
-        # 系统配置内容整体上移一点：顶部边距从 24 收到 14，卡片更贴近标题栏
-        self.vBoxLayout.setContentsMargins(32, 14, 32, 24)
+        # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与卡片对齐
+        self.vBoxLayout.setContentsMargins(32, PageBanner.HEIGHT + 16, 32, 24)
         self.rosters: dict[str, Roster] = {}  # 学期 → 名单
         self._roster_paths: dict[str, str] = {}  # 学期 → xlsx 路径（持久化）
         self.roster: Roster | None = None  # 全部学期合并（供检查/上传用）
@@ -189,8 +189,12 @@ class SettingsPage(FluentPage):
         self._loading = False
 
         lay = self.vBoxLayout
-        self.header = PageHeader("系统配置")
-        lay.addWidget(self.header)
+        # 头图通栏贴顶（overlay，不占布局），标题与说明叠在 banner 上；
+        # 内容用顶部留白下推到头图之下。系统配置里改头图时由 _pick_header_image 统一刷新
+        self.header = PageBanner("系统配置", "管理团支部账号、名单、通知与外观", self.scrollWidget)
+        self.banner = self.header
+        self.header.set_image_path(store.load().get("headerImage", ""))
+        self._place_banner()
 
         def group(title: str, expanded: bool) -> CollapsibleCard:
             card = CollapsibleCard(title, expanded=expanded)
@@ -218,6 +222,7 @@ class SettingsPage(FluentPage):
 
         # ── 支部账号 ──
         acc_card = group("支部账号", True)
+        self.acc_card = acc_card  # 供通知跳转时展开并定位
         self.active_combo = ComboBox()
         self.active_combo.currentTextChanged.connect(self._on_active_changed)
         self.web_btn = ToolButton(FIF.GLOBE)
@@ -234,7 +239,7 @@ class SettingsPage(FluentPage):
         self.refresh_all_btn = PrimaryPushButton(FIF.CLOUD_DOWNLOAD, "同步数据")
         set_tip(self.refresh_all_btn, "依次刷新成员缓存、站内信、组织状况")
         self.refresh_all_btn.clicked.connect(self._refresh_all_clicked)
-        row(acc_card, SettingRow("账号测活", icon=FIF.SYNC,
+        row(acc_card, SettingRow("账号测活", icon=FIF.HEART,
                                  control=controls(self.refresh_all_btn, self.health_btn)))
 
         self.del_checked_btn = ToolButton(FIF.DELETE)
@@ -281,21 +286,13 @@ class SettingsPage(FluentPage):
         set_tip(self.add_open_btn, "填账号与密码，确定后立刻测活")
         self.add_open_btn.clicked.connect(self._open_add_account)
         row(acc_card, SettingRow("添加账号",
-                                 icon=FIF.DICTIONARY_ADD,
+                                 icon=FIF.ADD,
                                  control=controls(self.add_open_btn)))
 
-        self.import_btn = PushButton(FIF.DOCUMENT, "批量导入")
-        self.import_btn.clicked.connect(self._import_accounts)
-        self.tpl_btn = PushButton(FIF.DOWNLOAD, "账号模板")
-        set_tip(self.tpl_btn, "下载账号导入模板")
-        self.tpl_btn.clicked.connect(self._download_account_template)
-        self.export_cfg_btn = PushButton(FIF.SHARE, "导出配置")
-        set_tip(self.export_cfg_btn, "导出系统配置 JSON")
-        self.export_cfg_btn.clicked.connect(self._export_config_json)
         self.file_btn = PushButton(FIF.LIBRARY, "导入导出")
         set_tip(self.file_btn, "批量导入账号、下载模板、导出配置")
         self.file_btn.clicked.connect(self._open_file_dialog)
-        row(acc_card, SettingRow("账号文件", icon=FIF.LIBRARY,
+        row(acc_card, SettingRow("账号文件", icon=FIF.SAVE_AS,
                                  control=controls(self.file_btn)),
             last=True)
 
@@ -310,7 +307,7 @@ class SettingsPage(FluentPage):
         set_tip(self.roster_del_btn, "删除选中的名单")
         self.roster_del_btn.clicked.connect(self._delete_selected_roster)
         self.roster_row = SettingRow("团员名单",
-                                     icon=FIF.DICTIONARY,
+                                     icon=FIF.PEOPLE,
                                      control=controls(self.roster_btn, self.template_btn,
                                                        self.roster_del_btn))
         row(ros_card, self.roster_row)
@@ -356,13 +353,13 @@ class SettingsPage(FluentPage):
         self.rule_btn = PushButton(FIF.EDIT, "编辑规则")
         self.rule_btn.clicked.connect(self._open_rule_dialog)
         self.rule_row = SettingRow("编号规则",
-                                   icon=FIF.EDUCATION, control=controls(self.rule_btn))
+                                   icon=FIF.CODE, control=controls(self.rule_btn))
         row(rule_card, self.rule_row)
         self.expected_pages_edit = LineEdit()
         self.expected_pages_edit.setPlaceholderText("如 4")
         self.expected_pages_edit.editingFinished.connect(self._save_config)
         row(rule_card, SettingRow("预期页数", desc="入团志愿书的页数，留空则不核对",
-                                  icon=FIF.FIT_PAGE,
+                                  icon=FIF.DOCUMENT,
                                   control=controls(self.expected_pages_edit),
                                   separator=False))
 
@@ -387,7 +384,7 @@ class SettingsPage(FluentPage):
         self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "mica": 2}.get(_material, 0))
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
         row(look_card, SettingRow("窗口背景", desc="Mica 仅 Windows 11",
-                                  icon=FIF.TILES, control=controls(self.material_combo)))
+                                  icon=FIF.TRANSPARENT, control=controls(self.material_combo)))
         self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
         self.header_pick_btn.clicked.connect(self._pick_header_image)
         self.header_clear_btn = ToolButton(FIF.DELETE)
@@ -548,6 +545,9 @@ class SettingsPage(FluentPage):
         self.ws_edit.setText(ws_dir)
         if ws_dir and os.path.isdir(ws_dir):
             self._setup_watcher(ws_dir)
+            # 把已在待上传列表里的路径当作「已知」：否则启动后第一次扫目录会把
+            # 存量 PDF 全当新文件重处理一遍，每次都提示「已加入待上传列表」。
+            self._ws_known = {e.get("path") for e in self._pending_entries()}
         elif not ws_dir:
             self.workspace_row.set_desc("")
 
@@ -750,21 +750,24 @@ class SettingsPage(FluentPage):
     # ---------- 账号增删 / 去重 / 冲突 ----------
 
     def _import_accounts(self):
+        if getattr(self, "_importing", False):
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "选择账号文件", "", "表格或文本 (*.xlsx *.xlsm *.txt *.csv)")
         if not path:
             return
-        # xlsx 解析放后台线程，大文件不卡界面
-        self.import_btn.setEnabled(False)
+        # xlsx 解析放后台线程，大文件不卡界面；用实例标志防止重复导入，
+        # 不再依赖某个具体按钮的禁用态（按钮可能来自弹窗内的新建实例）
+        self._importing = True
         w = CallbackWorker(lambda: self._read_account_file(path), self)
         w.ok.connect(self._on_account_file_read)
         w.fail.connect(lambda msg: (InfoBar.error("读取失败", msg, duration=5000, parent=self),
-                                    self.import_btn.setEnabled(True)))
+                                    setattr(self, "_importing", False)))
         self._workers.append(w)
         w.start()
 
     def _on_account_file_read(self, rows: list):
-        self.import_btn.setEnabled(True)
+        self._importing = False
         if not rows:
             InfoBar.warning("没有读到账号",
                             "账号与密码两列，备注和届别可空",
@@ -901,10 +904,20 @@ class SettingsPage(FluentPage):
         dialog.user_edit.setFocus()
 
     def _open_file_dialog(self):
-        """账号文件：导入、模板、导出三个命令收在一个入口里。"""
+        """账号文件：导入、模板、导出三个命令收在一个入口里。
+
+        弹窗里的按钮每次打开都新建（不再偷设置页上的持久控件），关窗随弹窗一起销毁——
+        避免控件被反复 reparent 后变成顶层浮动小窗、或关窗后被隐藏从设置页消失。"""
+        from qfluentwidgets import PushButton
+
         dialog = self._config_dialog("账号文件", "导入或导出配置，便于换机迁移")
-        for widget in (self.import_btn, self.tpl_btn, self.export_cfg_btn):
-            dialog.add_row(widget)
+        import_btn = PushButton(FIF.DOCUMENT, "批量导入")
+        import_btn.clicked.connect(self._import_accounts)
+        tpl_btn = PushButton(FIF.DOWNLOAD, "账号模板")
+        tpl_btn.clicked.connect(self._download_account_template)
+        export_btn = PushButton(FIF.SHARE, "导出配置")
+        export_btn.clicked.connect(self._export_config_json)
+        dialog.add_row(import_btn, tpl_btn, export_btn)
         dialog.show()
 
     def _open_notify_dialog(self):
@@ -1457,6 +1470,53 @@ class SettingsPage(FluentPage):
     def _flush_health_results(self):
         self._save_config()
         self._refresh_table()
+        self.refresh_notices()
+
+    def refresh_notices(self):
+        """把账号异常汇总成通知：每个异常账号一条，修好后自动消失。"""
+        center = getattr(getattr(self, "window_ref", None), "notice_center", None)
+        if center is None:
+            return
+        from app.services.notices import Notice
+
+        notices = []
+        for acc in self.accounts:
+            user = str(acc.get("userName") or "")
+            if not user:
+                continue
+            status = (acc.get("health") or {}).get("status") or "unknown"
+            if status in ("ok", "unknown", ""):
+                continue
+            label = HEALTH_LABEL.get(status, "状态异常")
+            remark = str(acc.get("remark") or "").strip()
+            notices.append(Notice(
+                key=f"account:{user}",
+                title=f"账号 {remark or user}：{label}",
+                detail="右侧处理：打开网页端重新登录，或在系统配置里修改",
+                action=f"accounts:{user}",
+                action_text="去设置",
+            ))
+        center.replace_prefix("account:", notices)
+
+    def focus_accounts(self, user: str = ""):
+        """从通知跳过来：展开「支部账号」卡片，并定位到指定账号那一行。"""
+        card = getattr(self, "acc_card", None)
+        if card is not None:
+            if not card._expanded:
+                card.set_expanded(True, animate=False)
+            self.ensureWidgetVisible(card)
+        user = (user or "").strip()
+        if not user:
+            return
+        row = next((i for i in range(self.table.rowCount())
+                    if self.table.item(i, 1) and self.table.item(i, 1).text() == user), -1)
+        if row < 0:
+            return
+        self.table.selectRow(row)
+        item = self.table.item(row, 1)
+        if item is not None:
+            self.table.scrollToItem(item)
+        self.ensureWidgetVisible(self.table)
 
     # ---------- 名单（分学期 + 模板） ----------
 
@@ -1574,13 +1634,35 @@ class SettingsPage(FluentPage):
         self._ws_worker.start()
 
     def _on_ws_file_done(self, name: str, level: str, message: str, path: str):
+        """工作区文件处理结果：正常情况不弹窗（避免每次启动刷一串「已加入」）；
+        命名/压缩等异常才进公告面板，并给一个「去上传」入口。"""
         self.workspace_changed.emit()
+        center = getattr(getattr(self, "window_ref", None), "notice_center", None)
+        if center is None:
+            return
+        key = f"workspace:{path}"
         if level == "ok":
-            InfoBar.success(f"工作区：{name}", message, duration=4000, parent=self.window_ref)
-        else:
-            InfoBar.warning(f"工作区：{name}", message, duration=6000, parent=self.window_ref)
+            center.remove(key)
+            return
+        from app.services.notices import Notice
+
+        center.upsert(Notice(key=key, title=f"工作区：{name}", detail=message,
+                             action="upload", action_text="去上传"))
 
     # ---------- 首页头图（设置入口在此，生效于工具首页） ----------
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_banner()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._place_banner()
+
+    def _place_banner(self):
+        """头图几何：铺满页面宽度、贴顶，跟随窗口宽度变化。"""
+        if getattr(self, "header", None) is not None:
+            self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
 
     def _pick_header_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1588,15 +1670,24 @@ class SettingsPage(FluentPage):
         if not path:
             return
         store.update(lambda cfg: cfg.__setitem__("headerImage", path))
-        if self.home_page:
-            self.home_page.banner.set_image_path(path)
+        self._refresh_banners(path)
         InfoBar.success("头图已设置", os.path.basename(path), duration=2500, parent=self)
 
     def _clear_header_image(self):
         store.update(lambda cfg: cfg.__setitem__("headerImage", ""))
-        if self.home_page:
-            self.home_page.banner.set_image_path("")
+        self._refresh_banners("")
         InfoBar.info("头图已清除", "首页恢复默认头图", duration=2500, parent=self)
+
+    def _refresh_banners(self, path: str):
+        """头图是全局设置：所有页面的 banner 同步刷新（首页 + 其余各页）。"""
+        window = getattr(self, "window_ref", None)
+        names = ("home_page", "upload_page", "org_page",
+                 "org_manage_page", "messages_page", "settings_page")
+        pages = [getattr(window, n, None) for n in names] if window else [self.home_page]
+        for page in pages:
+            banner = getattr(page, "banner", None)
+            if banner is not None:
+                banner.set_image_path(path)
 
     # ---------- 外观（明暗模式 + 毛玻璃） ----------
 

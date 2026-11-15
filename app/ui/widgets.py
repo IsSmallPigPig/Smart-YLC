@@ -252,7 +252,7 @@ class StatTile(CardWidget):
     def __init__(self, title: str, value: str = "0", note: str = "",
                  icon: str = "", tone: str = "info", parent=None):
         super().__init__(parent)
-        self.setBorderRadius(8)
+        self.setBorderRadius(10)
         self.setClickEnabled(True)
         self._tone = tone
         lay = QVBoxLayout(self)
@@ -293,7 +293,7 @@ class StatTile(CardWidget):
         grad.setColorAt(1, tail)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(grad)
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
 
         if self.icon_box is not None:
             center = self.icon_box.geometry().center()
@@ -434,7 +434,7 @@ class ProgressToast(QWidget):
         border = QColor(255, 255, 255, 18) if dark else QColor(0, 0, 0, 16)
         painter.setPen(border)
         painter.setBrush(bg)
-        painter.drawRoundedRect(r, 8, 8)
+        painter.drawRoundedRect(r, 10, 10)
 
         # 底部进度线：4px 高的轨道贴在卡片下沿，圆角只在外侧两角露出
         track_h = 4

@@ -53,7 +53,7 @@ from app.ui.charts import BarRowWidget
 from app.ui import palette as P
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.export_flow import start_export
-from app.ui.page import (BatchedBuild, CardRow, FluentPage, PageHeader, chevron_icon,
+from app.ui.page import (BatchedBuild, CardRow, FluentPage, PageBanner, PageHeader, chevron_icon,
                          note_label,
                          set_tip,
                          section_title, theme_font)
@@ -252,12 +252,21 @@ class OrgManagePage(FluentPage):
         # 支部卡片分批建：60 个支部一次性建要 190ms，切页会明显卡一下
         self._feed_builder = BatchedBuild(self, batch=6)
         self._search = ""  # 由主窗口标题栏的搜索框注入
+        self._refresh_running = False  # 后台组织树刷新进行中（避免重复起线程）
+        self._refresh_callbacks: list = []  # 刷新落地后补跑的动作（如跳转支部详情）
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         lay = self.vBoxLayout
+        # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐
+        lay.setContentsMargins(32, PageBanner.HEIGHT + 16, 32, 24)
 
-        # ── 标题与工具条直接写在背景上：标题最大最重，控件全挤在一行 ──
-        self.header = PageHeader("组织管理")
+        # ── 头图通栏贴顶（overlay，不占布局），标题与工具条叠在 banner 上 ──
+        self.header = PageBanner("组织管理", "支部与团员管理", self.scrollWidget)
+        self.banner = self.header
+        from app.services import store
+        self.header.set_image_path(store.load().get("headerImage", ""))
+        self._place_banner()
+
         self.title_lbl = self.header.title_label
         self.stat_label = self.header.desc_label
 
@@ -282,7 +291,6 @@ class OrgManagePage(FluentPage):
         self.header.add_control(self.sys_only)
         self.header.add_control(self.export_btn)
         self.header.add_control(self.sync_btn)
-        lay.addWidget(self.header)
 
         # 列表与详情：切换时新视图淡入并轻微上移
         self.feed_box = QWidget()
@@ -303,8 +311,18 @@ class OrgManagePage(FluentPage):
         self._set_nav(False)
         qconfig.themeChanged.connect(lambda *_: self._rebuild() if self.isVisible() else None)
 
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_banner()
+
+    def _place_banner(self):
+        """头图几何：铺满页面宽度、贴顶，跟随窗口宽度变化。"""
+        if getattr(self, "header", None) is not None:
+            self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
+
     def showEvent(self, e):
         super().showEvent(e)
+        self._place_banner()
         import time
 
         now = time.monotonic()
@@ -399,17 +417,40 @@ class OrgManagePage(FluentPage):
             groups.append((branch, [_rec_from_dict(d) for d in blob.get("members", [])]))
         return groups
 
-    def refresh(self):
-        """支部树与统计放到后台线程：memberCache 大时逐人跑检查不在界面线程卡顿。"""
+    def refresh(self, on_ready=None):
+        """支部树与统计放到后台线程：memberCache 大时逐人跑检查不在界面线程卡顿。
+
+        on_ready 在刷新成功落地后补跑一次（例如从统计页点异常团员要跳到刚算好的
+        支部详情）。刷新已在进行就只挂回调、不再起第二个线程（避免双份重活）。"""
+        if on_ready is not None:
+            self._refresh_callbacks.append(on_ready)
+        if self._refresh_running:
+            return
+        self._refresh_running = True
+
         from app.ui.page import CallbackWorker
 
         self._stats_token = getattr(self, "_stats_token", 0) + 1
         token = self._stats_token
         worker = CallbackWorker(self._collect_tree, self)
-        worker.ok.connect(lambda data: token == self._stats_token
-                          and self._apply_refresh(data))
-        worker.fail.connect(lambda msg: InfoBar.warning("组织树刷新失败", msg,
-                                                        duration=4000, parent=self))
+
+        def _on_ok(data):
+            if token != self._stats_token:
+                return
+            self._refresh_running = False
+            self._apply_refresh(data)
+            cbs = self._refresh_callbacks
+            self._refresh_callbacks = []
+            for cb in cbs:
+                cb()
+
+        def _on_fail(msg):
+            self._refresh_running = False
+            self._refresh_callbacks.clear()
+            InfoBar.warning("组织树刷新失败", msg, duration=4000, parent=self)
+
+        worker.ok.connect(_on_ok)
+        worker.fail.connect(_on_fail)
         self._workers.append(worker)
         worker.start()
 
@@ -593,25 +634,39 @@ class OrgManagePage(FluentPage):
         self._scroll_top()
         self.detail_changed.emit(True)
 
-    def reveal_branch(self, name: str) -> bool:
+    def reveal_branch(self, name: str, on_missing=None) -> None:
         """按支部名打开详情：组织状况里点异常团员就跳到这里。
 
         支部名来自账号备注（与错误名单里的字段同源），找不到时退一步做包含匹配，
-        备注被改过长也能对上。"""
+        备注被改过长也能对上。
+
+        分支树可能还没算好（组织管理页第一次被切到）：不在这里同步算（那会卡住
+        界面线程），交给后台 refresh，算完再补开；已算好且没过期就直接开。"""
+        import time
+
         needle = (name or "").strip()
         if not needle:
-            return False
-        if not self._branches:
-            # 树还没建好（页面没显示过）：同步算一轮，保证立即能跳转
-            self._apply_refresh(self._collect_tree())
+            if on_missing:
+                on_missing()
+            return
+        fresh = self._branches and (
+            time.monotonic() - getattr(self, "_refreshed_at", 0)) <= 2
+        if fresh:
+            self._open_by_name(needle, on_missing)
+        else:
+            # 树还没建好或已过期：挂到后台刷新完成后再开，不阻塞这次点击
+            self.refresh(on_ready=lambda: self._open_by_name(needle, on_missing))
+
+    def _open_by_name(self, needle: str, on_missing=None):
         node = next((b for b in self._branches if b.label == needle), None)
         if node is None:
             node = next((b for b in self._branches
                          if needle in b.label or (b.label and b.label in needle)), None)
         if node is None:
-            return False
+            if on_missing:
+                on_missing()
+            return
         self._open_branch(node.code)
-        return True
 
     def _build_detail(self, b: BranchNode, animate: bool = True):
         self._clear(self.detail_lay)

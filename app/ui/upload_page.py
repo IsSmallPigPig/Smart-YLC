@@ -34,8 +34,8 @@ from app.domain.upload_inspect import (group_by_branch, inspect, member_index,
 from app.domain.upload_routing import upload_skip_reason
 from app.services import store
 from app.services.workspace import load_pending, remove_pending
-from app.ui.page import (BatchedBuild, CollapsibleCard, FluentPage, PageHeader,
-                         note_label, set_tip)
+from app.ui.page import (BatchedBuild, CollapsibleCard, FluentPage, PageBanner,
+                         PageHeader, note_label, set_tip)
 from app.ui.widgets import StatusList
 
 TARGETS = (
@@ -238,9 +238,16 @@ class UploadPage(FluentPage):
         self._branch_builder = BatchedBuild(self, batch=2)
 
         lay = self.vBoxLayout
+        # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐
+        lay.setContentsMargins(32, PageBanner.HEIGHT + 16, 32, 24)
 
-        # 标题与工具条直接写在背景上；说明小字承担原来两行设置项的职责
-        self.header = PageHeader("上传档案")
+        # 头图通栏贴顶（overlay，不占布局），标题与操作控件叠在 banner 上
+        self.header = PageBanner("上传档案", "把团员档案 PDF 上传到站点", self.scrollWidget)
+        self.banner = self.header
+        from app.services import store
+        self.header.set_image_path(store.load().get("headerImage", ""))
+        self._place_banner()
+
         self.pick_btn = PushButton(FIF.FOLDER, "选择目录")
         self.pick_btn.clicked.connect(self._pick_dir)
         self.rescan_btn = PushButton(FIF.SYNC, "刷新目录")
@@ -260,7 +267,6 @@ class UploadPage(FluentPage):
         for w in (self.pick_btn, self.rescan_btn, self.target_combo,
                   self.upload_btn, self.stop_btn):
             self.header.add_control(w)
-        lay.addWidget(self.header)
 
         self.summary = note_label("")
         lay.addWidget(self.summary)
@@ -278,9 +284,19 @@ class UploadPage(FluentPage):
 
     # ---------- 数据来源 ----------
 
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_banner()
+
     def showEvent(self, event):
         super().showEvent(event)
+        self._place_banner()
         self.refresh()
+
+    def _place_banner(self):
+        """头图几何：铺满页面宽度、贴顶，跟随窗口宽度变化。"""
+        if getattr(self, "header", None) is not None:
+            self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
 
     def _workspace_dir(self) -> str:
         path = str(store.load().get("workspaceDir") or "").strip()
