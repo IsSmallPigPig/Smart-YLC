@@ -185,8 +185,10 @@ class SettingsPage(FluentPage):
         self.home_page = None  # 由 MainWindow 注入，头图设置后即时生效
         self.window_ref = None  # 由 MainWindow 注入，毛玻璃开关生效用
         self._rule = OrgRule()  # 学校自定义编号规则，_load_config 时从配置恢复
-        # 载入配置期间禁止回写：控件还是半初始化状态，见 _save_config 的说明
-        self._loading = False
+        # 配置载入完成前禁止回写：构造期控件还是半初始化状态，self.accounts 也还不存在，
+        # 这时整份写回会把磁盘上的账号/名单/工作区抹成空值（见 _save_config）
+        self._loading = True
+        self._loaded = False
 
         lay = self.vBoxLayout
         # 头图通栏贴顶（overlay，不占布局），标题与说明叠在 banner 上；
@@ -373,14 +375,13 @@ class SettingsPage(FluentPage):
         row(look_card, SettingRow("明暗模式",
                                   icon=FIF.BRIGHTNESS, control=controls(self.theme_combo)))
         self.material_combo = ComboBox()
-        # 只提供 fluent widgets 官方的两种材质；这一栏只用英文（材质名与 Off 都是通用写法）
-        for label in ("Off", "Acrylic", "Mica"):
+        # 只提供 fluent widgets 官方的两种材质；「关闭」是功能项，材质名用官方英文写法
+        for label in ("关闭模糊", "Acrylic", "Mica"):
             self.material_combo.addItem(label)
         _cfg = store.load()
-        from app.services.materials import normalize
+        from app.services.materials import preferred
 
-        _material = normalize(_cfg.get("translucentMaterial")
-                              or ("acrylic" if _cfg.get("translucent") else "none"))
+        _material = preferred(_cfg)
         self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "mica": 2}.get(_material, 0))
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
         row(look_card, SettingRow("窗口背景", desc="Mica 仅 Windows 11",
@@ -452,11 +453,11 @@ class SettingsPage(FluentPage):
         self._scan_timer.setInterval(800)
         self._scan_timer.timeout.connect(self._scan_workspace)
 
-        self._loading = True
         try:
             self._load_config()
         finally:
             self._loading = False
+        self._loaded = True
         self._refresh_table()
 
         # 刷新登录状态：每 15 分钟轮询一次到期账号，各账号 4 小时内不重复刷新
@@ -595,7 +596,7 @@ class SettingsPage(FluentPage):
         # currentIndexChanged → _on_notify_mode_changed → 这里，而那一刻账号已经
         # 载入、名单（第 508 行）和工作区（第 537 行）还没载入，回写就会把磁盘上的
         # rosters / workspaceDir 抹成空值——每次启动丢一次名单和工作区就是这么来的。
-        if self._loading:
+        if self._loading or not getattr(self, "_loaded", False):
             return
 
         def _write(cfg: dict):

@@ -40,6 +40,18 @@ def _replace_atomic(src: str, dst: str, attempts: int = 5) -> None:
 
 def load() -> dict:
     if not os.path.exists(CONFIG_FILE):
+        # 主文件不在了但备份还在：说明是外部删除/中断留下的，直接用备份恢复，
+        # 而不是返回 {} —— 那会让下一次 update 只写进本次的键，整份配置就没了
+        backup = _backup_path()
+        if os.path.exists(backup):
+            try:
+                with open(backup, encoding="utf-8") as f:
+                    cfg = json.load(f)
+            except (OSError, ValueError):
+                return {}
+            if cfg:
+                save(cfg)      # 顺手把主文件补回来
+                return cfg
         return {}
     try:
         with open(CONFIG_FILE, encoding="utf-8") as f:
