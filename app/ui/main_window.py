@@ -110,6 +110,9 @@ class MainWindow(MSFluentWindow):
         self._splash_done = False
         self._tray_hint_shown = False
         self._setup_tray()
+        from app.ui import bg_toast
+
+        bg_toast.set_default_action(self._restore_from_tray)
         self.notice_center.new_issue.connect(self._on_new_issue)
         # 启动即把已有账号异常收进通知清单（面板可见，但不弹窗——闪屏期间不打扰）
         self.settings_page.refresh_notices()
@@ -225,9 +228,8 @@ class MainWindow(MSFluentWindow):
             self._pending_bars.append(notice)
             self._bar_timer.start()
         else:
-            from app.services.notify import send
-
-            send(notice.brief or notice.title, notice.detail or "")
+            self._alert(notice.brief or notice.title, notice.detail or "",
+                        notice.action, notice.tone)
 
     def _flush_bars(self):
         """把这一批新问题合成最多几条消息条：同类账号异常只报个数。"""
@@ -350,6 +352,23 @@ class MainWindow(MSFluentWindow):
         self.raise_()
         self.activateWindow()
 
+    def _alert(self, title: str, body: str = "", action: str = "", tone: str = ""):
+        """后台提醒：点一下回到主界面，并切到该处理的那一页。
+
+        Windows 走托盘气泡（原生，点击回调由 messageClicked 触发）；macOS 的
+        osascript 通知点开是脚本编辑器、无法绑定，改由应用自己的浮窗提醒。"""
+        from app.ui import bg_toast
+
+        bg_toast.alert(
+            title, body, tone=tone, tray=getattr(self, "tray", None),
+            on_click=lambda: self._open_alert(action),
+        )
+
+    def _open_alert(self, action: str):
+        self._restore_from_tray()
+        if action:
+            QTimer.singleShot(0, lambda: self.handle_notice_action(action))
+
     def _sync_now(self):
         self._last_sync_ts = time.monotonic()
         self.refresh_all(silent=True, fast=True)
@@ -469,9 +488,7 @@ class MainWindow(MSFluentWindow):
                 Notice(key="messages", title="", detail=brief, brief=brief,
                        action="messages", action_text="查看", tone="info"))
         else:
-            from app.services.notify import send
-
-            send(f"收到 {len(items)} 条新站内信", f"{account}：{text[:60]}".strip("："))
+            self._alert(f"收到 {len(items)} 条新站内信", brief, "messages", "info")
 
     def _on_visit_branch(self):
         """侧边栏「访问支部」：打开浏览器窗口，没有标签时先问要访问哪个支部。"""
@@ -491,9 +508,7 @@ class MainWindow(MSFluentWindow):
         self.hide()
         if not self._tray_hint_shown:
             self._tray_hint_shown = True
-            from app.services.notify import send
-
-            send("智慧团委", "已缩到托盘继续后台刷新，右键托盘图标可退出")
+            self._alert("智慧团委", "已缩到托盘继续后台刷新，右键托盘图标可退出")
 
     def _ensure_browser_window(self) -> BrowserWindow:
         if self.browser_window is None:

@@ -697,33 +697,23 @@ class SettingsPage(FluentPage):
         self._save_config()
 
     def _test_notify(self, btn=None):
-        """手动发一条测试通知：osascript 不占 GUI 线程。
+        """发一条测试提醒：点它会回到主界面，通道与点击一起验。
 
-        btn 为点击来源按钮（弹窗每次新建），发送期间置灰作反馈；不传则只发不置灰。"""
-        def _send():
-            from app.services.notify import send
+        走应用内浮窗（macOS 的 osascript 通知点开会跳去脚本编辑器，测了也不算数）。"""
+        from app.ui import bg_toast
 
-            return send("团员情况（测试）", "通知通道正常，这是一条测试消息。")
-
-        def _done(ok: bool):
-            if btn is not None:
-                btn.setEnabled(True)
-            if ok:
-                InfoBar.success("测试通知已发送", "没看到弹窗时检查系统通知权限",
-                                duration=4000, parent=self)
-            else:
-                InfoBar.warning("测试通知未送达", "当前平台不支持或系统拒绝了通知",
-                                duration=5000, parent=self)
-
-        if btn is not None:
-            btn.setEnabled(False)
-        worker = CallbackWorker(_send, self)
-        worker.ok.connect(_done)
-        worker.fail.connect(lambda msg: (
-            btn.setEnabled(True) if btn is not None else None,
-            InfoBar.error("测试通知失败", msg, duration=5000, parent=self)))
-        self._workers.append(worker)
-        worker.start()
+        window = getattr(self, "window_ref", None)
+        ok = bg_toast.alert(
+            "团员情况（测试）", "点这条提醒会回到主界面；通知通道正常。",
+            tone="info", tray=getattr(window, "tray", None),
+            on_click=getattr(window, "_restore_from_tray", None),
+        )
+        if ok:
+            InfoBar.success("已发出测试提醒", "点一下那条提醒，应当回到主界面",
+                            duration=4000, parent=self)
+        else:
+            InfoBar.warning("测试提醒未送达", "当前平台不可用或系统拒绝了通知",
+                            duration=5000, parent=self)
 
     def _refresh_autostart_btn(self):
         from app.services import autostart

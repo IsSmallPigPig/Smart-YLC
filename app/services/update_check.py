@@ -121,10 +121,11 @@ def check_on_startup(delay_ms: int = 2500, parent=None):
             record("latest")
             return
         record("update", info.version)
-        from app.services.notify import send
+        from app.ui import bg_toast
 
-        send("智慧团委发现新版本",
-             f"{info.version} 已发布，打开「系统配置 - 关于」即可下载")
+        bg_toast.alert("智慧团委发现新版本",
+                       f"{info.version} 已发布，打开「系统配置 - 关于」即可下载",
+                       tone="info")
         if parent is not None:
             try:
                 from qfluentwidgets import InfoBar, InfoBarPosition
