@@ -18,6 +18,7 @@ from app.domain.upload_routing import resolve_file_targets, roster_class_lookup
 
 UNSORTED = "未归类"
 MEMBER_MISSING = "该支部名单里没有这位团员，请到组织管理核对后再上传"
+ARCHIVED = "线上报到资料已审核通过，已有档案，无需再上传"
 """支部备注的学段前缀：标题只留班名，学段单独做成标签。"""
 STAGE_PREFIXES = ("普通高中", "职业高中", "高级中学", "高中", "初中", "中职", "小学")
 
@@ -29,6 +30,24 @@ def split_branch_label(label: str) -> tuple[str, str]:
         if label.startswith(prefix) and len(label) > len(prefix):
             return prefix, label[len(prefix):]
     return "", label
+
+
+def archived_index(cache: dict) -> dict[str, set[tuple[str, str]]]:
+    """报到资料已审核通过的团员 → {账号: {(姓名, 手机号)}}。
+
+    这一类线上已经有档案了，再传志愿书是重复劳动，上传时直接跳过。"""
+    index: dict[str, set[tuple[str, str]]] = {}
+    for account, blob in (cache or {}).items():
+        rows = set()
+        for d in (blob or {}).get("members") or []:
+            system = d.get("system") or {}
+            if str(system.get("report_data_status") or "").strip() != "审核通过":
+                continue
+            rows.add((str(d.get("name") or "").strip(), str(d.get("mobile") or "").strip()))
+        rows.discard(("", ""))
+        if rows:
+            index[str(account)] = rows
+    return index
 
 
 def member_index(cache: dict) -> dict[str, set[tuple[str, str]]]:
@@ -64,6 +83,7 @@ class FileStatus:
     naming: str = "ok"  # ok | fixed | error
     page: str = "skip"  # ok | error | skip
     member: str = "unknown"  # ok | missing | unknown（没有支部名单数据）
+    archive: bool = False    # 线上报到资料已审核通过：算「已有档案」，不参与上传
     account: str = ""
     branch: str = ""
     problem: str = ""
@@ -72,16 +92,21 @@ class FileStatus:
 
     @property
     def usable(self) -> bool:
-        return self.naming != "error" and self.page != "error" and bool(self.account)
+        return (self.naming != "error" and self.page != "error"
+                and bool(self.account) and not self.archive)
 
     @property
     def tone(self) -> str:
+        if self.archive:
+            return "muted"
         if not self.usable:
             return "error"
         return "warn" if self.naming == "fixed" or self.member == "missing" else "ok"
 
     @property
     def status_text(self) -> str:
+        if self.archive:
+            return "已有档案"
         if not self.usable:
             return "异常"
         if self.naming == "fixed":
@@ -91,7 +116,8 @@ class FileStatus:
 
 def inspect(files, expected_pages: int, accounts: list[dict], roster,
             auto_fix: bool = True, counter=pdf_page_count,
-            members: dict[str, set[tuple[str, str]]] | None = None) -> list[FileStatus]:
+            members: dict[str, set[tuple[str, str]]] | None = None,
+            archived: dict[str, set[tuple[str, str]]] | None = None) -> list[FileStatus]:
     """逐文件检查并返回状态；auto_fix 时把格式不标准但可解析的文件改成标准名。
 
     members 是 member_index() 的结果，给出时核对支部名单：查不到只写警告说明，
@@ -151,11 +177,24 @@ def inspect(files, expected_pages: int, accounts: list[dict], roster,
                 status.naming = "error"
 
     # 支部团员核对放在最后：只对已路由到支部的文件查，缺人不拦上传
+    if archived:
+        for status in statuses:
+            table = archived.get(status.account) if status.account else None
+            pair = parsed.get(status.name)
+            if not table or not pair or not status.account:
+                continue
+            if (pair[0].strip(), pair[1].strip()) in table:
+                status.archive = True
+                status.member = "ok"
+                status.notice = ARCHIVED
+
     if members:
         for status in statuses:
             table = members.get(status.account) if status.account else None
             pair = parsed.get(status.name)
             if not table or not pair:
+                continue
+            if status.archive:      # 已有档案的文件不再关心缺不缺团员
                 continue
             status.member = "ok" if (pair[0].strip(), pair[1].strip()) in table else "missing"
             if status.member == "missing":
@@ -179,6 +218,7 @@ def summarize(statuses: list[FileStatus]) -> dict[str, int]:
                   and s.member != "missing"),
         "fixed": sum(1 for s in statuses if s.usable and s.naming == "fixed"),
         "missing": sum(1 for s in statuses if s.usable and s.member == "missing"),
-        "error": sum(1 for s in statuses if not s.usable),
+        "archive": sum(1 for s in statuses if s.archive),
+        "error": sum(1 for s in statuses if not s.usable and not s.archive),
         "branches": len({s.branch for s in statuses if s.account}),
     }

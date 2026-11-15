@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 
 from app.domain.naming import Roster, RosterRow, analyze_file_name
-from app.domain.upload_inspect import (MEMBER_MISSING, group_by_branch, inspect,
-                                       member_index, split_branch_label, summarize)
+from app.domain.upload_inspect import (MEMBER_MISSING, archived_index, group_by_branch,
+                                       inspect, member_index, split_branch_label,
+                                       summarize)
 
 ACCOUNTS = [{"userName": "ssfz12407", "remark": "普通高中高三七班", "password": "x"}]
 
@@ -108,7 +109,7 @@ def test_group_and_summary(tmp_path):
     assert "普通高中高三七班" in groups and "未归类" in groups
     stats = summarize(statuses)
     assert stats == {"total": 2, "ok": 1, "fixed": 0, "missing": 0,
-                     "error": 1, "branches": 1}
+                     "archive": 0, "error": 1, "branches": 1}
 
 
 def _members(*pairs):
@@ -151,3 +152,32 @@ def test_branch_label_splits_stage_prefix():
     assert split_branch_label("高三十二班") == ("", "高三十二班")
     assert split_branch_label("初中九年级三班") == ("初中", "九年级三班")
     assert split_branch_label("") == ("", "")
+
+
+def test_report_approved_member_marked_as_archived(tmp_path):
+    """报到资料审核通过 = 已有档案：标出来，且不参与上传。"""
+    cache = {"ssfz12407": {"members": [
+        {"name": "张三", "mobile": "13800000001",
+         "system": {"report_data_status": "审核通过"}},
+        {"name": "李四", "mobile": "13800000002",
+         "system": {"report_data_status": "报到待审核"}},
+    ]}}
+    archived = archived_index(cache)
+    assert archived == {"ssfz12407": {("张三", "13800000001")}}
+
+    zhang = make(tmp_path, standard_name("张三+13800000001"))
+    li = make(tmp_path, standard_name("李四+13800000002"))
+    statuses = inspect([zhang, li], 0, ACCOUNTS, roster(), counter=lambda p: 4,
+                       members=member_index(cache), archived=archived)
+    by_name = {s.name: s for s in statuses}
+
+    z = by_name[os.path.basename(zhang)]
+    assert z.archive and not z.usable
+    assert z.status_text == "已有档案" and z.tone == "muted"
+    assert "已有档案" in z.notice
+
+    other = by_name[os.path.basename(li)]
+    assert not other.archive and other.usable
+
+    stats = summarize(statuses)
+    assert stats["archive"] == 1 and stats["ok"] == 1 and stats["error"] == 0
