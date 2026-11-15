@@ -201,8 +201,11 @@ jobs:
             "mode=selfsigned" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             Write-Host "未配置证书 Secrets，已生成本次自签名证书"
           }
-          # 导出公钥证书随包分发：内部分发时把它装进「受信任的根证书颁发机构」即可消除未知发布者
-          Export-Certificate -Cert $xc -FilePath "dist/SmartYouth-CodeSigning.cer" | Out-Null
+          # 导出公钥证书随包分发：内部分发时把它装进「受信任的根证书颁发机构」即可消除未知发布者。
+          # 放在 dist/installer 里，与安装包同目录——upload-artifact 多路径时按公共父目录保留
+          # 结构，分开放会让产物在 artifact 里多一层 installer/，Release 的 files 就对不上。
+          New-Item -ItemType Directory -Force "dist/installer" | Out-Null
+          Export-Certificate -Cert $xc -FilePath "dist/installer/SmartYouth-CodeSigning.cer" | Out-Null
           "password=$pwd" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
           $candidates = @(
@@ -268,7 +271,7 @@ jobs:
           name: ${{ env.APP_NAME }}-Windows
           path: |
             dist/installer/SmartYouth-Windows-x64-setup.exe
-            dist/SmartYouth-CodeSigning.cer
+            dist/installer/SmartYouth-CodeSigning.cer
           if-no-files-found: error
 
   release:
@@ -308,7 +311,10 @@ jobs:
           generate_release_notes: false
           # 少一个产物就让任务红掉，避免静默发出残缺 Release
           fail_on_unmatched_files: true
+          # 用通配而不是写死层级：artifact 内是否多一层目录取决于上传时给的路径，
+          # 写死会让一个目录调整就整条发布失败。通配仍受 fail_on_unmatched_files 约束，
+          # 少哪个产物照样红。
           files: |
-            artifacts/SmartYouth-macOS-arm64/SmartYouth-macOS-arm64.dmg
-            artifacts/SmartYouth-Windows/SmartYouth-Windows-x64-setup.exe
-            artifacts/SmartYouth-Windows/SmartYouth-CodeSigning.cer
+            artifacts/**/*.dmg
+            artifacts/**/*setup.exe
+            artifacts/**/*.cer
