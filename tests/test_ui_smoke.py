@@ -858,6 +858,24 @@ def test_main_window_close_shuts_browser(app, isolated_store):
     assert fake.closed
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin" and os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"),
+    reason="主窗口用 qframelesswindow 接管原生标题栏，离屏下构造会崩",
+)
+def test_page_switch_does_not_fade_page(app, isolated_store):
+    """切页不套整页透明度动画。
+
+    QGraphicsOpacityEffect 会把整页（含 banner）先渲染成低透明度离屏图，首帧是一张
+    发虚、边界全无的页面：banner 先"没有"再出来，像闪一下；卡片边框也跟着时隐时现。
+    切页是同一窗口内的内容替换，直接换就行，不需要入场动画。"""
+    from app.ui.main_window import MainWindow
+
+    win = MainWindow()
+    win.switchTo(win.org_page)
+    assert win.org_page.graphicsEffect() is None
+    win.close()
+
+
 def test_reveal_branch_opens_matching_detail(app, isolated_store):
     """组织状况点错误团员：按支部名定位到组织管理的支部详情。
 
