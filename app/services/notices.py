@@ -28,6 +28,7 @@ class Notice:
     action: str = ""          # 目标：accounts:<账号> / org:<支部> / messages / upload
     action_text: str = ""     # 操作按钮文案，如「去设置」「查看」
     tone: str = ""            # 浮层配色：info / success / warning / error（空则按 level 推）
+    silent: bool = False      # True 时只进公告列表，不弹新问题提示
 
 
 class NoticeCenter(QObject):
@@ -65,7 +66,7 @@ class NoticeCenter(QObject):
             return False
         self._items[notice.key] = notice
         self.changed.emit()
-        if old is None and notice.level == LEVEL_ISSUE:
+        if old is None and notice.level == LEVEL_ISSUE and not notice.silent:
             self.new_issue.emit(notice)
         return True
 
@@ -90,7 +91,7 @@ class NoticeCenter(QObject):
         for n in notices:
             if self._items.get(n.key) == n:
                 continue
-            if n.key not in self._items and n.level == LEVEL_ISSUE:
+            if n.key not in self._items and n.level == LEVEL_ISSUE and not n.silent:
                 fresh.append(n)
             self._items[n.key] = n
             changed = True

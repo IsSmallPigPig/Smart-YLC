@@ -563,17 +563,21 @@ class BatchedBuild:
         self._token = 0
         self._items: list = []
         self._step = None
+        self._on_done = None
         self._next = 0
         self._timer = QTimer(owner)
         self._timer.setInterval(0)
         self._timer.timeout.connect(self._pump)
 
-    def start(self, items, step) -> None:
-        """items 逐个交给 step(item)；step 负责建控件并加进布局。"""
+    def start(self, items, step, on_done=None) -> None:
+        """items 逐个交给 step(item)；step 负责建控件并加进布局。
+
+        on_done 在整批建完后调用一次（用于收起加载态）。"""
         self._token += 1
         self._timer.stop()
         self._items = list(items)
         self._step = step
+        self._on_done = on_done
         self._next = 0
         self._pump()
 
@@ -582,6 +586,7 @@ class BatchedBuild:
         self._timer.stop()
         self._items = []
         self._step = None
+        self._on_done = None
 
     def _pump(self) -> None:
         step = self._step
@@ -595,6 +600,10 @@ class BatchedBuild:
             self._timer.start()
         else:
             self._timer.stop()
+            done = self._on_done
+            self._on_done = None
+            if done is not None:
+                done()
 
 
 class CallbackWorker(QThread):
