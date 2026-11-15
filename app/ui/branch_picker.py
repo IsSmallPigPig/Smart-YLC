@@ -9,8 +9,9 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QDialog
 
-from qfluentwidgets import ComboBox, SubtitleLabel
+from qfluentwidgets import SubtitleLabel
 
+from app.ui.combo import ComboBox
 from app.ui.dialogs import FluentPanelDialog
 
 

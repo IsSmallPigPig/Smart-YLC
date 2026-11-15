@@ -19,7 +19,6 @@ from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QFileDialog, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
-    ComboBox,
     FluentIcon as FIF,
     IndeterminateProgressRing,
     InfoBar,
@@ -36,6 +35,7 @@ from app.domain.upload_inspect import (group_by_branch, inspect, member_index,
 from app.domain.upload_routing import upload_skip_reason
 from app.services import store
 from app.services.workspace import load_pending, remove_pending
+from app.ui.combo import ComboBox
 from app.ui.page import (BatchedBuild, CollapsibleCard, FluentPage, PageBanner,
                          PageHeader, note_label, set_tip)
 from app.ui.widgets import StatusList

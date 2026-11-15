@@ -13,7 +13,6 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QHBoxLayout, QWidget
 
 from qfluentwidgets import (
-    ComboBox,
     FluentIcon as FIF,
     InfoBar,
     InfoBarPosition,
@@ -22,6 +21,7 @@ from qfluentwidgets import (
 
 from app import __version__
 from app.services import update_check, updater
+from app.ui.combo import ComboBox
 from app.ui.page import CollapsibleCard, SettingRow
 
 
