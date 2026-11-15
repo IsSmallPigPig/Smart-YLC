@@ -31,7 +31,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from qfluentwidgets import (
     CheckBox,
-    ComboBox,
     FluentIcon as FIF,
     InfoBar,
     LineEdit,
@@ -43,6 +42,7 @@ from qfluentwidgets import (
 
 from app.ui import dialogs
 from app.ui.browser_page import MAX_TABS as MAX_WEB_TABS
+from app.ui.combo import ComboBox
 from app.ui.page import (CONTROL_MAX_WIDTH, CallbackWorker, CollapsibleCard, FluentPage,
                           set_tip,
                           FullRow, PageBanner, PageHeader, SettingRow, fit_table_columns,
@@ -927,8 +927,9 @@ class SettingsPage(FluentPage):
         （_save_config 读的是这两个属性），避免两次打开复用控件导致的渲染异常。"""
         from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-        from qfluentwidgets import ComboBox, LineEdit, PushButton
+        from qfluentwidgets import LineEdit, PushButton
 
+        from app.ui.combo import ComboBox
         from app.ui.page import note_label
 
         dialog = self._config_dialog("通知设置", "每天一次按时间点推送；按间隔则从上次推送起算")
