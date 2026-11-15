@@ -35,7 +35,6 @@ from app.domain.upload_inspect import (group_by_branch, inspect, member_index,
 from app.domain.upload_routing import upload_skip_reason
 from app.services import store
 from app.services.workspace import load_pending, remove_pending
-from app.ui.combo import ComboBox
 from app.ui.page import (BatchedBuild, CollapsibleCard, FluentPage, PageBanner,
                          PageHeader, note_label, set_tip)
 from app.ui.widgets import StatusList
@@ -66,9 +65,8 @@ class _BusyOverlay(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), page_bg_color())
 
-TARGETS = (
-    ("压到 19.5MB", LIMITS["PDF_20MB_PRESET_BYTES"]),
-)
+# 站点单文件上限 10MB，统一压到 9.5MB 留余量；不再提供可选项
+COMPRESS_TARGET = LIMITS["PDF_DEFAULT_TARGET_BYTES"]
 MAX_BATCH = LIMITS["MAX_UPLOAD_PER_BATCH"]
 RESULT_TONE = {"成功": "ok", "跳过": "warn", "失败": "error"}
 
@@ -282,11 +280,6 @@ class UploadPage(FluentPage):
         self.rescan_btn = PushButton(FIF.SYNC, "刷新目录")
         set_tip(self.rescan_btn, "重新检查工作目录")
         self.rescan_btn.clicked.connect(self.refresh)
-        self.target_combo = ComboBox()
-        for label, _ in TARGETS:
-            self.target_combo.addItem(label)
-        self.target_combo.setFixedWidth(126)
-        set_tip(self.target_combo, "上传前把超过站点限制的 PDF 压到这个大小")
         self.upload_btn = PrimaryPushButton(FIF.CLOUD, "开始上传")
         self.upload_btn.setEnabled(False)
         self.upload_btn.clicked.connect(self._start_upload)
@@ -294,7 +287,7 @@ class UploadPage(FluentPage):
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(lambda: self.worker and self.worker.stop())
         # 功能按钮统一落在 banner 右下角（不居中）
-        for w in (self.pick_btn, self.rescan_btn, self.target_combo,
+        for w in (self.pick_btn, self.rescan_btn,
                   self.upload_btn, self.stop_btn):
             self.header.add_control(w)
 
@@ -627,7 +620,7 @@ class UploadPage(FluentPage):
         self.upload_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.rescan_btn.setEnabled(False)
-        target = TARGETS[max(0, self.target_combo.currentIndex())][1]
+        target = COMPRESS_TARGET
         self.worker = UploadWorker(creds, jobs, target)
         self.worker.row_ready.connect(self._on_row)
         self.worker.stage.connect(self.summary.setText)

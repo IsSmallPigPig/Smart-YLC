@@ -129,7 +129,12 @@ def test_home_and_upload_build(app, isolated_store):
     assert len(home.tiles) == 4
     assert len(home.bars) == 4
     upload = UploadPage(window)
-    assert upload.target_combo.count() == 1
+    # 压缩目标固定 9.5MB，界面上不再给选项
+    from app.constants import LIMITS
+    from app.ui.upload_page import COMPRESS_TARGET
+
+    assert COMPRESS_TARGET == LIMITS["PDF_DEFAULT_TARGET_BYTES"]
+    assert not hasattr(upload, "target_combo")
     upload._apply_statuses([])
     assert not upload.upload_btn.isEnabled()
 
