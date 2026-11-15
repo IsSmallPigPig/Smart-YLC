@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     BreadcrumbBar,
+    BreadcrumbItem,
     CardWidget,
     FluentIcon as FIF,
     IconWidget,
@@ -139,12 +140,55 @@ class ClickRow(CardRow):
         self.clicked.emit()
 
 
+class _BannerCrumbItem(BreadcrumbItem):
+    """banner 上的面包屑节点：白字。
+
+    官方节点按主题取色（浅色主题用黑字），而 banner 恒为深色底，黑字在上面读不清。
+    这里只重绘文字与分隔箭头，其余交互（点击、选中态）沿用父类。"""
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.RenderHint.TextAntialiasing
+                         | QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+
+        sw = self.spacing * 2
+        if not self.isRoot():
+            iw = self.font().pixelSize() / 14 * 8
+            rect = QRectF((sw - iw) / 2, (self.height() - iw) / 2 + 1, iw, iw)
+            p.setOpacity(0.6)
+            FIF.CHEVRON_RIGHT_MED.render(p, rect, fill="#FFFFFF")
+
+        p.setOpacity(1.0 if (self.isSelected or self.isHover) else 0.82)
+        p.setFont(self.font())
+        p.setPen(QColor(255, 255, 255))
+        rect = (self.rect() if self.isRoot()
+                else QRectF(sw, 0, self.width() - sw, self.height()))
+        p.drawText(rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                   self.text)
+
+
 class CrumbBar(BreadcrumbBar):
     """官方面包屑导航：横向放在标题栏槽位里，按内容取宽。
 
     qfluentwidgets 的 BreadcrumbBar 没重写 sizeHint、也只在 resizeEvent 里重排节点；
     放进横向布局会被压成 0 宽、且首次显示时宽度还没就绪会把首节点收进省略按钮。
     这里补 sizeHint 给偏好宽度，并在显示后强制重排一次。"""
+
+    def addItem(self, routeKey: str, text: str):
+        """节点换成白字版：面包屑只出现在 banner 里，恒为深色底。"""
+        if routeKey in self.itemMap:
+            return
+        item = _BannerCrumbItem(routeKey, text, len(self.items), self)
+        item.setFont(self.font())
+        item.setSpacing(self.spacing)
+        item.clicked.connect(lambda: self.setCurrentItem(routeKey))
+
+        self.itemMap[routeKey] = item
+        self.items.append(item)
+        self.setFixedHeight(max(i.height() for i in self.items))
+        self.setCurrentItem(routeKey)
+        self.updateGeometry()
 
     def sizeHint(self):
         w = sum(i.width() for i in self.items) + 4

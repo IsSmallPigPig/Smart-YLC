@@ -147,10 +147,12 @@ def page_title(text: str) -> StrongBodyLabel:
 
 
 class PageBanner(QWidget):
-    """页面头图：通栏贴顶的 banner，承载页面标题（大字号白字）与右下角的操作按钮。
+    """页面头图：通栏贴顶的 banner，左侧「标题 + 说明」成组居中，右下角操作按钮。
 
-    仿首页头图配色、参考 FluentUI 页头排版——标题在上、说明在其下，
-    功能按钮统一落在 banner 右下角（不居中），各页位置一致。
+    仿首页头图配色、参考 FluentUI 页头排版：标题是整页最大的一行，说明紧随其下
+    （间距 DESC_GAP），两者作为一个整体在 banner 里垂直居中；功能按钮固定在右下角，
+    各页一致。说明放底部会与标题脱节，这里按「与说明保持合适间隔」处理。
+
     底边向下渐隐到全透明，与页面底色平滑过渡，不做硬切。
 
     背景与首页 Banner 同源：未设置头图时用同色系蓝→深蓝渐变；
@@ -161,6 +163,12 @@ class PageBanner(QWidget):
 
     CORNER_RADIUS = 10
     HEIGHT = 196
+    ROW_H = 33          # 按钮行高
+    PAD_X = 32
+    PAD_BOTTOM = 16     # 按钮行距底边
+    TITLE_SIZE = 36
+    DESC_SIZE = 14
+    DESC_GAP = 8        # 标题与说明之间
 
     def __init__(self, title: str = "", desc: str = "", parent=None):
         super().__init__(parent)
@@ -169,40 +177,52 @@ class PageBanner(QWidget):
         self.setContentsMargins(0, 0, 0, 0)
 
         lay = QVBoxLayout(self)
-        # 左右与内容区同边距（32），标题与按钮的左右边缘因此和下方卡片对齐
-        lay.setContentsMargins(32, 18, 32, 16)
-        lay.setSpacing(6)
-        lay.addStretch(1)  # 标题整体略高于中线
+        # 左右与内容区同边距（32）；按钮行单独定位在右下角，不参与这条纵向布局
+        lay.setContentsMargins(self.PAD_X, 0, self.PAD_X, 0)
+        lay.setSpacing(0)
+        lay.addStretch(1)
 
-        head = QHBoxLayout()
-        head.setSpacing(12)
         self.title_label = page_title(title)
-        self._set_light(self.title_label, 24)
-        head.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        head.addStretch(1)
-        lay.addLayout(head)
-
-        self.desc_label = note_label("")
-        self._set_light(self.desc_label, dim=True)
-        lay.addWidget(self.desc_label)
+        self._set_light(self.title_label, self.TITLE_SIZE)
+        lay.addWidget(self.title_label)
 
         self.slot = QHBoxLayout()  # 面包屑之类插这里，紧跟标题
         self.slot.setSpacing(8)
         lay.addLayout(self.slot)
-        self.set_desc(desc)
 
+        lay.addSpacing(self.DESC_GAP)
+        self.desc_label = note_label("")
+        self._set_light(self.desc_label, self.DESC_SIZE, dim=True,
+                        weight=QFont.Weight.Normal)
+        lay.addWidget(self.desc_label)
         lay.addStretch(1)
 
-        # 功能按钮：右下角一行（不居中）
-        bottom = QHBoxLayout()
-        bottom.addStretch(1)
-        self.controls = QHBoxLayout()
+        # 功能按钮：右下角一行，几何在 _place_controls 里按 banner 尺寸定位
+        self._controls_host = QWidget(self)
+        self._controls_host.setFixedHeight(self.ROW_H)
+        self.controls = QHBoxLayout(self._controls_host)
+        self.controls.setContentsMargins(0, 0, 0, 0)
         self.controls.setSpacing(8)
-        bottom.addLayout(self.controls)
-        lay.addLayout(bottom)
+
+        self.set_desc(desc)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_controls()
+
+    def _place_controls(self):
+        """按钮行贴右下：右边缘与内容区对齐，纵向离底边 PAD_BOTTOM。"""
+        host = getattr(self, "_controls_host", None)
+        if host is None:
+            return
+        w = self.controls.sizeHint().width()
+        host.setGeometry(self.width() - self.PAD_X - w,
+                         self.height() - self.PAD_BOTTOM - self.ROW_H, w, self.ROW_H)
+        host.raise_()
 
     @staticmethod
-    def _set_light(label, size: int = 0, dim: bool = False):
+    def _set_light(label, size: int = 0, dim: bool = False,
+                   weight: QFont.Weight = QFont.Weight.Bold):
         if dim:
             label.setTextColor(QColor(255, 255, 255, 222), QColor(255, 255, 255, 222))
         else:
@@ -210,7 +230,7 @@ class PageBanner(QWidget):
         if size:
             f = label.font()
             f.setPixelSize(size)
-            f.setWeight(QFont.Weight.Bold)
+            f.setWeight(weight)
             label.setFont(f)
 
     def set_title(self, text: str):
@@ -222,6 +242,7 @@ class PageBanner(QWidget):
 
     def add_control(self, widget):
         self.controls.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._place_controls()   # 新按钮加入后重新贴右下
         return widget
 
     def set_image_path(self, path: str):
@@ -268,11 +289,12 @@ class PageBanner(QWidget):
             grad.setColorAt(1, bottom)
             p.fillRect(layer.rect(), grad)
 
-        # 底边渐隐：只改 alpha，从 78% 处开始柔和淡出到全透明（与页面底色平滑衔接）
+        # 底边渐隐：只改 alpha，从底部行下方（90%）才开始淡出，让标题/说明/按钮都坐在实色上，
+        # 又不与页面底色硬切
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-        fade = QLinearGradient(0, h * 0.78, 0, h)
+        fade = QLinearGradient(0, h * 0.90, 0, h)
         fade.setColorAt(0, QColor(0, 0, 0, 255))
-        fade.setColorAt(0.55, QColor(0, 0, 0, 180))
+        fade.setColorAt(0.45, QColor(0, 0, 0, 205))
         fade.setColorAt(1, QColor(0, 0, 0, 0))
         p.fillRect(layer.rect(), fade)
         p.end()
