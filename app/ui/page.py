@@ -28,6 +28,26 @@ from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidg
 
 PAGE_MARGINS = (32, 24, 32, 24)
 
+# 头图默认配色（没设头图时的渐变）：浅色模式是浅蓝→更浅蓝，和首页头图同一套；
+# 深色模式用深蓝压住窗口底色。两处都从这里取，免得改一处忘另一处。
+BANNER_STOPS_LIGHT = (QColor(166, 199, 235), QColor(214, 230, 246))
+BANNER_STOPS_DARK = (QColor(38, 84, 140), QColor(24, 42, 68))
+
+
+def banner_stops() -> tuple[QColor, QColor]:
+    """按当前明暗模式取头图渐变的两端。"""
+    return BANNER_STOPS_DARK if isDarkTheme() else BANNER_STOPS_LIGHT
+
+
+def banner_text_colors() -> tuple[QColor, QColor]:
+    """头图上的文字色：浅色头图配深字，深色头图配白字。
+
+    浅色头图（#a6c7eb 起步）上白字几乎看不见，所以主标题用近黑的深蓝灰、
+    说明用低一档的灰蓝。"""
+    if isDarkTheme():
+        return QColor(255, 255, 255), QColor(255, 255, 255, 222)
+    return QColor("#12212e"), QColor("#33495e")
+
 
 def note_label(text: str) -> CaptionLabel:
     """说明文字：12px 灰色小字，比正文再弱一档，标题与备注分层。
@@ -183,7 +203,7 @@ class PageBanner(QWidget):
         lay.addStretch(1)
 
         self.title_label = page_title(title)
-        self._set_light(self.title_label, self.TITLE_SIZE)
+        self._set_size(self.title_label, self.TITLE_SIZE)
         lay.addWidget(self.title_label)
 
         self.slot = QHBoxLayout()  # 面包屑之类插这里，紧跟标题
@@ -192,9 +212,10 @@ class PageBanner(QWidget):
 
         lay.addSpacing(self.DESC_GAP)
         self.desc_label = note_label("")
-        self._set_light(self.desc_label, self.DESC_SIZE, dim=True,
-                        weight=QFont.Weight.Normal)
+        self._set_size(self.desc_label, self.DESC_SIZE, weight=QFont.Weight.Normal)
         lay.addWidget(self.desc_label)
+        self._apply_text_colors()
+        qconfig.themeChanged.connect(lambda *_: self._restyle())
         lay.addStretch(1)
 
         # 功能按钮：右下角一行，几何在 _place_controls 里按 banner 尺寸定位
@@ -221,17 +242,21 @@ class PageBanner(QWidget):
         host.raise_()
 
     @staticmethod
-    def _set_light(label, size: int = 0, dim: bool = False,
-                   weight: QFont.Weight = QFont.Weight.Bold):
-        if dim:
-            label.setTextColor(QColor(255, 255, 255, 222), QColor(255, 255, 255, 222))
-        else:
-            label.setTextColor(QColor(255, 255, 255), QColor(255, 255, 255))
-        if size:
-            f = label.font()
-            f.setPixelSize(size)
-            f.setWeight(weight)
-            label.setFont(f)
+    def _set_size(label, size: int, weight: QFont.Weight = QFont.Weight.Bold):
+        f = label.font()
+        f.setPixelSize(size)
+        f.setWeight(weight)
+        label.setFont(f)
+
+    def _apply_text_colors(self):
+        title, desc = banner_text_colors()
+        self.title_label.setTextColor(title, title)
+        self.desc_label.setTextColor(desc, desc)
+
+    def _restyle(self):
+        """切主题后：字换色，头图渐变跟着重画。"""
+        self._apply_text_colors()
+        self.update()
 
     def set_title(self, text: str):
         self.title_label.setText(text)
@@ -282,9 +307,8 @@ class PageBanner(QWidget):
                                      Qt.TransformationMode.SmoothTransformation)
             p.drawPixmap((pm.width() - w) // 2 * -1, (pm.height() - h) // 2 * -1, pm)
         else:
-            top = QColor(38, 84, 140) if isDarkTheme() else QColor(166, 199, 235)
-            bottom = QColor(24, 42, 68) if isDarkTheme() else QColor(84, 134, 196)
-            grad = QLinearGradient(0, 0, w * 0.25, h)
+            top, bottom = banner_stops()
+            grad = QLinearGradient(0, 0, w * 0.35, h)
             grad.setColorAt(0, top)
             grad.setColorAt(1, bottom)
             p.fillRect(layer.rect(), grad)

@@ -31,7 +31,7 @@ from qfluentwidgets import (
 
 from app.ui.anim import fade_out
 from app.ui.charts import BarRowWidget, ProgressDonut
-from app.ui.page import FluentPage, note_label
+from app.ui.page import FluentPage, banner_stops, note_label
 from app.ui.widgets import StatTile
 from app.ui import palette as P
 
@@ -121,8 +121,7 @@ class Banner(QWidget):
                                      Qt.TransformationMode.SmoothTransformation)
             p.drawPixmap((pm.width() - w) // 2 * -1, (pm.height() - h) // 2 * -1, pm)
         else:
-            top = QColor(38, 84, 140) if isDarkTheme() else QColor(166, 199, 235)
-            bottom = QColor(24, 42, 68) if isDarkTheme() else QColor(214, 230, 246)
+            top, bottom = banner_stops()
             grad = QLinearGradient(0, 0, w * 0.35, h)
             grad.setColorAt(0, top)
             grad.setColorAt(1, bottom)
