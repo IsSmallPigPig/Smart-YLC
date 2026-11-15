@@ -30,7 +30,8 @@ from qfluentwidgets import (
 from app.constants import LIMITS, MB
 from app.domain.account_health import excluded_summary, split_accounts
 from app.domain.naming import analyze_file_name
-from app.domain.upload_inspect import (group_by_branch, inspect, member_index,
+from app.domain.upload_inspect import (archived_index, group_by_branch, inspect,
+                                       member_index,
                                        split_branch_label, summarize)
 from app.domain.upload_routing import upload_skip_reason
 from app.services import store
@@ -76,19 +77,20 @@ class InspectWorker(QThread):
     failed = Signal(str)
 
     def __init__(self, files, expected_pages: int, accounts: list[dict], roster,
-                 members: dict | None = None):
+                 members: dict | None = None, archived: dict | None = None):
         super().__init__()
         self.files = files
         self.expected_pages = expected_pages
         self.accounts = accounts
         self.roster = roster
         self.members = members
+        self.archived = archived
 
     def run(self):
         try:
             self.done.emit(inspect(self.files, self.expected_pages,
                                    self.accounts, self.roster,
-                                   members=self.members))
+                                   members=self.members, archived=self.archived))
         except Exception as e:  # 整体失败要显式报出来，不静默留空列表
             self.failed.emit(str(e))
 
@@ -420,7 +422,8 @@ class UploadPage(FluentPage):
         cached_members = (store.load().get("memberCache") or {})
         self.inspector = InspectWorker(files, self._expected_pages(),
                                        self._accounts(), self._roster(),
-                                       member_index(cached_members))
+                                       member_index(cached_members),
+                                       archived_index(cached_members))
         self.inspector.done.connect(self._on_inspected)
         self.inspector.failed.connect(self._on_inspect_failed)
         self.inspector.start()
@@ -458,6 +461,8 @@ class UploadPage(FluentPage):
         parts = [f"正常 {stats['ok']}"]
         if stats["fixed"]:
             parts.append(f"已纠正 {stats['fixed']}")
+        if stats["archive"]:
+            parts.append(f"已有档案 {stats['archive']}")
         if stats["missing"]:
             parts.append(f"缺团员 {stats['missing']}")
         parts.append(f"异常 {stats['error']}")
@@ -571,7 +576,10 @@ class UploadPage(FluentPage):
         branch, bstatuses = group
         stage, name = split_branch_label(branch)
         tags = ([(stage, "gray")] if stage else []) + [(f"{len(bstatuses)} 份", "gray")]
-        todo = sum(1 for s in bstatuses if not s.usable)
+        archived = sum(1 for s in bstatuses if s.archive)
+        if archived:
+            tags.append((f"已有档案 {archived}", "gray"))
+        todo = sum(1 for s in bstatuses if not s.usable and not s.archive)
         if todo:
             tags.append((f"{todo} 待处理", "orange"))
         missing = sum(1 for s in bstatuses if s.usable and s.member == "missing")

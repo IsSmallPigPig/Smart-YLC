@@ -111,6 +111,9 @@ UNREPORTED_STATUSES = {"报到被撤回", "报到待审核", "报到被退回", 
 # 线上已有电子志愿书，重复上传没有意义
 UPLOADED_EBOOK_STATUSES = {"通过", "已上传"}
 
+# 报到资料审核通过 = 线上已经收了资料，视为「已有档案」
+REPORT_APPROVED = "审核通过"
+
 
 def upload_block_reason(report_status: str) -> str:
     """团员报到资料状态 → 拦截原因；可上传返回空串。"""
@@ -121,11 +124,15 @@ def upload_block_reason(report_status: str) -> str:
 
 
 def upload_skip_reason(report_status: str, ebook_status: str) -> str:
-    """上传前预检：未完成报到拦截，线上已有审核通过的电子志愿书跳过重复上传。"""
+    """上传前预检：未完成报到拦截；线上已有档案的跳过重复上传。
+
+    两种「已有档案」：报到资料审核通过（学校已收下资料），或电子志愿书已通过/已上传。"""
     blocked = upload_block_reason(report_status)
     if blocked:
         return blocked
+    if (report_status or "").strip() == REPORT_APPROVED:
+        return "已有档案：线上报到资料已审核通过，无需重复上传"
     e = (ebook_status or "").strip()
     if e in UPLOADED_EBOOK_STATUSES:
-        return f"线上系统已显示审核通过（电子志愿书{e}），无需重复上传"
+        return f"已有档案：线上系统已显示审核通过（电子志愿书{e}），无需重复上传"
     return ""

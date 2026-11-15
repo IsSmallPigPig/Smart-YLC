@@ -131,10 +131,21 @@ def test_upload_skip_reason_skips_uploaded_ebook():
     from app.domain.upload_routing import upload_skip_reason
 
     for e in ("通过", "已上传"):
-        reason = upload_skip_reason("审核通过", e)
-        assert reason and "审核通过" in reason
-    # 未上传/待上传/状态空 → 不拦
+        reason = upload_skip_reason("已报到,电子志愿书未上传", e)
+        assert reason and "已有档案" in reason
+    # 志愿书没通过、报到资料也没通过的 → 不拦
     for e in ("未上传", "-", "", None):
-        assert upload_skip_reason("审核通过", e) == ""
+        assert upload_skip_reason("已报到,电子志愿书未上传", e) == ""
     # 未完成报到优先拦截
     assert "报到" in upload_skip_reason("报到待审核", "已上传")
+
+
+def test_upload_skip_reason_report_approved_counts_as_archived():
+    """报到资料审核通过 = 线上已有档案，不管志愿书状态都不再重复上传。"""
+    from app.domain.upload_routing import upload_skip_reason
+
+    for e in ("未上传", "-", "", None, "通过"):
+        reason = upload_skip_reason("审核通过", e)
+        assert reason.startswith("已有档案"), reason
+    # 报到被退回时仍以「未完成报到」为准
+    assert "未完成报到" in upload_skip_reason("报到被退回", "")
