@@ -20,6 +20,7 @@ from qfluentwidgets import (
     CardWidget,
     FluentIcon as FIF,
     IconWidget,
+    IndeterminateProgressRing,
     InfoBar,
     PrimaryPushButton,
     PrimaryToolButton,
@@ -251,6 +252,8 @@ class OrgManagePage(FluentPage):
         self._detail_code = ""
         # 支部卡片分批建：60 个支部一次性建要 190ms，切页会明显卡一下
         self._feed_builder = BatchedBuild(self, batch=6)
+        # 团支部详情里的团员行也分批建：一个支部上百人时一次性建全会把切页卡成空白
+        self._detail_builder = BatchedBuild(self, batch=8)
         self._search = ""  # 由主窗口标题栏的搜索框注入
         self._refresh_running = False  # 后台组织树刷新进行中（避免重复起线程）
         self._refresh_callbacks: list = []  # 刷新落地后补跑的动作（如跳转支部详情）
@@ -330,6 +333,8 @@ class OrgManagePage(FluentPage):
         if not self._branches or now - getattr(self, "_refreshed_at", 0) > 2:
             self.refresh()
             self._refreshed_at = now
+            if not self._branches:
+                self._show_loading_feed()  # 首帧先给「正在加载」，不要空白
         detail = bool(self._detail_code)
         self._set_nav(detail)
         self.feed_box.setVisible(not detail)
@@ -558,6 +563,22 @@ class OrgManagePage(FluentPage):
         box.setMinimumHeight(160)
         return box
 
+    def _show_loading_feed(self):
+        """首次进入且还没有支部数据：先铺一个「正在加载」，避免切页时一片空白。"""
+        self._feed_builder.cancel()
+        self._clear(self.feed_lay)
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.setSpacing(10)
+        ring = IndeterminateProgressRing(box)
+        ring.setFixedSize(36, 36)
+        ring.start()
+        lay.addWidget(ring, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(note_label("正在加载组织数据…"), 0, Qt.AlignmentFlag.AlignHCenter)
+        box.setMinimumHeight(200)
+        self.feed_lay.addWidget(box)
+
     # ---------- 支部卡片 ----------
 
     def _feed_card(self, b: BranchNode) -> QWidget:
@@ -670,6 +691,7 @@ class OrgManagePage(FluentPage):
         self._open_branch(node.code)
 
     def _build_detail(self, b: BranchNode, animate: bool = True):
+        self._detail_builder.cancel()
         self._clear(self.detail_lay)
         self._set_crumb(b.label)
         st = self._branch_stats(b)
@@ -757,11 +779,17 @@ class OrgManagePage(FluentPage):
         lv = QVBoxLayout(list_card)
         lv.setContentsMargins(14, 4, 14, 4)
         lv.setSpacing(0)
-        for i, m in enumerate(b.members):
-            wrap = self._member_row(m)
-            wrap.separator_row.set_separator(i < len(b.members) - 1)
-            lv.addWidget(wrap)
         self.detail_lay.addWidget(list_card)
+        # 团员行分批建：人多时一次性建上百行会把切页卡成空白，这里先出前几行、其余按帧补齐
+        total = len(b.members)
+
+        def _add(item):
+            i, m = item
+            wrap = self._member_row(m)
+            wrap.separator_row.set_separator(i < total - 1)
+            lv.addWidget(wrap)
+
+        self._detail_builder.start(list(enumerate(b.members)), _add)
 
     def _visit_branch(self, b: BranchNode):
         """访问支部：找到与这个支部对应的账号，交给内置浏览器打开。"""
@@ -782,6 +810,7 @@ class OrgManagePage(FluentPage):
     def back_to_feed(self, *_):
         if not self._detail_code:
             return
+        self._detail_builder.cancel()
         self._detail_code = ""
         self._set_nav(False)
         self._set_toolbar(False)
