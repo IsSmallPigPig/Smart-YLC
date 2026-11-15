@@ -230,8 +230,6 @@ class MessagesPage(FluentPage):
         self.fetch_btn.clicked.connect(lambda: self._fetch(silent=False))
         self.mark_read_btn = PushButton(FIF.CHECKBOX, "全部已读")
         self.mark_read_btn.clicked.connect(self._mark_all_read)
-
-        # 拉取与全部已读进标题行，页签与翻页留在下面一行，都在一行内完成
         self.header.add_control(self.fetch_btn)
         self.header.add_control(self.mark_read_btn)
 

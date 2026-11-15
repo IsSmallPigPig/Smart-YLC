@@ -38,8 +38,8 @@ from app.ui.charts import BarRowWidget, ProgressDonut
 from app.ui import palette as P
 from app.ui.widgets import PillLabel
 from app.domain.check_templates import default_identity_template, default_report_template
-from app.ui.page import (CallbackWorker, FluentPage, PageBanner, PageHeader, note_label,
-                         set_tip,
+from app.ui.page import (CallbackWorker, FluentPage, PageBanner, PageHeader,
+                         note_label, set_tip,
                          section_title, theme_font)
 
 STATUS_LABEL = {
@@ -172,6 +172,7 @@ class OrgPage(FluentPage):
         set_tip(self.export_btn, "导出异常团员名单")
         self.export_btn.setEnabled(False)
         self.export_btn.clicked.connect(self._export)
+        # 功能按钮统一落在 banner 右下角（不居中）
         self.header.add_control(self.export_btn)
         self.header.add_control(self.start_btn)
 
