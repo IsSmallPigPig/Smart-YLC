@@ -639,7 +639,6 @@ class MainWindow(MSFluentWindow):
         self.search_edit.setVisible(False)
         self.search_edit.textChanged.connect(self._on_search_changed)
         self.stackedWidget.currentChanged.connect(self._sync_search)
-        self.stackedWidget.currentChanged.connect(self._animate_page)
 
         qrouter.emptyChanged.connect(self._sync_back_state)
         self.stackedWidget.currentChanged.connect(self._sync_back_state)
@@ -700,19 +699,6 @@ class MainWindow(MSFluentWindow):
             if target is page:
                 target.set_search(text)
                 return
-
-    def _animate_page(self, *_):
-        """切页时整页淡入。
-
-        只动透明度：对布局里的控件做位移动画会让内容在进入页面时上下跳，
-        滚动区域还会顺带重算一次位置。
-        """
-        page = self.stackedWidget.currentWidget()
-        if page is None:
-            return
-        from app.ui.anim import fade_in
-
-        fade_in(page, duration=180, dy=0)
 
     def _place_search(self):
         bar = self.titleBar
