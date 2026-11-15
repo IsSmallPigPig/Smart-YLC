@@ -102,34 +102,15 @@ jobs:
           cp -R "dist/$APP_DISPLAY_NAME.app" "$DMGROOT/"
           # GPLv3 要求随二进制一并分发许可证全文
           cp LICENSE "$DMGROOT/许可证.txt"
-          # 卷图标：不设的话挂载后的磁盘显示成通用磁盘图标，看不到应用 LOGO
-          cp "build/$APP_NAME.icns" "$DMGROOT/.VolumeIcon.icns"
-          RW="dist/$APP_NAME-rw.dmg"
-          hdiutil create -volname "$APP_DISPLAY_NAME" -srcfolder "$DMGROOT" \
-            -ov -format UDRW "$RW" > /dev/null
-          MOUNT="/tmp/$APP_NAME-vol"
-          hdiutil attach "$RW" -nobrowse -noautoopen -mountpoint "$MOUNT" > /dev/null
-          if command -v SetFile > /dev/null; then
-            SetFile -a C "$MOUNT" || echo "::warning::设置卷图标失败，挂载后会是通用磁盘图标"
-          else
-            echo "::warning::SetFile 不可用，卷图标可能不生效"
-          fi
-          # 刚设完卷图标时 Finder 还在读这个卷，直接 detach 会「Resource busy」退出 16；
-          # 强制卸载并重试几次，避免整个发布因为这一步偶发失败
-          for i in 1 2 3 4 5; do
-            if hdiutil detach "$MOUNT" -force > /dev/null 2>&1; then break; fi
-            echo "第 $i 次卸载失败，2 秒后重试"
-            sleep 2
-          done
-          if hdiutil info | grep -q "$MOUNT"; then
-            echo "::error::卷仍挂载在 $MOUNT，无法继续制作 dmg"
-            exit 1
-          fi
+          # 一次成型：不再「挂载—设卷图标—卸载—转换」。挂载后卸载在 runner 上会偶发
+          # 「Resource busy」，整条发布就断在这步；卷图标只是 Finder 里的观感，
+          # 应用图标本身在 .app 里，不受影响。
           # 产物名只用 ASCII：中文文件名在 Release 上会被剥成 "-macOS-arm64.dmg"，
           # 卷名与包内 .app 仍是「智慧团委」
-          hdiutil convert "$RW" -format UDZO \
-            -o "dist/$APP_NAME-macOS-arm64.dmg" > /dev/null
-          rm -rf "$RW" "$DMGROOT"
+          hdiutil create -volname "$APP_DISPLAY_NAME" -srcfolder "$DMGROOT" \
+            -ov -format UDZO "dist/$APP_NAME-macOS-arm64.dmg" > /dev/null
+          rm -rf "$DMGROOT"
+          ls -lh "dist/$APP_NAME-macOS-arm64.dmg"
 
       - uses: actions/upload-artifact@v6
         with:
