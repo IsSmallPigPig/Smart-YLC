@@ -79,12 +79,13 @@
 - 左侧 3px `DANGER` 强调竖线。按 `key` 增量更新行，不整块重建。
 - 行内动作按钮文案由通知给出（如「去设置」「去上传」），点击跳到对应页并定位。
 
-### 浮层提示 NoticeToast
-- 窗口右上角，宽 360、高 46，最多同时 3 条，超出挤掉最旧的。7–12 秒自动消失。
-- **单行**：左侧一条按优先级着色的竖条（info 蓝 / success 绿 / warning 琥珀 / error 红），
-  内容过长右侧省略，右侧关闭。
-- 有处理入口时，动作按钮（「去设置」「查看」）放在**最左**；没有动作时只显示一个状态圆点。
-- 站内信等提示可以不带标题，只显示内容。
+### 消息条 InfoBar（qfluentwidgets 原生）
+- `InfoBarPosition.TOP_RIGHT`，多条自动向下堆叠；5–8 秒自动消失，可手动关闭。
+- 配色由 `InfoBarIcon` 决定：`SUCCESS` 绿、`WARNING` 橙、`ERROR` 红、`INFORMATION` 蓝；
+  通知的 `tone` 映射到对应图标。
+- 单行展示（`InfoBar` 只显示首行内容）；`title` 为空时自动隐藏，站内信只显示内容。
+- 有处理入口时把 `TransparentPushButton(action_text)` 插到图标与文字之间（最左），
+  点击执行动作并关闭该条；不用 `addWidget`（它会把按钮放到文字右侧）。
 - 只在**前台**用；后台改走系统通知（macOS osascript / 托盘气泡）。
 
 ### 表格
