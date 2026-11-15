@@ -432,6 +432,90 @@ def test_settings_control_column_stays_compact(app, isolated_store):
         assert holder.width() <= CONTROL_MAX_WIDTH
 
 
+def test_update_download_failure_clears_progress(app, isolated_store):
+    """下载失败必须收掉「正在下载」浮层，按钮回到可重试的状态。"""
+    from PySide6.QtWidgets import QVBoxLayout
+
+    from app.ui.about_card import AboutCard
+
+    host = QWidget()
+    host.resize(900, 600)
+    lay = QVBoxLayout(host)
+    card = AboutCard()
+    lay.addWidget(card)
+    host.show()
+    _pump(app, 50)
+
+    card._info = type("Info", (), {"version": "9.9.9"})()
+    card._open_toast("下载更新").set_progress(42, 100, "正在下载更新包 42%")
+    assert card._toast is not None
+
+    card._on_download_failed("直接下载失败：The read operation timed out")
+    assert card._toast is None
+    assert card.check_btn.isEnabled()
+    assert "重新下载" in card.check_btn.text()
+
+
+def test_update_check_latest_finishes_progress(app, isolated_store):
+    """已是最新：浮层收掉并把结论留在浮层文案上，不再另弹信息条。"""
+    from PySide6.QtWidgets import QVBoxLayout
+
+    from app.ui.about_card import AboutCard
+
+    host = QWidget()
+    host.resize(900, 600)
+    lay = QVBoxLayout(host)
+    card = AboutCard()
+    lay.addWidget(card)
+    host.show()
+    _pump(app, 50)
+
+    card._open_toast("检查更新").set_indeterminate("正在检查更新…")
+    card._on_checked(None)
+    assert card._toast is None
+    assert card.check_btn.text() == "检查更新"
+
+
+def test_update_found_moves_action_into_row(app, isolated_store):
+    """发现新版本：动作落在行内按钮上，不再往信息条里加控件（那会撑出窗口）。"""
+    from PySide6.QtWidgets import QVBoxLayout
+
+    from app.ui.about_card import AboutCard
+
+    host = QWidget()
+    host.resize(900, 600)
+    lay = QVBoxLayout(host)
+    card = AboutCard()
+    lay.addWidget(card)
+    host.show()
+    _pump(app, 50)
+
+    card._open_toast("检查更新").set_indeterminate()
+    card._on_checked(type("Info", (), {"version": "9.9.9"})())
+    assert card._toast is None
+    assert card.check_btn.text() == "下载 9.9.9"
+    assert "9.9.9" in card.update_row.desc_label.text()
+
+
+def test_progress_toast_indeterminate_scans(app, isolated_store):
+    """总量未知时进度线自己走：不定模式有推动的相位，收尾会停下来。"""
+    from app.ui.widgets import ProgressToast
+
+    host = QWidget()
+    host.resize(600, 400)
+    host.show()
+    toast = ProgressToast("检查更新", host)
+    toast.set_indeterminate("正在检查更新…")
+    _pump(app, 80)
+    assert toast._phase > 0
+
+    toast.finish(text="已是最新版本")
+    assert toast._label.text() == "已是最新版本"
+    assert toast._indeterminate is False
+    assert not toast._marquee.isActive()
+    toast.close()
+
+
 def test_add_account_lives_in_one_row(app, isolated_store):
     """「添加账号」的入口就在行内，不再单独铺一行输入框。"""
     from app.ui.settings_page import SettingsPage

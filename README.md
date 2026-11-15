@@ -180,7 +180,7 @@ Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 PyInstaller �
 「系统配置 - 关于项目」里可以开作者主页、提交反馈、检查更新。
 
 - 来源固定为 `IsSmallPigPig/Smart-YLC`：先读最新 Release，按平台挑安装包（macOS 取 dmg、Windows 取 exe）；没有 Release 时回退 `main` 分支的 `__version__` 并下载源码包。
-- 启动后延迟 2.5 秒静默检查，发现新版本才通知；结果用右下角浮动信息条展示，带「立即下载」。
+- 启动后延迟 2.5 秒静默检查，发现新版本才通知。手动检查与下载用右下角浮动进度条展示（检查时为扫描进度，下载按百分比推进）；「关于项目 → 检查更新」那一行的按钮依次变成「下载 x.y.z」「打开目录」，失败时浮层收起并给出原因。
 - 下载默认经 `ghproxy.com` 加速，失败会说明原因并回退直连；包落在 `~/.gd12355-helper/updates/`，用 `.part` 加原子替换。
 - macOS 上 Python 不读系统钥匙串，检查前会把系统受信任根证书补进 `SSLContext`，证书校验始终开启。
 - 推 `v*` tag 会触发 `.github/workflows/release.yml` 构建两个平台的安装包并发布 Release。
