@@ -139,6 +139,29 @@ def test_home_and_upload_build(app, isolated_store):
     assert not upload.upload_btn.isEnabled()
 
 
+def test_autostart_does_not_require_accounts(app, isolated_store, monkeypatch):
+    """开机自启只跟「托盘要不要开机跑」有关，没配账号也能开。"""
+    from app.services import autostart
+    from app.ui.settings_page import SettingsPage
+
+    calls = []
+    monkeypatch.setattr(autostart, "is_installed", lambda: False)
+    monkeypatch.setattr(autostart, "install", lambda: calls.append("install") or "/tmp/x.plist")
+
+    page = SettingsPage()
+    page.accounts = []
+    page._toggle_autostart()
+    assert calls == ["install"]
+
+
+def test_rounded_corners_is_windows11_only(app):
+    """圆角走 DWM，Windows 11 之外直接返回 False，不再假装成功。"""
+    from app.services.materials import apply_rounded_corners, win11_build
+
+    widget = QWidget()
+    assert apply_rounded_corners(widget) is (win11_build() >= 22000)
+
+
 def test_material_default_is_mica(app, isolated_store):
     """窗口背景默认 Mica；关闭项写「关闭模糊」。"""
     from app.services.materials import preferred

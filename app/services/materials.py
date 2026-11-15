@@ -31,12 +31,53 @@ def preferred(cfg: dict) -> str:
     return "mica"
 
 
+def win11_build() -> int:
+    """Windows 内部版本号；非 Windows 返回 0。"""
+    if sys.platform != "win32":
+        return 0
+    try:
+        return sys.getwindowsversion().build
+    except Exception:
+        return 0
+
+
 def win11_mica_available() -> bool:
     """Mica 只在 Windows 11（build ≥ 22000）可用。"""
-    if sys.platform != "win32":
+    return win11_build() >= 22000
+
+
+# DWM 的窗口圆角偏好（Win11 起才认这个属性）
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_ROUND = 2
+
+
+def apply_rounded_corners(window) -> bool:
+    """让无边框窗口也拿到系统圆角与投影（Windows 11）。
+
+    无边框窗口不会被 DWM 自动切圆角，界面里所有圆角卡片就顶在一张方角窗户上。
+    这里把窗口的圆角偏好设成 ROUND，并由 DWM 补一层窗口投影。
+    macOS 的窗口原本就是圆角；Windows 10 没有这个接口，返回 False。"""
+    if win11_build() < 22000:
         return False
     try:
-        return sys.getwindowsversion().build >= 22000
+        from ctypes import byref, c_int, sizeof
+
+        from qframelesswindow.windows.window_effect import WindowsWindowEffect
+    except Exception:
+        return False
+    try:
+        hwnd = int(window.winId())
+        if hwnd == 0:
+            return False
+        effect = getattr(window, "_dwm_effect", None)
+        if effect is None:
+            effect = WindowsWindowEffect(window)
+            window._dwm_effect = effect
+        pref = c_int(DWMWCP_ROUND)
+        effect.DwmSetWindowAttribute(
+            hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, byref(pref), sizeof(pref))
+        effect.addShadowEffect(hwnd)
+        return True
     except Exception:
         return False
 

@@ -550,11 +550,13 @@ class BrowserWindow(FluentWindowBase):
         模式下窗口底色本身是全透明的，没画东西的地方就变成一块纯黑。
         """
         if sys.platform == "win32":
-            # Windows：showNormal 同样会把 Fluent 的 Mica 效果打掉，显示后重挂
-            from app.services.materials import apply_windows_effect
+            # Windows：showNormal 同样会把 Fluent 的 Mica 效果打掉，显示后重挂；
+            # 圆角偏好也一起重设（窗口 frame 被 Qt 重设过）
+            from app.services.materials import apply_rounded_corners, apply_windows_effect
 
             self._material_applied = apply_windows_effect(self, self._material)
             self._translucent = self._material_applied
+            apply_rounded_corners(self)
             self._apply_background()
             self.update()
             return
