@@ -906,7 +906,7 @@ class SettingsPage(FluentPage):
         tpl_btn.clicked.connect(self._download_account_template)
         dialog.add_row(import_btn, tpl_btn)
 
-        cfg_in_btn = PushButton(FIF.FOLDER, "导入配置")
+        cfg_in_btn = PushButton(FIF.CLOUD_DOWNLOAD, "导入配置")
         cfg_in_btn.clicked.connect(self._import_config_json)
         cfg_out_btn = PushButton(FIF.SHARE, "导出配置")
         cfg_out_btn.clicked.connect(self._export_config_json)
