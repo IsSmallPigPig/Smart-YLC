@@ -295,7 +295,8 @@ jobs:
             echo
             echo "---"
             echo
-            cat CHANGELOG.md
+            # 只贴本次版本的条目：CHANGELOG 攒了多个版本后，整份贴出来会淹没本次改动
+            awk '/^## v/{n++} n==1' CHANGELOG.md
           } > release_body.md
 
       - name: 发布 Release
