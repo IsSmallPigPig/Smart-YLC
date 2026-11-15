@@ -103,3 +103,22 @@ def test_single_account_issue_keeps_brief_text(app):
                             brief="x 账号异常")])
     MainWindow._flush_bars(stub)
     assert [n.brief for n in stub.shown] == ["x 账号异常"]
+
+
+def test_upload_panel_lists_only_upload_issues(app):
+    """上传页的公告只列与上传有关的：账号问题归系统配置，不该混进来。"""
+    from app.ui.notice_panel import NoticePanel
+    from app.ui.upload_page import UploadPage
+
+    center = NoticeCenter()
+    center.upsert(Notice(key="account:a", title="账号 a：登录冷却", scope="settings"))
+    center.upsert(Notice(key="account:b", title="账号 b：需验证码", scope="settings"))
+    center.upsert(Notice(key="upload:missing", title="支部名单缺团员：2 份", scope="upload"))
+
+    class _PageStub:
+        _notice_center = center
+        notice_panel = NoticePanel()
+
+    UploadPage._sync_notices(_PageStub)
+    assert list(_PageStub.notice_panel._rows) == ["upload:missing"]
+    assert _PageStub.notice_panel._summary.text() == "1 项待处理"
