@@ -139,6 +139,32 @@ def test_home_and_upload_build(app, isolated_store):
     assert not upload.upload_btn.isEnabled()
 
 
+def test_import_config_replaces_and_reloads(app, isolated_store, tmp_path):
+    """导入配置 = 整份替换并即时重载；替换前留一份可回退的备份。"""
+    from app.services import store
+    from app.ui.settings_page import SettingsPage
+
+    store.save({"accounts": [{"userName": "old1", "remark": "高一1班", "password": "a"}],
+                "themeMode": "light", "translucentMaterial": "none"})
+    page = SettingsPage()
+
+    page._do_import_config({
+        "accounts": [{"userName": "new1", "remark": "高二2班", "password": "b"}],
+        "rosters": {"2026秋": "/tmp/b.xlsx"},
+        "themeMode": "dark", "translucentMaterial": "acrylic",
+        "workspaceDir": "/tmp/ws-new",
+    })
+
+    assert [a["userName"] for a in store.load()["accounts"]] == ["new1"]
+    assert [a["userName"] for a in page.accounts] == ["new1"]
+    assert page.theme_combo.currentIndex() == 2          # dark
+    assert page.material_combo.currentText() == "Acrylic"
+    assert page.ws_edit.text() == "/tmp/ws-new"
+
+    folder = os.path.dirname(store.CONFIG_FILE)
+    assert any("before-import" in n for n in os.listdir(folder))
+
+
 def test_autostart_does_not_require_accounts(app, isolated_store, monkeypatch):
     """开机自启只跟「托盘要不要开机跑」有关，没配账号也能开。"""
     from app.services import autostart
