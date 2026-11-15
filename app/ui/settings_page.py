@@ -1492,9 +1492,10 @@ class SettingsPage(FluentPage):
             notices.append(Notice(
                 key=f"account:{user}",
                 title=f"账号 {remark or user}：{label}",
-                detail="右侧处理：打开网页端重新登录，或在系统配置里修改",
+                detail="打开网页端重新登录，或在系统配置里修改",
                 action=f"accounts:{user}",
                 action_text="去设置",
+                tone="error",
             ))
         center.replace_prefix("account:", notices)
 
@@ -1647,7 +1648,7 @@ class SettingsPage(FluentPage):
         from app.services.notices import Notice
 
         center.upsert(Notice(key=key, title=f"工作区：{name}", detail=message,
-                             action="upload", action_text="去上传"))
+                             action="upload", action_text="去上传", tone="warning"))
 
     # ---------- 首页头图（设置入口在此，生效于工具首页） ----------
 
