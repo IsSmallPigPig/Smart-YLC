@@ -452,3 +452,26 @@ def test_startup_check_respects_switch_off(tmp_path, monkeypatch):
     monkeypatch.setattr(update_check, "CheckWorker", lambda: called.append(1) or None)
     update_check.check_on_startup(delay_ms=0)
     assert called == []
+
+
+def test_launch_installer_rejects_missing_package(tmp_path):
+    """包被别人删了/移走了：明确报错，不去调系统打开一个不存在的文件。"""
+    with pytest.raises(updater.UpdateError, match="更新包不存在"):
+        updater.launch_installer(str(tmp_path / "gone.dmg"))
+
+
+def test_launch_installer_hands_package_to_system(tmp_path, monkeypatch):
+    """能安装的包交给系统打开；源码 zip 只在文件管理器里定位。"""
+    spawned = []
+    monkeypatch.setattr(updater, "sys", type("S", (), {"platform": "darwin"}))
+    monkeypatch.setattr(updater, "_spawn", lambda cmd, target: spawned.append((cmd, str(target))))
+    monkeypatch.setattr(updater, "_reveal", lambda target: spawned.append(("reveal", str(target))))
+
+    dmg = tmp_path / "SmartYouth-macOS-arm64.dmg"
+    dmg.write_bytes(b"x")
+    assert updater.launch_installer(str(dmg)) == "run"
+    assert spawned == [("open", str(dmg))]
+
+    zip_path = tmp_path / "smart-ylc-main.zip"
+    zip_path.write_bytes(b"x")
+    assert updater.launch_installer(str(zip_path)) == "reveal"

@@ -193,6 +193,49 @@ def _branch_info() -> UpdateInfo:
     )
 
 
+def launch_installer(path: str) -> str:
+    """把下载好的更新包交给系统执行。
+
+    返回 "run" 表示安装程序/镜像已经启动，"reveal" 表示这种包没有安装动作、
+    只在文件管理器里定位（源码 zip）。Windows 的安装程序要替换正在运行的 exe，
+    调用方启动后应当退出应用；macOS 的 dmg 只是挂载，主程序可以继续开着。
+    """
+    target = Path(path)
+    if not target.exists():
+        raise UpdateError("更新包不存在，可能已被移动或删除")
+
+    suffix = target.suffix.lower()
+    try:
+        if sys.platform == "win32" and suffix in (".exe", ".msi"):
+            os.startfile(str(target))  # noqa: S606 - 用户主动下载并确认的安装包
+            return "run"
+        if sys.platform == "darwin" and suffix in (".dmg", ".pkg"):
+            _spawn("open", target)
+            return "run"
+        if sys.platform not in ("win32", "darwin") and suffix in (".appimage", ".deb", ".rpm"):
+            _spawn("xdg-open", target)
+            return "run"
+        _reveal(target)
+        return "reveal"
+    except OSError as e:
+        raise UpdateError(f"无法启动安装程序：{e}") from e
+
+
+def _spawn(command: str, target: Path) -> None:
+    subprocess.Popen([command, str(target)])
+
+
+def _reveal(target: Path) -> None:
+    """在文件管理器里定位文件；Windows 打开所在文件夹（explorer 的 /select 在
+    未加引号的参数里不可靠）。"""
+    if sys.platform == "darwin":
+        _spawn("open", target.parent)
+    elif sys.platform == "win32":
+        os.startfile(str(target.parent))  # noqa: S606 - 只打开文件夹
+    else:
+        _spawn("xdg-open", target.parent)
+
+
 def check_update() -> UpdateInfo | None:
     """返回可更新的版本信息；已是最新返回 None；失败抛 UpdateError。
 
