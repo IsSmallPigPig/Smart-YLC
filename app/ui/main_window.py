@@ -106,10 +106,6 @@ class MainWindow(MSFluentWindow):
         self.settings_page.window_ref = self  # 毛玻璃开关与团支书导入后的页面刷新
         self.settings_page.home_page = self.home_page  # 系统配置里设置头图后即时刷新首页
 
-        # 右上角浮层提示：前台收到新问题时用它（带处理按钮）；系统通知没有可用的按钮
-        from app.ui.notice_toast import NoticeToastHost
-
-        self.notice_toasts = NoticeToastHost(self)
         self._really_quit = False
         self._splash_done = False
         self._tray_hint_shown = False
@@ -215,15 +211,52 @@ class MainWindow(MSFluentWindow):
         self.refresh_all(silent=True, fast=True)
 
     def _on_new_issue(self, notice):
-        """新问题：前台用带按钮的应用内浮层，后台用系统通知。"""
+        """新问题：前台用 InfoBar 消息条（带处理按钮），后台用系统通知。"""
         if not getattr(self, "_splash_done", False):
             return  # 启动闪屏还没收，先不弹；公告面板会显示
         if self._is_foreground():
-            self.notice_toasts.show(notice, self.handle_notice_action)
+            self._show_notice_bar(notice)
         else:
             from app.services.notify import send
 
             send(notice.title, notice.detail or notice.title)
+
+    def _show_notice_bar(self, notice):
+        """用 qfluentwidgets 的 InfoBar 呈现一条通知。
+
+        配色由 InfoBarIcon 决定（success 绿 / warning 橙 / error 红 / info 蓝），
+        右上角自动堆叠、内容只显示首行；有处理入口时用 addWidget 挂按钮。"""
+        from PySide6.QtCore import Qt
+        from qfluentwidgets import (
+            InfoBar,
+            InfoBarIcon,
+            InfoBarPosition,
+            TransparentPushButton,
+        )
+
+        icon = {
+            "success": InfoBarIcon.SUCCESS,
+            "warning": InfoBarIcon.WARNING,
+            "error": InfoBarIcon.ERROR,
+        }.get(notice.tone, InfoBarIcon.INFORMATION)
+        content = notice.detail or notice.title
+        bar = InfoBar(
+            icon=icon,
+            title=notice.title,
+            content=content,
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=8000 if (notice.action and notice.action_text) else 5000,
+            parent=self,
+        )
+        if notice.action and notice.action_text:
+            btn = TransparentPushButton(text=notice.action_text, parent=bar)
+            btn.clicked.connect(lambda: (self.handle_notice_action(notice.action), bar.close()))
+            # InfoBar 的 addWidget 会把按钮放到文字右侧；插到图标与文字之间，动作落在最左
+            bar.hBoxLayout.insertWidget(1, btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        bar.show()
+        return bar
 
     # ---------- 通知处理入口 ----------
 
@@ -391,12 +424,11 @@ class MainWindow(MSFluentWindow):
         if self._is_foreground() and getattr(self, "_splash_done", False):
             from app.services.notices import Notice
 
-            # 站内信不设标题，直接把内容放一行；动作「查看」在最左
-            self.notice_toasts.show(
+            # 站内信不设标题、只显示内容；用 InfoBar 呈现（标题为空会自动隐藏）
+            self._show_notice_bar(
                 Notice(key="messages", title="",
                        detail=body[:120] or f"收到 {len(items)} 条新站内信",
-                       action="messages", action_text="查看", tone="info"),
-                self.handle_notice_action)
+                       action="messages", action_text="查看", tone="info"))
         else:
             from app.services.notify import send
 
