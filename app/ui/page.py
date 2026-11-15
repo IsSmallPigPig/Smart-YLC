@@ -147,22 +147,20 @@ def page_title(text: str) -> StrongBodyLabel:
 
 
 class PageBanner(QWidget):
-    """页面头图：通栏贴顶的 banner，叠加页面标题（大字号白字）与右侧操作控件。
+    """页面头图：通栏贴顶的 banner，承载页面标题（大字号白字）与右下角的操作按钮。
 
-    仿首页头图配色、参考 FluentUI 页头排版——标题落在 banner 左下，控件落在右下，
-    说明跟在标题下方。背景与首页 Banner 同源：未设置头图时用同色系蓝→深蓝渐变；
-    设置了头图（系统配置里统一设置）后用 cover 铺满。
+    仿首页头图配色、参考 FluentUI 页头排版——标题在上、说明在其下，
+    功能按钮统一落在 banner 右下角（不居中），各页位置一致。
+    底边向下渐隐到全透明，与页面底色平滑过渡，不做硬切。
 
-    白字叠在浅蓝渐变 / 图片上才读得清；底部叠一层很轻的暗化保证亮图也看得清，
-    不做全透明渐隐（否则标题会落到窗口底色上变成白字白底）。左上角切圆角，
-    与整窗圆角语言一致。
+    背景与首页 Banner 同源：未设置头图时用同色系蓝→深蓝渐变；
+    设置了头图（系统配置里统一设置）后用 cover 铺满。左上角切圆角。
 
     它取代 PageHeader 成为页面头：沿用同样的接口（title_label / desc_label /
-    set_title / set_desc / add_control / slot），页面里 self.header.add_control(...)
-    这类调用无需改动。"""
+    set_title / set_desc / add_control / slot）。"""
 
     CORNER_RADIUS = 10
-    HEIGHT = 150
+    HEIGHT = 196
 
     def __init__(self, title: str = "", desc: str = "", parent=None):
         super().__init__(parent)
@@ -171,29 +169,37 @@ class PageBanner(QWidget):
         self.setContentsMargins(0, 0, 0, 0)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(36, 14, 28, 14)
-        lay.setSpacing(4)
-        lay.addStretch(1)  # 把标题压到 banner 底部（FluentUI 页头把标题锚在底部）
+        # 左右与内容区同边距（32），标题与按钮的左右边缘因此和下方卡片对齐
+        lay.setContentsMargins(32, 18, 32, 16)
+        lay.setSpacing(6)
+        lay.addStretch(1)  # 标题整体略高于中线
 
-        top = QHBoxLayout()
-        top.setSpacing(12)
+        head = QHBoxLayout()
+        head.setSpacing(12)
         self.title_label = page_title(title)
         self._set_light(self.title_label, 24)
-        top.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        top.addStretch(1)
-        self.controls = QHBoxLayout()
-        self.controls.setSpacing(8)
-        top.addLayout(self.controls)
-        lay.addLayout(top)
-
-        self.slot = QHBoxLayout()  # 面包屑之类插这里，紧跟标题
-        self.slot.setSpacing(8)
-        lay.addLayout(self.slot)
+        head.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addStretch(1)
+        lay.addLayout(head)
 
         self.desc_label = note_label("")
         self._set_light(self.desc_label, dim=True)
         lay.addWidget(self.desc_label)
+
+        self.slot = QHBoxLayout()  # 面包屑之类插这里，紧跟标题
+        self.slot.setSpacing(8)
+        lay.addLayout(self.slot)
         self.set_desc(desc)
+
+        lay.addStretch(1)
+
+        # 功能按钮：右下角一行（不居中）
+        bottom = QHBoxLayout()
+        bottom.addStretch(1)
+        self.controls = QHBoxLayout()
+        self.controls.setSpacing(8)
+        bottom.addLayout(self.controls)
+        lay.addLayout(bottom)
 
     @staticmethod
     def _set_light(label, size: int = 0, dim: bool = False):
@@ -229,8 +235,13 @@ class PageBanner(QWidget):
         w, h = self.width(), self.height()
         if w <= 0 or h <= 0:
             return
-        p = QPainter(self)
+
+        # 先画进一层 QImage，再对整层做 alpha 渐隐：底边柔和过渡到页面底色，不硬切
+        layer = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+        layer.fill(Qt.GlobalColor.transparent)
+        p = QPainter(layer)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         p.setPen(Qt.PenStyle.NoPen)
 
         # 左上角圆角：与整窗圆角语言一致
@@ -255,13 +266,20 @@ class PageBanner(QWidget):
             grad = QLinearGradient(0, 0, w * 0.25, h)
             grad.setColorAt(0, top)
             grad.setColorAt(1, bottom)
-            p.fillRect(self.rect(), grad)
+            p.fillRect(layer.rect(), grad)
 
-        # 底部轻暗化：保证白字在亮图 / 亮渐变上也读得清（不做全透明渐隐）
-        fade = QLinearGradient(0, h * 0.45, 0, h)
-        fade.setColorAt(0, QColor(0, 0, 0, 0))
-        fade.setColorAt(1, QColor(0, 0, 0, 70))
-        p.fillRect(self.rect(), fade)
+        # 底边渐隐：只改 alpha，从 78% 处开始柔和淡出到全透明（与页面底色平滑衔接）
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        fade = QLinearGradient(0, h * 0.78, 0, h)
+        fade.setColorAt(0, QColor(0, 0, 0, 255))
+        fade.setColorAt(0.55, QColor(0, 0, 0, 180))
+        fade.setColorAt(1, QColor(0, 0, 0, 0))
+        p.fillRect(layer.rect(), fade)
+        p.end()
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.drawImage(0, 0, layer)
 
 
 

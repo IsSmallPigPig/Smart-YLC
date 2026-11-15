@@ -264,6 +264,7 @@ class UploadPage(FluentPage):
         self.stop_btn = PushButton(FIF.PAUSE, "停止上传")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(lambda: self.worker and self.worker.stop())
+        # 功能按钮统一落在 banner 右下角（不居中）
         for w in (self.pick_btn, self.rescan_btn, self.target_combo,
                   self.upload_btn, self.stop_btn):
             self.header.add_control(w)

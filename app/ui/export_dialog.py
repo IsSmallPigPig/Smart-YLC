@@ -24,9 +24,14 @@ class ExportDialog(FluentPanelDialog):
     def __init__(self, scope: str = "branch", parent=None):
         super().__init__(parent)
         self.widget.setMinimumWidth(480)
-        self.viewLayout.setSpacing(8)
+        # 行距放宽一档，分组之间留白，避免挤成一坨；每组前面有明确的小标题
+        self.viewLayout.setSpacing(12)
 
         self.viewLayout.addWidget(SubtitleLabel("导出数据", self.widget))
+
+        self.viewLayout.addWidget(
+            theme_font(StrongBodyLabel("导出范围", self.widget), 14,
+                       int(QFont.Weight.DemiBold)))
         self.scope_seg = SegmentedWidget(self.widget)
         self.scope_seg.addItem("branch", "分班导出")
         self.scope_seg.addItem("merged", "合并导出")

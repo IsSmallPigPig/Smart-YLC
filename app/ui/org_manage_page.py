@@ -288,6 +288,7 @@ class OrgManagePage(FluentPage):
         self.export_btn.setFixedSize(32, 32)
         set_tip(self.export_btn, "导出数据")
         self.export_btn.clicked.connect(lambda: start_export(self))
+        # 功能按钮统一落在 banner 右下角（不居中）；详情态由 _set_toolbar 收起
         self.header.add_control(self.sys_only)
         self.header.add_control(self.export_btn)
         self.header.add_control(self.sync_btn)
