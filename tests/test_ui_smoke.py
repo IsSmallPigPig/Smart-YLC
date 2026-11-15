@@ -456,6 +456,65 @@ def test_update_download_failure_clears_progress(app, isolated_store):
     assert "重新下载" in card.check_btn.text()
 
 
+def test_download_launches_installer(app, isolated_store, tmp_path, monkeypatch):
+    """下载完不该停在「文件躺在文件夹里」：直接把安装包交给系统运行。"""
+    from PySide6.QtWidgets import QVBoxLayout
+
+    from app.services import updater
+    from app.ui.about_card import AboutCard
+
+    calls = []
+    monkeypatch.setattr(updater, "launch_installer",
+                        lambda path: calls.append(path) or "run")
+
+    host = QWidget()
+    host.resize(900, 600)
+    lay = QVBoxLayout(host)
+    card = AboutCard()
+    lay.addWidget(card)
+    host.show()
+    _pump(app, 50)
+
+    pkg = tmp_path / "SmartYouth-macOS-arm64.dmg"
+    pkg.write_bytes(b"x")
+    card._open_toast("下载更新").set_progress(100, 100, "正在下载更新包 100%")
+    card._on_downloaded(str(pkg))
+
+    assert calls == [str(pkg)]
+    assert card._toast is None
+    assert card.check_btn.text() == "打开目录"
+
+
+def test_installer_launch_failure_keeps_downloaded_package(app, isolated_store, tmp_path, monkeypatch):
+    """启动失败也要说清「包已经下好了」，并指回「打开目录」手动运行。"""
+    from PySide6.QtWidgets import QVBoxLayout
+
+    from app.services import updater
+    from app.ui.about_card import AboutCard
+
+    def _boom(path):
+        raise updater.UpdateError("没有权限打开")
+
+    monkeypatch.setattr(updater, "launch_installer", _boom)
+
+    host = QWidget()
+    host.resize(900, 600)
+    lay = QVBoxLayout(host)
+    card = AboutCard()
+    lay.addWidget(card)
+    host.show()
+    _pump(app, 50)
+
+    pkg = tmp_path / "SmartYouth-Windows-x64-setup.exe"
+    pkg.write_bytes(b"x")
+    card._open_toast("下载更新").set_progress(100, 100, "正在下载更新包 100%")
+    card._on_downloaded(str(pkg))
+
+    assert card._toast is None
+    assert card._downloaded == str(pkg)
+    assert card.check_btn.text() == "打开目录"
+
+
 def test_update_check_latest_finishes_progress(app, isolated_store):
     """已是最新：浮层收掉并把结论留在浮层文案上，不再另弹信息条。"""
     from PySide6.QtWidgets import QVBoxLayout

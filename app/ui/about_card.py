@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
@@ -230,8 +231,39 @@ class AboutCard(CollapsibleCard):
         self.check_btn.setEnabled(True)
         self.check_btn.setText("打开目录")
         self.update_row.set_desc(f"更新包已下载：{os.path.basename(path)}")
-        text = "更新包已下载（已改用直连）" if self._fallback else "更新包已下载"
-        self._close_toast(text=text)
+        try:
+            mode = updater.launch_installer(path)
+        except updater.UpdateError as e:
+            # 启动不了就退回到「文件已经下好了」：留着浮层收尾，别让用户以为没下载
+            self._close_toast(text="更新包已下载，但启动安装程序失败")
+            self._notice("error", "无法启动安装程序",
+                         f"{e}。可以点「打开目录」手动运行。", 10000)
+            return
+
+        if mode != "run":
+            self._close_toast(text="更新包已下载，已在文件管理器中定位")
+            return
+        text = "更新包已下载，正在启动安装程序…"
+        if self._fallback:
+            text = "加速不可用，已改用直连下载；正在启动安装程序…"
+        self._close_toast(text=text, hold_ms=1500)
+        if sys.platform == "win32":
+            self._quit_for_install()
+
+    def _quit_for_install(self):
+        """Windows 的安装程序要替换正在运行的 exe：让它先跑起来，再退出主程序。"""
+        window = self.window()
+        worker = getattr(getattr(window, "upload_page", None), "worker", None)
+        if worker is not None and getattr(worker, "isRunning", lambda: False)():
+            # 上传到一半退出会留下半截提交；留给用户自己选时机重启
+            self._notice("warning", "上传还在进行",
+                         "安装程序已启动；本窗口先不关闭，装完重启应用即可", 9000)
+            return
+        from PySide6.QtCore import QTimer
+
+        quit_app = getattr(window, "_quit_app", None)
+        if quit_app is not None:
+            QTimer.singleShot(1200, quit_app)
 
     def _on_download_failed(self, message: str):
         self.check_btn.setEnabled(True)
