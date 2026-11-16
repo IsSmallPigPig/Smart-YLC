@@ -35,6 +35,63 @@ def available() -> bool:
         return False
 
 
+def app_name() -> str:
+    """系统设置里这条通知挂在哪个名字下面：打包版是「智慧团委」，源码运行是「Python」。"""
+    if sys.platform != "darwin":
+        return ""
+    try:
+        import Foundation
+
+        info = Foundation.NSBundle.mainBundle().infoDictionary() or {}
+        name = str(info.get("CFBundleDisplayName") or info.get("CFBundleName") or "")
+        return name or "Python"
+    except Exception:
+        return "Python"
+
+
+def permission_state() -> str:
+    """系统通知权限：ok / denied / undetermined / unavailable。
+
+    源码运行时进程的 bundle id 是 Python 自己的，权限记在「Python」名下；
+    被关掉时通知发不出去，调用方只能回落应用内浮窗，所以要把原因说清楚。"""
+    if sys.platform != "darwin":
+        return "unavailable"
+    if not available():
+        return "unavailable"
+    try:
+        import Foundation
+        import UserNotifications as UN
+
+        center = UN.UNUserNotificationCenter.currentNotificationCenter()
+        done = threading.Event()
+        box: dict[str, int] = {}
+
+        def _read(settings):
+            box["status"] = int(settings.authorizationStatus())
+            done.set()
+
+        center.getNotificationSettingsWithCompletionHandler_(_read)
+        if not done.wait(2.0):
+            return "undetermined"
+        return {2: "ok", 1: "denied"}.get(box.get("status", 0), "undetermined")
+    except Exception:
+        return "unavailable"
+
+
+def open_settings() -> None:
+    """打开「系统设置 → 通知」，用户自己去把本应用的通知打开。"""
+    if sys.platform != "darwin":
+        return
+    try:
+        import subprocess
+
+        subprocess.Popen(
+            ["open", "x-apple.systempreferences:com.apple.preference.notifications"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def _ensure(center, UN, Foundation):
     """建 delegate 并挂到通知中心；只做一次。"""
     global _DELEGATE

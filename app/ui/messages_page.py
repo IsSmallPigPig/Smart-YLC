@@ -362,7 +362,18 @@ class MessagesPage(FluentPage):
         self._views = views
         self._name_index = build_member_name_index(
             payload["memberCache"], self._local_rows())
+        # 30 秒快刷每次都会重写 messagesCache：数据没变也重建一遍列表，
+        # 卡片一批批重长出来，看着就是闪。内容摘要一样就只更新计数，不动卡片。
+        digest = self._content_digest(views)
+        if digest == getattr(self, "_content_digest_last", None) and self.list_lay.count():
+            return
+        self._content_digest_last = digest
         self._rebuild()
+
+    @staticmethod
+    def _content_digest(views: list) -> str:
+        """只看影响列表显示的三项：账号、消息号、时间。"""
+        return "|".join(f"{v.account}:{v.receive_id}:{v.time_str}" for v in views[:120])
 
     def _local_rows(self) -> list:
         """本地名单直接复用「系统配置」已解析的各学期名单（不在 GUI 线程重复读 xlsx）。"""
@@ -460,6 +471,9 @@ class MessagesPage(FluentPage):
             item = self.list_lay.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                # 先隐藏再 deleteLater：销毁要等下一轮事件循环，旧卡片会和新
+                # 卡片叠一帧，文字就糊成两层（组织管理切页踩过同一个坑）。
+                widget.hide()
                 widget.deleteLater()
 
     def _render_page(self):

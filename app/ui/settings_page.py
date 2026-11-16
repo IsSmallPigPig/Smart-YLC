@@ -741,10 +741,44 @@ class SettingsPage(FluentPage):
         self._sync_notify_controls()
         self._save_config()
 
+    def _notify_channel_widget(self, parent):
+        """一行说清提醒走哪个通道；被系统关掉时给一个直达开关的按钮。"""
+        import sys
+
+        from PySide6.QtWidgets import QHBoxLayout, QWidget
+
+        from qfluentwidgets import PushButton
+
+        from app.services import macos_notify
+
+        box = QWidget(parent)
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        if sys.platform != "darwin":
+            lay.addWidget(note_label("提醒走系统托盘气泡"), 1)
+            return box
+        state = macos_notify.permission_state()
+        if state == "ok":
+            lay.addWidget(note_label("系统通知已开启，提醒以系统横幅弹出"), 1)
+        elif state == "denied":
+            lay.addWidget(note_label(
+                "系统通知被关闭，只能在应用内浮窗提醒；在「系统设置 → 通知」里"
+                f"打开「{macos_notify.app_name()}」即可"), 1)
+            btn = PushButton(FIF.SETTING, "去开启")
+            btn.clicked.connect(macos_notify.open_settings)
+            lay.addWidget(btn, 0)
+        elif state == "undetermined":
+            lay.addWidget(note_label("尚未授权，首次提醒时会询问"), 1)
+        else:
+            lay.addWidget(note_label("当前运行方式拿不到系统通知，改用应用内浮窗"), 1)
+        return box
+
     def _test_notify(self, btn=None):
         """发一条测试提醒：点它会回到主界面，通道与点击一起验。
 
-        走应用内浮窗（macOS 的 osascript 通知点开会跳去脚本编辑器，测了也不算数）。"""
+        macOS 上优先走系统原生通知（打包版可用），权限被关或源码运行时
+        自动回落到应用内浮窗，两条通道都能点回主界面。"""
         from app.ui import bg_toast
 
         window = getattr(self, "window_ref", None)
@@ -971,6 +1005,8 @@ class SettingsPage(FluentPage):
         test_btn.clicked.connect(lambda: self._test_notify(test_btn))
         tl.addWidget(test_btn)
         dialog.add(test_box)
+
+        dialog.add_field("系统通知通道", self._notify_channel_widget(dialog))
         dialog.show()
 
         # 关窗前把弹窗里的值写回持久属性并落盘（deleteLater 是排队执行，

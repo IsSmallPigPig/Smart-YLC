@@ -96,6 +96,8 @@ class _DropZone(QWidget):
         f.setPixelSize(14)
         f.setWeight(QFont.Weight.DemiBold)
         title.setFont(f)
+        # 这是空态的主文案，不能跟说明一样灰：毛玻璃上会整行消失
+        title.setTextColor(QColor("#20242b"), QColor("#e6e9ee"))
         lay.addWidget(title, 0, Qt.AlignmentFlag.AlignHCenter)
         hint = note_label("支持多选 · 自动扫描子文件夹")
         hint.setWordWrap(False)   # 居中单行，折行会把这个框撑成两截

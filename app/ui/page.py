@@ -38,15 +38,16 @@ BANNER_STOPS_DARK = (QColor(38, 84, 140), QColor(24, 42, 68))
 def window_background(translucent: bool) -> tuple[QColor, QColor]:
     """窗口底色 (浅色, 深色)：主窗口和账号网页窗口共用同一套。
 
-    有材质时深色完全透明——亮度由混合层决定，再叠一层深灰会让毛玻璃变浑，
-    两个窗口的透明度就对不上了。浅色铺近白，否则桌面颜色会透进卡片。Windows
-    的 Mica 自带桌面取色，浅深都透明。没有材质时铺不透明纯色，避免窗口发黑。
+    有材质时铺一层半透明底色当「衬纸」：只靠毛玻璃的话，桌面上的亮斑会直接
+    从小字后面透出来，正文和说明都看不清（系统消息、上传空态最明显）。这一层
+    压到六成左右，既保住壁纸的色，又让字有稳定的底。Windows 的 Mica 自带
+    桌面取色与对比处理，保持全透明即可。没有材质时铺不透明纯色。
     """
     if not translucent:
         return QColor(240, 244, 249), QColor(32, 32, 32)
     if sys.platform == "win32":
         return QColor(0, 0, 0, 0), QColor(0, 0, 0, 0)
-    return QColor(249, 249, 251, 200), QColor(0, 0, 0, 0)
+    return QColor(250, 251, 253, 96), QColor(20, 22, 26, 112)
 
 
 def banner_stops() -> tuple[QColor, QColor]:
@@ -70,7 +71,8 @@ def note_label(text: str) -> CaptionLabel:
     深浅主题各用一档更暗的灰，避免与正文抢视线（比旧版 #9ca3af 更收敛）。"""
     lbl = CaptionLabel(text)
     lbl.setWordWrap(True)
-    lbl.setTextColor(QColor("#3f4751"), QColor("#7e8896"))
+    # 深色下说明文字压在毛玻璃上，#7e8896 直接糊进背景；提到 #98a2b3 才读得清
+    lbl.setTextColor(QColor("#3f4751"), QColor("#98a2b3"))
     return lbl
 
 
