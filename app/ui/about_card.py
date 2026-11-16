@@ -23,7 +23,7 @@ from qfluentwidgets import (
 from app import __version__
 from app.services import silent_update, update_check, updater
 from app.ui.combo import ComboBox
-from app.ui.page import CollapsibleCard, SettingRow
+from app.ui.page import CONTROL_WIDTH, CollapsibleCard, SettingRow
 
 
 def _controls(*widgets, spacing: int = 8) -> QWidget:
@@ -37,11 +37,12 @@ def _controls(*widgets, spacing: int = 8) -> QWidget:
 
 
 def _fill(widget) -> QWidget:
-    """把一个控件铺满标准控件列，各行左边缘才对得齐。"""
+    """把控件对齐到设置页统一的控件宽度，各行左边缘才在同一条线上。"""
+    widget.setFixedWidth(CONTROL_WIDTH)
     box = QWidget()
     lay = QHBoxLayout(box)
     lay.setContentsMargins(0, 0, 0, 0)
-    lay.addWidget(widget, 1)
+    lay.addWidget(widget, 0)
     return box
 
 
@@ -74,7 +75,8 @@ class AboutCard(CollapsibleCard):
         license_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl(updater.REPO_PAGE + "/blob/main/LICENSE")))
         self.body_lay.addWidget(SettingRow(
-            "开源许可", icon=FIF.CERTIFICATE, control=_fill(license_btn)))
+            "开源许可", desc="GPL-3.0，可自由分发与修改",
+            icon=FIF.CERTIFICATE, control=_fill(license_btn)))
 
         feedback_btn = _button(FIF.FEEDBACK, "提交反馈")
         feedback_btn.clicked.connect(
@@ -95,8 +97,8 @@ class AboutCard(CollapsibleCard):
         self.proxy_combo.setCurrentIndex(0 if update_check.proxy_mode() == "ghproxy" else 1)
         self.proxy_combo.currentIndexChanged.connect(self._on_proxy_changed)
         self.body_lay.addWidget(SettingRow(
-            "下载加速", icon=FIF.CLOUD, control=_fill(self.proxy_combo),
-            separator=False))
+            "下载加速", desc="走镜像或直连 GitHub", icon=FIF.CLOUD,
+            control=_fill(self.proxy_combo), separator=False))
 
     # ------------------------------------------------------------ 状态小字
 

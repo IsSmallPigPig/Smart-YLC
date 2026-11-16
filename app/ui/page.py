@@ -415,10 +415,11 @@ class CardRow(QWidget):
         painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
 
 
-# 右侧控件列的上限宽度：放下两个带图标的四字控件（106 + 8 + 125 下拉按钮），
-# 控件按内容取宽、右边缘对齐；放不下的次要项收进行尾下拉或齿轮弹窗。
-CONTROL_MAX_WIDTH = 244
-CONTROL_WIDTH = CONTROL_MAX_WIDTH  # 兼容旧调用点
+# 控件宽度：取「带图标的四字下拉按钮」的实测宽度（125px）+1，行内所有按钮、下拉框、
+# 输入框都按这个宽度排——四字按钮 106、下拉 125、下拉框 76 各不相同，统一之后右边和
+# 左边才都成一条线。一行最多两个，超过的部分收进行尾下拉。
+CONTROL_WIDTH = 126
+CONTROL_MAX_WIDTH = CONTROL_WIDTH * 2 + 8
 
 
 class SettingRow(CardRow):
@@ -432,7 +433,8 @@ class SettingRow(CardRow):
                  separator: bool = True, parent=None):
         super().__init__(separator, parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 5, 0, 5)
+        # 行间贴紧：上下各 1px，加上底部分割线，相邻两行只隔 2px
+        lay.setContentsMargins(0, 1, 0, 1)
         lay.setSpacing(14)
         if icon is not None:
             ic = IconWidget(icon)

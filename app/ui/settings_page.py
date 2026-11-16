@@ -45,7 +45,7 @@ from qfluentwidgets import (
 from app.ui import dialogs
 from app.ui.browser_page import MAX_TABS as MAX_WEB_TABS
 from app.ui.combo import ComboBox
-from app.ui.page import (CONTROL_MAX_WIDTH, CallbackWorker, CollapsibleCard, FluentPage,
+from app.ui.page import (CONTROL_MAX_WIDTH, CONTROL_WIDTH, CallbackWorker, CollapsibleCard, FluentPage,
                           set_tip,
                           FullRow, PageBanner, PageHeader, SettingRow, fit_table_columns,
                           note_label)
@@ -216,10 +216,12 @@ class SettingsPage(FluentPage):
             widget.set_separator(not last)
             card.body_lay.addWidget(widget)
 
-        def controls(*widgets, spacing: int = 8) -> QWidget:
-            """一行里的控件按内容取宽，整组不超过六字按钮的宽度。
+        def controls(*widgets, spacing: int = 8, uniform: bool = True) -> QWidget:
+            """一行里的控件统一成同一个宽度（`CONTROL_WIDTH`），右边缘才对得齐。
 
-            超出的部分不再硬撑这一列，而是由调用方把次要项收进齿轮弹窗。"""
+            按钮、下拉按钮、下拉框、输入框的实际宽度本来各不相同（106 / 125 / 76），
+            按内容取宽会让每行的控件参差；这里统一按四字下拉按钮的宽度定死。
+            uniform=False 用于「容器里已经排好了自启两个按钮」这种，只限总宽。"""
             box = QWidget()
             h = QHBoxLayout(box)
             h.setContentsMargins(0, 0, 0, 0)
@@ -227,6 +229,8 @@ class SettingsPage(FluentPage):
             for widget in widgets:
                 widget.setMinimumWidth(0)
                 widget.setMaximumWidth(16777215)  # 解掉单控件上的 setFixedWidth
+                if uniform:
+                    widget.setFixedWidth(CONTROL_WIDTH)
                 h.addWidget(widget, 0)
             box.setMaximumWidth(CONTROL_MAX_WIDTH)
             return box
@@ -236,14 +240,12 @@ class SettingsPage(FluentPage):
         self.acc_card = acc_card  # 供通知跳转时展开并定位
         self.active_combo = ComboBox()
         self.active_combo.setPlaceholderText("尚未添加")
-        self.active_combo.setFixedWidth(112)
         self.active_combo.currentTextChanged.connect(self._on_active_changed)
         self.web_btn = PushButton(FIF.GLOBE, "打开网页")
         set_tip(self.web_btn, "在独立窗口打开所选账号的网页端")
         self.web_btn.clicked.connect(self._open_web)
-        # 说明都放按钮的悬浮提示里：行内只留控件，靠布局对齐就够了
         row(acc_card, SettingRow(
-            "当前账号", icon=FIF.PEOPLE,
+            "当前账号", desc="网页端用哪个支部登录", icon=FIF.PEOPLE,
             control=controls(self.active_combo, self.web_btn)))
 
         self.health_btn = PushButton(FIF.HEART, "全部测活")
@@ -299,7 +301,7 @@ class SettingsPage(FluentPage):
         self.add_open_btn = PushButton(FIF.ADD, "添加账号")
         set_tip(self.add_open_btn, "填账号与密码，确定后立刻测活")
         self.add_open_btn.clicked.connect(self._open_add_account)
-        row(acc_card, SettingRow("添加账号",
+        row(acc_card, SettingRow("添加账号", desc="登录站点后自动读支部名",
                                  icon=FIF.ADD,
                                  control=controls(self.add_open_btn)))
 
@@ -402,7 +404,7 @@ class SettingsPage(FluentPage):
             self.theme_combo.addItem(label)
         self.theme_combo.setCurrentIndex(THEME_INDEX.get(store.load().get("themeMode", "auto"), 0))
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        row(look_card, SettingRow("明暗模式",
+        row(look_card, SettingRow("明暗模式", desc="跟随系统或固定深浅",
                                   icon=FIF.BRIGHTNESS, control=controls(self.theme_combo)))
         self.material_combo = ComboBox()
         # 只提供 fluent widgets 官方的两种材质；「关闭」是功能项，材质名用官方英文写法
@@ -421,7 +423,7 @@ class SettingsPage(FluentPage):
         self.header_clear_btn = PushButton(FIF.SYNC, "恢复默认")
         set_tip(self.header_clear_btn, "清除头图，恢复默认")
         self.header_clear_btn.clicked.connect(self._clear_header_image)
-        row(look_card, SettingRow("首页头图",
+        row(look_card, SettingRow("首页头图", desc="首页顶部横幅，可换成本地图片",
                                   icon=FIF.PHOTO,
                                   control=controls(self.header_pick_btn, self.header_clear_btn),
                                   ), last=True)
@@ -451,8 +453,8 @@ class SettingsPage(FluentPage):
         set_tip(self.notify_more_btn, "发送时间、间隔与测试通知")
         self.notify_more_btn.clicked.connect(self._open_notify_dialog)
         self.notify_row = SettingRow(
-            "通知频率", icon=FIF.DATE_TIME,
-            control=controls(self.notify_mode, self.notify_more_btn, spacing=6))
+            "通知频率", desc="提醒未读消息的节奏", icon=FIF.DATE_TIME,
+            control=controls(self.notify_mode, self.notify_more_btn))
         row(ws_card, self.notify_row)
         self.notify_mode.currentIndexChanged.connect(self._on_notify_mode_changed)
         self.notify_interval.currentIndexChanged.connect(self._on_notify_mode_changed)
@@ -462,15 +464,17 @@ class SettingsPage(FluentPage):
         self.autostart_btn.clicked.connect(self._toggle_autostart)
         self.autostart_on_btn = PrimaryPushButton(FIF.POWER_BUTTON, "关闭自启")
         self.autostart_on_btn.clicked.connect(self._toggle_autostart)
+        for btn in (self.autostart_btn, self.autostart_on_btn):
+            btn.setFixedWidth(CONTROL_WIDTH)
         self.autostart_box = QWidget()
         auto_lay = QHBoxLayout(self.autostart_box)
         auto_lay.setContentsMargins(0, 0, 0, 0)
         auto_lay.setSpacing(8)
         auto_lay.addWidget(self.autostart_btn)
         auto_lay.addWidget(self.autostart_on_btn)
-        row(ws_card, SettingRow("开机自启",
+        row(ws_card, SettingRow("开机自启", desc="登录系统后自动在托盘运行",
                                 icon=FIF.POWER_BUTTON,
-                                control=controls(self.autostart_box),
+                                control=controls(self.autostart_box, uniform=False),
                                 separator=False))
 
         from app.ui.about_card import AboutCard
