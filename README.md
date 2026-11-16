@@ -214,7 +214,7 @@ Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 PyInstaller �
 
 - 来源固定为 `IsSmallPigPig/Smart-YLC`：先读最新 Release，按平台挑安装包（macOS 取 dmg、Windows 取 exe）；没有 Release 时回退 `main` 分支的 `__version__` 并下载源码包。
 - 启动后延迟 2.5 秒静默检查；发现新版本就直接下载并交给独立进程静默安装，不弹版本提示、不弹安装窗口。手动检查与下载仍用右下角浮动进度条展示（检查时为扫描进度，下载按百分比推进），「关于项目 → 检查更新」那一行的按钮依次变成「下载 x.y.z」「正在安装」。
-- 下载默认经 `ghproxy.com` 加速，失败会说明原因并回退直连；包落在 `~/.gd12355-helper/updates/`，用 `.part` 加原子替换。
+- 下载通道集中在 `updater.GATEWAYS` 维护：`gh-proxy.com` 加速、`ghproxy.net` 加速、直连 GitHub 三条，手动检查发现新版本后弹窗逐个列通道并各带一个「下载」按钮，点哪个走哪个；所选通道失败会自动按列表顺序换下一个（默认站当前实测最快，老 `ghproxy.com` 域名已停服故不收录）。包落在 `~/.gd12355-helper/updates/`，用 `.part` 加原子替换。
 - 安装由 `--silent-install` 助手完成：Windows 对 setup.exe 用 `/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS`（MSI 用 `msiexec /qn`），macOS 挂载 dmg 后把 `.app` 复制到「应用程序」。主程序先退出让出文件，助手装完再发系统通知「更新已完成，重启应用后生效」。
 - 助手拉不起来或安装失败时保留更新包，按钮回到「打开目录」，并在系统通知里说明需要手动安装。
 - macOS 打包版的后台提醒走系统原生通知，点击会回到对应页面；源码运行没有 bundle id 时回落到应用内浮窗。首次发送需要允许通知权限。

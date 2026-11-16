@@ -1,4 +1,4 @@
-"""更新服务：版本比较、GitHub Release/分支回退、ghproxy 加速与直连回退、下载原子写。
+"""更新服务：版本比较、GitHub Release/分支回退、多网关加速与逐通道回退、下载原子写。
 
 网络全部用假 urlopen 替身，测试不发真实请求。
 """
@@ -19,6 +19,9 @@ from app import __version__
 from app.services import updater, update_check, store
 
 _REAL_SSL_CONTEXT = updater._ssl_context
+
+# 默认加速站前缀（原 GH_PROXY 常量位置，测试里当第一个网关用）
+GH_PROXY = updater.GATEWAYS[0]["prefix"]
 
 
 @pytest.fixture(autouse=True)
@@ -177,7 +180,7 @@ def test_is_newer_only_when_remote_version_is_higher():
 
 
 def test_proxy_url_prefixes_full_github_link():
-    assert updater.proxy_url(updater.SOURCE_ZIP) == updater.GH_PROXY + updater.SOURCE_ZIP
+    assert updater.proxy_url(updater.SOURCE_ZIP) == GH_PROXY + updater.SOURCE_ZIP
     assert updater.proxy_url(updater.SOURCE_ZIP, False) == updater.SOURCE_ZIP
     assert updater.REPO == "IsSmallPigPig/Smart-YLC"
     assert updater.REPO_URL.endswith("IsSmallPigPig/Smart-YLC.git")
@@ -287,7 +290,7 @@ def test_checks_go_direct_not_through_proxy(monkeypatch):
         updater.VERSION_RAW: branch_payload("9.4.0"),
     })
     updater.check_update()
-    assert all(not u.startswith(updater.GH_PROXY) for u in seen)
+    assert all(not u.startswith(GH_PROXY) for u in seen)
 
 
 def test_already_latest_returns_none(monkeypatch):
@@ -321,11 +324,11 @@ def test_missing_version_in_raw_file_is_reported(monkeypatch):
 def test_download_is_atomic_and_reports_progress(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "UPDATE_DIR", str(tmp_path))
     body = b"x" * 1000
-    seen = fake_urlopen(monkeypatch, {updater.GH_PROXY + updater.SOURCE_ZIP: body})
+    seen = fake_urlopen(monkeypatch, {GH_PROXY + updater.SOURCE_ZIP: body})
     progress = []
     path = updater.download(info(url=updater.SOURCE_ZIP), True, progress=progress.append)
 
-    assert seen == [updater.GH_PROXY + updater.SOURCE_ZIP]
+    assert seen == [GH_PROXY + updater.SOURCE_ZIP]
     assert open(path, "rb").read() == body
     assert not os.path.exists(path + ".part")
     assert progress[-1] == 100
@@ -346,11 +349,11 @@ def test_direct_download_uses_original_url(tmp_path, monkeypatch):
 def test_failed_download_cleans_part_file_and_reports_url(tmp_path, monkeypatch, failure):
     monkeypatch.setattr(updater, "UPDATE_DIR", str(tmp_path))
     url = updater.SOURCE_ZIP
-    fake_urlopen(monkeypatch, {updater.GH_PROXY + url: failure})
+    fake_urlopen(monkeypatch, {GH_PROXY + url: failure})
     with pytest.raises(updater.UpdateError) as e:
         updater.download(info(url=url), True)
     assert "加速下载" in str(e.value)
-    assert updater.GH_PROXY + url in str(e.value)
+    assert GH_PROXY + url in str(e.value)
     assert list(tmp_path.glob("*.part")) == []
 
 
@@ -364,46 +367,47 @@ def test_cancelled_download_leaves_no_partial_file(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------- Qt 回退
 
-def test_download_worker_falls_back_to_direct(monkeypatch):
+def test_download_worker_walks_gateway_chain(monkeypatch):
+    """起点网关失败后自动换下一个，最终成功；每个失败都发 fallback。"""
     from PySide6.QtCore import QCoreApplication
 
     QCoreApplication.instance() or QCoreApplication([])
     calls = []
 
-    def _download(inf, use_proxy, **kwargs):
-        calls.append(use_proxy)
-        if use_proxy:
-            raise updater.UpdateError("加速下载失败：代理不可用")
+    def _download(inf, gw, **kwargs):
+        calls.append(gw["key"] if isinstance(gw, dict) else gw)
+        if gw["key"] != "direct":
+            raise updater.UpdateError(f"{gw['key']} 下载失败：代理不可用")
         return "/tmp/Smart-YLC.zip"
 
     monkeypatch.setattr(updater, "download", _download)
-    worker = update_check.DownloadWorker(info(), True)
+    worker = update_check.DownloadWorker(info(), "gh-proxy")
     fallbacks, done, failed = [], [], []
     worker.fallback.connect(fallbacks.append)
     worker.done.connect(done.append)
     worker.failed.connect(failed.append)
     worker.run()  # 直接跑 run，不启动真实线程
 
-    assert calls == [True, False]
-    assert len(fallbacks) == 1 and "代理不可用" in fallbacks[0]
+    # 从 gh-proxy 起，顺序覆盖全部网关到 direct
+    assert calls == ["gh-proxy", "ghproxy.net", "direct"]
+    assert len(fallbacks) == 2 and "代理不可用" in fallbacks[0]
     assert done == ["/tmp/Smart-YLC.zip"] and failed == []
 
 
-def test_download_worker_direct_failure_reports_error(monkeypatch):
+def test_download_worker_all_gateways_fail_reports_error(monkeypatch):
     from PySide6.QtCore import QCoreApplication
 
     QCoreApplication.instance() or QCoreApplication([])
 
-    def _download(inf, use_proxy, **kwargs):
-        raise updater.UpdateError("直连下载失败：超时")
+    def _download(inf, gw, **kwargs):
+        raise updater.UpdateError(f"{gw['key']} 下载失败：超时")
 
     monkeypatch.setattr(updater, "download", _download)
-    worker = update_check.DownloadWorker(info(), False)
-    failed, fallback = [], []
+    worker = update_check.DownloadWorker(info(), "direct")
+    failed = []
     worker.failed.connect(failed.append)
-    worker.fallback.connect(fallback.append)
     worker.run()
-    assert failed == ["直连下载失败：超时"] and fallback == []
+    assert len(failed) == 1 and "超时" in failed[0]
 
 
 def test_check_worker_reports_failure_instead_of_crashing(monkeypatch):
@@ -428,21 +432,28 @@ def test_check_worker_reports_failure_instead_of_crashing(monkeypatch):
 def test_update_config_defaults_and_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
     assert update_check.auto_check_enabled() is True
-    assert update_check.proxy_mode() == "ghproxy"
+    assert update_check.gateway_mode() == updater.DEFAULT_GATEWAY
     assert "尚未检查" in update_check.last_check_text()
 
     update_check.set_auto_check(False)
-    update_check.set_proxy_mode("direct")
+    update_check.set_gateway_mode("direct")
     update_check.record("update", "9.9.9")
     assert update_check.auto_check_enabled() is False
-    assert update_check.proxy_mode() == "direct"
+    assert update_check.gateway_mode() == "direct"
     assert "9.9.9" in update_check.last_check_text()
 
 
 def test_invalid_proxy_mode_falls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
     store.save({"updateProxy": "something-else"})
-    assert update_check.proxy_mode() == "ghproxy"
+    assert update_check.gateway_mode() == updater.DEFAULT_GATEWAY
+
+
+def test_legacy_ghproxy_value_maps_to_new_default(tmp_path, monkeypatch):
+    """老配置里存过 "ghproxy"（ghproxy.com 已停服），迁移到当前默认站。"""
+    monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
+    store.save({"updateProxy": "ghproxy"})
+    assert update_check.gateway_mode() == "gh-proxy"
 
 
 def test_startup_check_respects_switch_off(tmp_path, monkeypatch):
