@@ -430,8 +430,9 @@ class SettingsPage(FluentPage):
 
         # ── 工作配置 ──
         ws_card = group("工作与通知", False, "目录、通知与开机启动")
-        self.ws_edit = LineEdit()
-        self.ws_edit.setPlaceholderText("尚未选择")
+        # 工作目录只作为值保存：以前这个无父 LineEdit 是隐藏的游离顶层窗口，
+        # 一旦哪里 setVisible(True) 就会像「08:00」输入框那样弹出独立小窗。
+        self.workspace_dir = ""
         self.ws_btn = PushButton(FIF.FOLDER, "选择目录")
         self.ws_btn.clicked.connect(self._pick_workspace)
         self.workspace_row = SettingRow(
@@ -442,13 +443,11 @@ class SettingsPage(FluentPage):
         self.notify_mode = ComboBox()
         for key in notify_schedule.MODES:
             self.notify_mode.addItem(notify_schedule.MODE_LABELS[key], userData=key)
-        self.notify_time_edit = LineEdit()
-        self.notify_time_edit.setPlaceholderText("08:00")
-        self.notify_time_edit.setClearButtonEnabled(False)
-        self.notify_time_edit.editingFinished.connect(self._save_config)
-        self.notify_interval = ComboBox()
-        for hours in notify_schedule.INTERVAL_CHOICES:
-            self.notify_interval.addItem(f"每 {hours} 小时", userData=hours)
+        # 时间与间隔只作为值保存，不放进页面布局：以前这俩是没有父控件的
+        # LineEdit / ComboBox，_sync_notify_controls 一 setVisible 就变成独立顶层
+        # 小窗浮在屏幕上（「08:00」输入框和「每 N 小时」下拉框）。
+        self._notify_time = store.DEFAULT_NOTIFY_TIME
+        self._notify_interval_hours = notify_schedule.DEFAULT_INTERVAL_HOURS
         self.notify_more_btn = PushButton(FIF.SETTING, "通知设置")
         set_tip(self.notify_more_btn, "发送时间、间隔与测试通知")
         self.notify_more_btn.clicked.connect(self._open_notify_dialog)
@@ -457,7 +456,6 @@ class SettingsPage(FluentPage):
             control=controls(self.notify_mode, self.notify_more_btn))
         row(ws_card, self.notify_row)
         self.notify_mode.currentIndexChanged.connect(self._on_notify_mode_changed)
-        self.notify_interval.currentIndexChanged.connect(self._on_notify_mode_changed)
 
         # 未开启时普通按钮「开启自启」，已开启时高亮按钮「关闭自启」，状态一眼可见
         self.autostart_btn = PushButton(FIF.POWER_BUTTON, "开启自启")
@@ -534,15 +532,10 @@ class SettingsPage(FluentPage):
         self.accounts = list(cfg.get("accounts") or [])
         self._repair_remarks()
         self.active_user = cfg.get("activeUser") or (self.accounts[0]["userName"] if self.accounts else "")
-        self.notify_time_edit.setText(store.notify_time(cfg))
+        self._notify_time = store.notify_time(cfg)
         kind = notify_schedule.mode(cfg)
         self.notify_mode.setCurrentIndex(max(0, self.notify_mode.findData(kind)))
-        hours = notify_schedule.interval_hours(cfg)
-        idx_h = self.notify_interval.findData(hours)
-        if idx_h < 0:
-            self.notify_interval.addItem(f"每 {hours} 小时", userData=hours)
-            idx_h = self.notify_interval.count() - 1
-        self.notify_interval.setCurrentIndex(idx_h)
+        self._notify_interval_hours = notify_schedule.interval_hours(cfg)
         self._sync_notify_controls()
         self._refresh_autostart_btn()
 
@@ -582,7 +575,7 @@ class SettingsPage(FluentPage):
 
         ws_dirs = load_workspace_dirs(cfg)
         self._ws_dirs = ws_dirs
-        self.ws_edit.setText(ws_dirs[0] if ws_dirs else "")
+        self.workspace_dir = ws_dirs[0] if ws_dirs else ""
         if ws_dirs:
             self._setup_watcher(ws_dirs)
             # 把已在待上传列表里的路径当作「已知」：否则启动后第一次扫目录会把
@@ -639,7 +632,7 @@ class SettingsPage(FluentPage):
             return
 
         def _write(cfg: dict):
-            ws = self.ws_edit.text().strip()
+            ws = self.workspace_dir.strip()
             dirs = list(cfg.get("workspaceDirs") or [])
             if ws != (dirs[0] if dirs else ""):
                 # 输入框被改过：这就是「只用一个目录」的意图，列表收成这一个
@@ -650,10 +643,9 @@ class SettingsPage(FluentPage):
                 "rosters": dict(self._roster_paths),
                 "workspaceDir": ws,
                 "workspaceDirs": dirs,
-                "notifyTime": self.notify_time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME,
+                "notifyTime": self._notify_time,
                 "notifyMode": self._notify_mode(),
-                "notifyInterval": self.notify_interval.currentData()
-                or notify_schedule.DEFAULT_INTERVAL_HOURS,
+                "notifyInterval": self._notify_interval_hours,
                 "expectedPages": self.expected_pages(),
                 "orgRule": self.org_rule().to_config(),
             })
@@ -726,15 +718,11 @@ class SettingsPage(FluentPage):
     def _notify_cfg(self) -> dict:
         return {
             "notifyMode": self._notify_mode(),
-            "notifyTime": self.notify_time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME,
-            "notifyInterval": self.notify_interval.currentData()
-            or notify_schedule.DEFAULT_INTERVAL_HOURS,
+            "notifyTime": self._notify_time,
+            "notifyInterval": self._notify_interval_hours,
         }
 
     def _sync_notify_controls(self):
-        kind = self._notify_mode()
-        self.notify_time_edit.setVisible(kind == "daily")
-        self.notify_interval.setVisible(kind == "interval")
         self.notify_row.set_desc(notify_schedule.describe(self._notify_cfg()))
 
     def _on_notify_mode_changed(self, *_):
@@ -974,8 +962,9 @@ class SettingsPage(FluentPage):
     def _open_notify_dialog(self):
         """通知频率：发送时间、间隔与手动测试。
 
-        时间框与间隔框每次打开都新建并挂在弹窗下，关窗前写回持久属性
-        （_save_config 读的是这两个属性），避免两次打开复用控件导致的渲染异常。"""
+        时间框与间隔框每次打开都新建并挂在弹窗下，关窗写回 _notify_time /
+        _notify_interval_hours（_save_config 与行说明读的正是这两个值）。页面不放
+        这两个控件——无父控件的 LineEdit / ComboBox 会被 Qt 当成独立顶层窗口。"""
         from PySide6.QtWidgets import QVBoxLayout, QWidget
 
         from qfluentwidgets import LineEdit, PushButton
@@ -987,12 +976,12 @@ class SettingsPage(FluentPage):
         time_edit = LineEdit(dialog)
         time_edit.setPlaceholderText("08:00")
         time_edit.setClearButtonEnabled(False)
-        time_edit.setText(self.notify_time_edit.text())
+        time_edit.setText(self._notify_time)
         dialog.add_field("每天推送的时间点，如 08:00", time_edit)
         interval = ComboBox(dialog)
         for hours in notify_schedule.INTERVAL_CHOICES:
             interval.addItem(f"每 {hours} 小时", userData=hours)
-        idx = interval.findData(self.notify_interval.currentData())
+        idx = interval.findData(self._notify_interval_hours)
         interval.setCurrentIndex(idx if idx >= 0 else 0)
         dialog.add_field("按间隔推送时，每隔多久发一次", interval)
 
@@ -1012,8 +1001,10 @@ class SettingsPage(FluentPage):
         # 关窗前把弹窗里的值写回持久属性并落盘（deleteLater 是排队执行，
         # finished 信号同步回调时控件仍存活，可安全读取）。
         def _write_back():
-            self.notify_time_edit.setText(time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME)
-            self.notify_interval.setCurrentIndex(interval.currentIndex())
+            self._notify_time = time_edit.text().strip() or store.DEFAULT_NOTIFY_TIME
+            self._notify_interval_hours = (interval.currentData()
+                                           or notify_schedule.DEFAULT_INTERVAL_HOURS)
+            self._sync_notify_controls()
             self._save_config()
 
         dialog.finished.connect(_write_back)
@@ -1832,7 +1823,7 @@ class SettingsPage(FluentPage):
         d = QFileDialog.getExistingDirectory(self, "选择工作区目录")
         if not d:
             return
-        self.ws_edit.setText(d)
+        self.workspace_dir = d
         self._ws_dirs = [d]
         self._setup_watcher(self._ws_dirs)
         self._save_config()
@@ -1873,7 +1864,7 @@ class SettingsPage(FluentPage):
 
         dirs = list(getattr(self, "_ws_dirs", []) or [])
         if not dirs:
-            d = self.ws_edit.text().strip()
+            d = self.workspace_dir.strip()
             dirs = [d] if d else []
         files = [path for d in dirs if os.path.isdir(d)
                  for path in new_pdf_files(d, self._ws_known)]
