@@ -63,6 +63,7 @@ HEALTH_SHORT = {"captcha": "需验证码", "cooldown": "登录冷却"}
 from app.services.api import SiteClient
 
 THEME_INDEX = {"auto": 0, "light": 1, "dark": 2}
+MATERIAL_ORDER = ("none", "acrylic", "mica")   # 下拉框顺序，与 _material_index 一致
 
 
 class SelectAllHeader(QHeaderView):
@@ -416,10 +417,13 @@ class SettingsPage(FluentPage):
         from app.services.materials import preferred
 
         _material = preferred(_cfg)
-        self.material_combo.setCurrentIndex({"none": 0, "acrylic": 1, "mica": 2}.get(_material, 0))
+        self.material_combo.setCurrentIndex(MATERIAL_ORDER.index(_material) if _material in MATERIAL_ORDER else 0)
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
-        row(look_card, SettingRow("窗口背景", desc="Mica 仅 Windows 11",
-                                  icon=FIF.TRANSPARENT, control=controls(self.material_combo)))
+        self.material_row = SettingRow(
+            "窗口背景", desc="", icon=FIF.TRANSPARENT,
+            control=controls(self.material_combo))
+        row(look_card, self.material_row)
+        self._sync_material_hint()
         self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
         self.header_pick_btn.clicked.connect(self._pick_header_image)
         self.header_clear_btn = PushButton(FIF.SYNC, "恢复默认")
@@ -1260,8 +1264,10 @@ class SettingsPage(FluentPage):
             if combo is self.theme_combo:
                 combo.setCurrentIndex(THEME_INDEX.get(value, 0))
             else:
-                combo.setCurrentIndex(("none", "acrylic", "mica").index(material))
+                combo.setCurrentIndex(MATERIAL_ORDER.index(material))
             combo.blockSignals(False)
+
+        self._sync_material_hint()
 
         apply_theme_mode(mode)
         window = getattr(self, "window_ref", None)
@@ -2049,9 +2055,22 @@ class SettingsPage(FluentPage):
         store.update(lambda cfg: cfg.__setitem__("themeMode", mode))
         _done()
 
+    def _sync_material_hint(self):
+        """说明里写清这台机器上这一档实际会变成什么。
+
+        Win10 没有 Mica 接口，选了会按亚克力呈现——不写出来，用户只会看到
+        「切了没反应」，还得自己猜是没生效还是本来就这样。
+        """
+        from app.services.materials import material_hint
+
+        index = self.material_combo.currentIndex()
+        if 0 <= index < len(MATERIAL_ORDER):
+            self.material_row.set_desc(material_hint(MATERIAL_ORDER[index]))
+
     def _on_material_changed(self, index: int):
-        material = ("none", "acrylic", "mica")[index]
+        material = MATERIAL_ORDER[index]
         store.update(lambda cfg: cfg.__setitem__("translucentMaterial", material))
+        self._sync_material_hint()
         if self.window_ref is not None:
             self.window_ref.apply_material(material)
 

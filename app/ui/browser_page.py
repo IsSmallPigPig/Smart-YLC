@@ -703,13 +703,14 @@ class BrowserWindow(FluentWindowBase):
         模式下窗口底色本身是全透明的，没画东西的地方就变成一块纯黑。
         """
         if sys.platform == "win32":
-            # Windows：showNormal 同样会把 Fluent 的 Mica 效果打掉，显示后重挂；
-            # 圆角偏好也一起重设（窗口 frame 被 Qt 重设过）
+            # Windows：showNormal 同样会把系统背景打掉，显示后重挂；
+            # 圆角偏好也一起重设（窗口 frame 被 Qt 重设过）。圆角先设，
+            # 它内部的 addShadowEffect 会重设 frame 扩展，放在材质后会顶掉 Mica。
             from app.services.materials import apply_rounded_corners, apply_windows_effect
 
+            apply_rounded_corners(self)
             self._material_applied = apply_windows_effect(self, self._material)
             self._translucent = self._material_applied
-            apply_rounded_corners(self)
             self._apply_background()
             self.update()
             return
@@ -747,6 +748,16 @@ class BrowserWindow(FluentWindowBase):
         except Exception:
             return False
 
+    def _normalBackgroundColor(self):
+        """材质挂上后窗口底色交给系统混合层（与主窗口同一套判断）。
+
+        基类只看 isMicaEffectEnabled()，Win10 的亚克力不经过那个开关，照它判断
+        会铺一层不透明底，把模糊整个盖住。macOS 仍走基类（那边要留那层衬纸）。
+        """
+        if sys.platform == "win32" and getattr(self, "_translucent", False):
+            return QColor(0, 0, 0, 0)
+        return super()._normalBackgroundColor()
+
     def paintEvent(self, e):
         """没有材质时自己铺底色：Fluent 的透明窗口没人画底就会露出黑色。"""
         super().paintEvent(e)
@@ -758,16 +769,19 @@ class BrowserWindow(FluentWindowBase):
 
     def set_material(self, material: str):
         """与主窗口同一套毛玻璃开关：none 铺纯色底，其余挂混合层。"""
-        from app.services.materials import apply_windows_effect, normalize
+        from app.services.materials import (
+            apply_rounded_corners,
+            apply_windows_effect,
+            normalize,
+            windows_material_available,
+        )
 
         material = normalize(material)
         self._material = material
         if sys.platform == "darwin":
             self._translucent = material != "none"
         elif sys.platform == "win32":
-            from app.services.materials import win11_mica_available
-
-            self._translucent = material != "none" and win11_mica_available()
+            self._translucent = windows_material_available(material)
         else:
             self._translucent = False
         self._apply_background()
@@ -780,6 +794,7 @@ class BrowserWindow(FluentWindowBase):
                 disable_acrylic(self)
                 self._material_applied = True
         elif sys.platform == "win32" and self._translucent:
+            apply_rounded_corners(self)
             self._material_applied = apply_windows_effect(self, material)
             if not self._material_applied:
                 self._translucent = False

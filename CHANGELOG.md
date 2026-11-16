@@ -2,6 +2,25 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.6.4
+
+### 修复
+- **Windows 上 Acrylic 与 Mica 都不生效**：以前两种材质都调 Fluent 的 Mica 开关，
+  而那个开关只在 Windows 11 起作用，于是 Win10 上选哪个都是纯色底。现在按材质走
+  各自的系统接口——Acrylic 用 `ACCENT_ENABLE_ACRYLICBLURBEHIND`（Win10 1803+，
+  实时模糊窗口后面的内容），Mica 用 Win11 的 DWM 系统背景；Win10 选 Mica 时自动
+  按 Acrylic 呈现，不再假装成功。
+- **材质开着时窗口被自己的底色盖住**：Fluent 按「Mica 开关是否打开」决定窗口底色
+  透不透明，亚克力这条路径不经过那个开关，结果铺了一层不透明底把模糊全挡住。改为
+  按实际是否挂上材质判断，Win10 上也能透出来。
+- **关掉材质后仍透出桌面**：关闭时现在会把系统背景与 DWM 模糊一起撤掉，再回铺纯色底。
+- 圆角与投影改成先设再挂材质：`addShadowEffect` 会重设窗口的 frame 扩展，放在材质
+  之后会把 Mica 的客户区设置顶掉。
+
+### 变更
+- 「窗口背景」那行说明改为按当前机器显示实际效果，例如 Win10 上选 Mica 会写
+  「Mica 需 Windows 11，这台机器按 Acrylic 呈现」。
+
 ## v1.6.3
 
 ### 变更

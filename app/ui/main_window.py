@@ -168,11 +168,11 @@ class MainWindow(MSFluentWindow):
         # 启动恢复窗口背景透明材质（兼容旧 translucent 布尔配置）。混合层要等
         # 窗口 show 之后 contentView 尺寸稳定才挂，实际动作在 showEvent 里。
         cfg = store.load()
-        from app.services.materials import preferred, win11_mica_available
+        from app.services.materials import preferred, windows_material_available
 
         self._material = preferred(cfg)
         self._translucent = self._material != "none" and (
-            sys.platform == "darwin" or win11_mica_available())
+            sys.platform == "darwin" or windows_material_available(self._material))
         self._apply_window_background()
 
         # 明暗模式切换（手动或跟随系统变化）：重绘窗口底色 + 重建带烘焙颜色的页面
@@ -642,6 +642,10 @@ class MainWindow(MSFluentWindow):
         page = getattr(self, "messages_page", None)
         if page is not None:
             page.apply_theme()
+        # 亚克力的衬纸色烘焙在 ACENT_POLICY 里，换主题得重下一遍；Mica 由基类
+        # （_onThemeChangedFinished）自己跟着重挂。浏览器窗口是独立窗口，一起换。
+        if sys.platform == "win32" and self._translucent:
+            self.apply_material(self._material)
 
     def apply_theme_async(self, mode: str, done=None):
         """切换明暗模式：画面淡出 → 换样式 → 淡入。
@@ -897,6 +901,18 @@ class MainWindow(MSFluentWindow):
 
             QTimer.singleShot(150, _apply)
 
+    def _normalBackgroundColor(self):
+        """材质挂上后窗口底色给系统混合层让路，Qt 不再铺一层不透明底。
+
+        基类按 isMicaEffectEnabled() 决定透不透明，而亚克力那条路不经过这个开关
+        （Win10 上它从来没被打开过），照基类判断的结果就是把模糊整个盖掉。这里
+        按自己的 _translucent 判断，两条路都一致。macOS 仍走基类：那边要在混合层
+        上压一层六成不透明的衬纸，不能全透明。
+        """
+        if sys.platform == "win32" and getattr(self, "_translucent", False):
+            return QColor(0, 0, 0, 0)
+        return super()._normalBackgroundColor()
+
     def paintEvent(self, e):
         super().paintEvent(e)
         if not self._translucent:
@@ -928,17 +944,20 @@ class MainWindow(MSFluentWindow):
 
         配置持久化 translucentMaterial，系统配置里可切；兼容旧 translucent 布尔
         与 sidebar/hud 旧值（自动归一为 acrylic）。"""
-        from app.services.materials import apply_windows_effect, normalize
+        from app.services.materials import (
+            apply_rounded_corners,
+            apply_windows_effect,
+            normalize,
+            windows_material_available,
+        )
 
         material = normalize(material)
         self._material = material
         if sys.platform == "darwin":
-            # 混合层只在 macOS / Win11 实现；其他平台保持纯色底（否则背景没人画，窗口发黑）
+            # 混合层只在 macOS / Windows 实现；其他平台保持纯色底（否则背景没人画，窗口发黑）
             self._translucent = material != "none"
         elif sys.platform == "win32":
-            from app.services.materials import win11_mica_available
-
-            self._translucent = material != "none" and win11_mica_available()
+            self._translucent = windows_material_available(material)
         else:
             self._translucent = False
         self._apply_window_background()
@@ -951,12 +970,12 @@ class MainWindow(MSFluentWindow):
                 disable_acrylic(self)
                 self._material_applied = True
         elif sys.platform == "win32" and self._translucent:
+            # 圆角与投影先设：addShadowEffect 会重设 frame 扩展（DwmExtendFrameIntoClientArea），
+            # 放在材质之后会把 Mica 自己的客户区 margins 顶掉，效果就没了。
+            apply_rounded_corners(self)
             self._material_applied = apply_windows_effect(self, material)
-            from app.services.materials import apply_rounded_corners
-
-            apply_rounded_corners(self)  # 重挂混合层会重置圆角偏好
             if not self._material_applied:
-                # Win10 等不支持时回退纯色底，不让窗口裸透明发黑
+                # 更老的系统挂不上，回退纯色底，不让窗口裸透明发黑
                 self._translucent = False
                 self._apply_window_background()
         else:
