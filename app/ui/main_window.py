@@ -384,14 +384,45 @@ class MainWindow(MSFluentWindow):
     def _alert(self, title: str, body: str = "", action: str = "", tone: str = ""):
         """后台提醒：点一下回到主界面，并切到该处理的那一页。
 
-        Windows 走托盘气泡（原生，点击回调由 messageClicked 触发）；macOS 的
-        osascript 通知点开是脚本编辑器、无法绑定，改由应用自己的浮窗提醒。"""
+        macOS 走系统原生通知（打包版），权限被关或源码运行时回落应用内浮窗；
+        Windows 走托盘气泡。原生通道被系统关掉时，第一次顺便说清怎么打开。"""
         from app.ui import bg_toast
 
         bg_toast.alert(
             title, body, tone=tone, tray=getattr(self, "tray", None),
             on_click=lambda: self._open_alert(action),
         )
+        self._hint_notification_channel()
+
+    def _hint_notification_channel(self):
+        """macOS 通知权限被关时提示一次：否则以后只会看到应用内浮窗。"""
+        import sys
+
+        if sys.platform != "darwin" or getattr(self, "_notify_hint_shown", False):
+            return
+        from app.services import macos_notify
+
+        if macos_notify.permission_state() != "denied":
+            return
+        self._notify_hint_shown = True
+        from qfluentwidgets import (
+            InfoBar,
+            InfoBarIcon,
+            InfoBarPosition,
+            TransparentPushButton,
+        )
+
+        bar = InfoBar(
+            icon=InfoBarIcon.WARNING, title="系统通知已关闭",
+            content=f"在「系统设置 → 通知」里打开「{macos_notify.app_name()}」，"
+                    "后台提醒才会以系统横幅弹出",
+            orient=Qt.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT, duration=12000, parent=self,
+        )
+        btn = TransparentPushButton(text="去开启", parent=bar)
+        btn.clicked.connect(lambda: (macos_notify.open_settings(), bar.close()))
+        bar.addWidget(btn)
+        bar.show()
 
     def _open_alert(self, action: str):
         self._restore_from_tray()
@@ -798,10 +829,13 @@ class MainWindow(MSFluentWindow):
         item = nav.widget("page-settings")
         if lay is None or item is None or item.x() <= 0:
             return
-        side = item.x()
+        # 底部再让出窗口圆角：只留 side(4px) 时，最后一个项的高亮圆角会跟
+        # 窗口的圆角弧线打架，看着像被窗边裁掉一块。让到圆角直径以内，
+        # 两个圆角同心。
+        bottom = max(item.x(), 12)
         m = lay.contentsMargins()
-        if m.bottom() != side:
-            lay.setContentsMargins(m.left(), m.top(), m.right(), side)
+        if m.bottom() != bottom:
+            lay.setContentsMargins(m.left(), m.top(), m.right(), bottom)
 
     def showEvent(self, e):
         super().showEvent(e)

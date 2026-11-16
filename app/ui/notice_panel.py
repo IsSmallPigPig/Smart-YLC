@@ -32,7 +32,7 @@ HEADER_H = 48
 RADIUS = 10
 EXPAND_MS = 180
 PAD_X = 16        # 行内左右边距：标题与卡片边缘、按钮与右边缘都按这个对齐
-ROW_PAD_Y = 10
+ROW_PAD_Y = 3
 
 
 def _card_bg() -> QColor:
@@ -70,10 +70,13 @@ class _NoticeRow(QWidget):
 
         text = QVBoxLayout()
         text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(3)
+        text.setSpacing(1)
         self.title_lbl = theme_font(BodyLabel(notice.title), 13, int(QFont.Weight.DemiBold))
+        self.title_lbl.setWordWrap(False)
         text.addWidget(self.title_lbl)
         self.detail_lbl = note_label(notice.detail)
+        # 单行：面板是整页宽，折行只会把这一行的行高翻倍，看着就是行距太宽
+        self.detail_lbl.setWordWrap(False)
         text.addWidget(self.detail_lbl)
         lay.addLayout(text, 1)
 

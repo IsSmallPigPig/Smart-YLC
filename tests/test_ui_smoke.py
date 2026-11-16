@@ -458,6 +458,45 @@ def test_branch_picker_marks_abnormal_accounts(app):
     assert "需验证码" not in dlg.combo.itemText(1)
 
 
+def test_notice_rows_are_compact(app):
+    """公告行单行排：折行会把行高翻倍，看着就是「行距太宽」。"""
+    from app.services.notices import Notice
+    from app.ui.notice_panel import NoticePanel, _NoticeRow
+
+    panel = NoticePanel()
+    panel.resize(900, 600)
+    panel.show()
+    panel.set_notices([
+        Notice(key=f"k{i}", title=f"账号 初中部初三{i}班：登录冷却",
+               detail="上次登录要求验证码（密码失败过多），约 59 分钟后再试",
+               action=f"accounts:{i}", action_text="去设置", tone="error")
+        for i in range(3)
+    ])
+    panel._expanded = True
+    panel._body.setVisible(True)
+    panel._sync_height()
+    app.processEvents()
+
+    rows = panel.findChildren(_NoticeRow)
+    assert rows and all(row.height() <= 46 for row in rows)
+    assert all(not row.detail_lbl.wordWrap() for row in rows)
+
+
+def test_messages_content_digest_tracks_changes(app):
+    """列表只按「账号 + 消息号 + 时间」比摘要：一样就不重建，避免每 30 秒闪一次。"""
+    from types import SimpleNamespace
+
+    from app.ui.messages_page import MessagesPage
+
+    def view(account, rid, when):
+        return SimpleNamespace(account=account, receive_id=rid, time_str=when)
+
+    a = [view("u1", 1, "2026-11-16 10:00"), view("u1", 2, "2026-11-16 11:00")]
+    assert MessagesPage._content_digest(a) == MessagesPage._content_digest(list(a))
+    assert MessagesPage._content_digest(a) != MessagesPage._content_digest(
+        [view("u1", 1, "2026-11-16 10:00"), view("u1", 3, "2026-11-16 11:00")])
+
+
 def test_browser_tab_row_drags_on_press(app):
     """拖窗必须在按下时交给系统。
 
