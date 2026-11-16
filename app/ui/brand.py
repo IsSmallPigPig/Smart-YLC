@@ -22,11 +22,23 @@ from app.ui.hidpi import hidpi_canvas, scale_to
 
 
 def assets_dir() -> Path:
-    """资源目录：源码里是 app/assets，打包后在临时目录的 assets 下。"""
+    """资源目录：源码里是 app/assets，打包后在可执行文件旁边。
+
+    三种落点都要认：
+    - PyInstaller：sys._MEIPASS/assets
+    - Nuitka standalone：<可执行文件目录>/app/assets（macOS 在 .app/Contents/MacOS 下）
+    - 源码：app/ui 的上一级 → app/assets"""
+    candidates = []
     frozen = getattr(sys, "_MEIPASS", None)
     if frozen:
-        return Path(frozen) / "assets"
-    return Path(__file__).resolve().parent.parent / "assets"
+        candidates.append(Path(frozen) / "assets")
+    exe_dir = Path(sys.executable).resolve().parent
+    candidates += [exe_dir / "app/assets", exe_dir / "assets"]
+    candidates.append(Path(__file__).resolve().parent.parent / "assets")
+    for path in candidates:
+        if (path / "smart-ylc@512.png").is_file():
+            return path
+    return candidates[-1]
 
 
 def icon_path(name: str) -> Path:

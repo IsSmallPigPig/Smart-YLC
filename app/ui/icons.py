@@ -21,11 +21,13 @@ from app.ui.hidpi import hidpi_canvas
 
 
 def icons_dir() -> Path:
-    """图标目录：源码里是 app/assets/icons，打包后在临时目录的 assets/icons 下。"""
-    frozen = getattr(sys, "_MEIPASS", None)
-    if frozen:
-        return Path(frozen) / "assets" / "icons"
-    return Path(__file__).resolve().parent.parent / "assets" / "icons"
+    """图标目录：源码里是 app/assets/icons，打包后在可执行文件旁边。
+
+    资源根目录由 brand.assets_dir() 统一判断（PyInstaller / Nuitka / 源码三种落点），
+    这里只管拼 icons 这一层。"""
+    from app.ui.brand import assets_dir
+
+    return assets_dir() / "icons"
 
 
 def icon_path(name: str) -> Path:

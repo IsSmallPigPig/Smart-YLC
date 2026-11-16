@@ -79,12 +79,15 @@ class MainWindow(MSFluentWindow):
         self.setWindowTitle("智慧团委")
         self.setMinimumSize(960, 640)
 
-        # 窗口自适应屏幕：85% 可用区域（上限 1180×760），居中
-        screen = QApplication.primaryScreen().availableGeometry()
-        w, h = min(1180, int(screen.width() * 0.85)), min(760, int(screen.height() * 0.85))
-        self.resize(w, h)
+        # 窗口自适应屏幕：85% 可用区域（上限 1180×760），居中。
+        # 几何与启动画面共用 boot.main_window_rect()：两边各算一次迟早差几个像素，
+        # 交棒时画面会跳一下。
+        from app.ui.boot import main_window_rect
+
+        rect = main_window_rect()
+        self.resize(rect.size())
         geo = self.frameGeometry()
-        geo.moveCenter(screen.center())
+        geo.moveCenter(rect.center())
         self.move(geo.topLeft())
 
         # 毛玻璃：窗口底色由 paintEvent 与 FluentWidget.backgroundColor 共同控制。
