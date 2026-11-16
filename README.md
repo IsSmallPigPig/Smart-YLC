@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="app/assets/smart-ylc@512.png" alt="智慧团委 Logo" width="100">
+
 # 智慧团委
 
 多支部账号一屏管理：档案上传、组织状况、站内信与数据导出。
@@ -25,6 +27,25 @@
 * **导出按需组合。** 五类内容（团员信息、未缴费、无档案、转接申请、信息错误）任选，始终导出一个 xlsx：每项内容一张子表，或全部合成一张；分班时按支部分表。
 * **跨学校可用。** 学号与账号编号规则可自定义，占位符描述年级、班号与忽略位，改示例编号就能实时看到解析结果。规则可以导出成 JSON 给别的学校用。
 * **该省的都省了。** 已保存的会话优先复用，登录状态按账号 4 小时节流；更新在后台静默下载安装，装完才提示重启，不打断手头的活。
+
+## 界面预览
+
+点击截图查看大图。
+
+<table>
+  <tr>
+    <td align="center"><a href="screenshots/01-home.png"><img src="screenshots/01-home.png" width="430"></a><br/><b>工具首页</b></td>
+    <td align="center"><a href="screenshots/02-upload.png"><img src="screenshots/02-upload.png" width="430"></a><br/><b>上传档案</b></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="screenshots/03-org-manage.png"><img src="screenshots/03-org-manage.png" width="430"></a><br/><b>组织管理</b></td>
+    <td align="center"><a href="screenshots/05-org-stats.png"><img src="screenshots/05-org-stats.png" width="430"></a><br/><b>组织状况</b></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="screenshots/06-messages.png"><img src="screenshots/06-messages.png" width="430"></a><br/><b>站内信</b></td>
+    <td align="center"><a href="screenshots/07-settings.png"><img src="screenshots/07-settings.png" width="430"></a><br/><b>系统配置</b></td>
+  </tr>
+</table>
 
 ## 关于项目
 
