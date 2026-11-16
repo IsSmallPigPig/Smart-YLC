@@ -3,8 +3,9 @@
 数据来源固定为 GitHub 仓库 IsSmallPigPig/Smart-YLC：
   * 有 Release 时读 /releases/latest，取 tag、说明和安装包
   * 没有 Release 时读 main 分支的 app/__init__.py 版本号，下载源码压缩包
-下载可经公开加速网关（GATEWAYS，逐个回退）；失败会明确报出原因，
-由调用方决定是否换下一个网关。老 ghproxy.com 域名已停服，不再收录。
+下载可经公开镜像站（MIRRORS，逐个回退）；失败会明确报出原因，
+由调用方决定是否换下一个站。镜像源有三种选择：自动（先测速、按延迟排队）、
+指定某一个站、自定义站址。老 ghproxy.com 域名已停服，不再收录。
 本模块不含 Qt 依赖，网络失败一律抛 UpdateError，不静默返回空结果。
 """
 
@@ -17,7 +18,9 @@ import re
 import ssl
 import subprocess
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,19 +42,58 @@ USER_AGENT = f"Smart-YLC/{__version__} (+{REPO_PAGE})"
 
 DEFAULT_AUTO_CHECK = True
 
-# 下载网关：公开加速站按前缀拼接原始 GitHub 链接，直连前缀为空。
-# 顺序即回退优先级——前一个失败自动试下一个，最后一个必须是直连兜底。
-# ghproxy.com 域名 2025 年起已停服，收录反而拖累速度，故用 gh-proxy.com /
-# ghproxy.net 这些当前实测可通的站（2026-11 实测：gh-proxy.com 最快且支持 Range）。
-GATEWAYS = (
-    {"key": "gh-proxy", "label": "gh-proxy.com 加速", "prefix": "https://gh-proxy.com/"},
-    {"key": "ghproxy.net", "label": "ghproxy.net 加速", "prefix": "https://ghproxy.net/"},
-    {"key": "direct", "label": "直连 GitHub", "prefix": ""},
+# 镜像站：公开加速站按「站址 + 原始 GitHub 链接」拼接，直连前缀为空。
+# 顺序即回退优先级，最后一条必须是直连兜底。站址按社区整理的公开清单维护
+# （2026-11 核对），加速站生命周期普遍不长，失效了改这一处即可。
+MIRRORS = (
+    {"key": "gh-proxy.com", "label": "gh-proxy.com", "prefix": "https://gh-proxy.com/"},
+    {"key": "gh-proxy.org", "label": "gh-proxy.org", "prefix": "https://gh-proxy.org/"},
+    {"key": "cdn.gh-proxy.org", "label": "cdn.gh-proxy.org", "prefix": "https://cdn.gh-proxy.org/"},
+    {"key": "edgeone.gh-proxy.org", "label": "edgeone.gh-proxy.org",
+     "prefix": "https://edgeone.gh-proxy.org/"},
+    {"key": "hk.gh-proxy.org", "label": "hk.gh-proxy.org", "prefix": "https://hk.gh-proxy.org/"},
+    {"key": "ghfast.top", "label": "ghfast.top", "prefix": "https://ghfast.top/"},
+    {"key": "ghfile.geekertao.top", "label": "ghfile.geekertao.top",
+     "prefix": "https://ghfile.geekertao.top/"},
+    {"key": "gh.chjina.com", "label": "gh.chjina.com", "prefix": "https://gh.chjina.com/"},
+    {"key": "gh.monlor.com", "label": "gh.monlor.com", "prefix": "https://gh.monlor.com/"},
+    {"key": "gh.jasonzeng.dev", "label": "gh.jasonzeng.dev", "prefix": "https://gh.jasonzeng.dev/"},
+    {"key": "ghproxy.monkeyray.net", "label": "ghproxy.monkeyray.net",
+     "prefix": "https://ghproxy.monkeyray.net/"},
+    {"key": "github.ednovas.xyz", "label": "github.ednovas.xyz",
+     "prefix": "https://github.ednovas.xyz/"},
+    {"key": "gh.nxnow.top", "label": "gh.nxnow.top", "prefix": "https://gh.nxnow.top/"},
+    {"key": "ghproxy.cxkpro.top", "label": "ghproxy.cxkpro.top",
+     "prefix": "https://ghproxy.cxkpro.top/"},
+    {"key": "fastgit.cc", "label": "fastgit.cc", "prefix": "https://fastgit.cc/"},
+    {"key": "gh.zwy.one", "label": "gh.zwy.one", "prefix": "https://gh.zwy.one/"},
+    {"key": "gitproxy.mrhjx.cn", "label": "gitproxy.mrhjx.cn", "prefix": "https://gitproxy.mrhjx.cn/"},
+    {"key": "github.boki.moe", "label": "github.boki.moe", "prefix": "https://github.boki.moe/"},
+    {"key": "gh.xxooo.cf", "label": "gh.xxooo.cf", "prefix": "https://gh.xxooo.cf/"},
+    {"key": "gh.llkk.cc", "label": "gh.llkk.cc", "prefix": "https://gh.llkk.cc/"},
+    {"key": "wget.la", "label": "wget.la", "prefix": "https://wget.la/"},
 )
-DEFAULT_GATEWAY = "gh-proxy"
+DIRECT = {"key": "direct", "label": "直连 GitHub", "prefix": ""}
+GATEWAYS = MIRRORS + (DIRECT,)
+
+# 镜像源选择：自动（测速后选最快的）/ 指定某个站 / 自定义站址
+AUTO = "auto"
+CUSTOM = "custom"
+DEFAULT_MODE = AUTO
+
+# 老配置里的写法映射到新 key：ghproxy.com 域名已停服，旧值一律指向首站
+LEGACY_KEYS = {"gh-proxy": "gh-proxy.com", "ghproxy": "gh-proxy.com"}
+
+# 测速用的探测目标：版本文件很小，能同时验证「站通」与「拿到的是对的文件」
+PROBE_URL = VERSION_RAW
+PROBE_TIMEOUT = 4
+PROBE_TTL = 600
+_PROBE: dict[str, tuple[int | None, str]] = {}
+_PROBE_AT = 0.0
 
 
 def gateway_by_key(key: str) -> dict | None:
+    key = LEGACY_KEYS.get(key or "", key)
     for g in GATEWAYS:
         if g["key"] == key:
             return g
@@ -64,6 +106,25 @@ def gateway_keys() -> tuple[str, ...]:
 
 def gateway_labels() -> tuple[str, ...]:
     return tuple(g["label"] for g in GATEWAYS)
+
+
+def normalize_prefix(prefix: str) -> str:
+    """把用户填的站址补成可用前缀：缺协议补 https，缺尾斜杠补上。"""
+    text = (prefix or "").strip()
+    if not text:
+        return ""
+    if not text.startswith(("http://", "https://")):
+        text = "https://" + text
+    return text if text.endswith("/") else text + "/"
+
+
+def custom_gateway(prefix: str) -> dict | None:
+    """自定义站址当作一个镜像站；填得没法用就返回 None。"""
+    url = normalize_prefix(prefix)
+    if not url:
+        return None
+    host = urllib.parse.urlsplit(url).netloc
+    return {"key": CUSTOM, "label": host or url, "prefix": url}
 
 
 class UpdateError(Exception):
@@ -90,17 +151,139 @@ def is_newer(remote: str, local: str = __version__) -> bool:
 
 
 def proxy_url(url: str, gateway: dict | str | bool = True) -> str:
-    """把原始 GitHub 链接拼到网关前缀后面；直连（空前缀/False）原样返回。
+    """把原始 GitHub 链接拼到镜像站前缀后面；直连（空前缀/False）原样返回。
 
-    gateway 可以传网关 dict、key 字符串，或兼容旧调用的 True/False。"""
+    gateway 可以传镜像站 dict、key 字符串，或兼容旧调用的 True/False。"""
     if isinstance(gateway, dict):
         prefix = gateway.get("prefix", "")
     elif isinstance(gateway, str):
         g = gateway_by_key(gateway)
-        prefix = (g or GATEWAYS[-1])["prefix"]
+        prefix = (g or DIRECT)["prefix"]
     else:
         prefix = GATEWAYS[0]["prefix"] if gateway else ""
     return prefix + url if prefix else url
+
+
+def _as_gateway(gateway) -> dict:
+    """把 dict / key / 旧式 True/False 收敛成一条镜像站记录。"""
+    if isinstance(gateway, dict):
+        return gateway
+    if isinstance(gateway, str):
+        found = gateway_by_key(gateway)
+        if found:
+            return found
+        order = resolve_order(gateway)
+        return order[0]
+    return GATEWAYS[0] if gateway else DIRECT
+
+
+def _probe_rank(gw: dict) -> tuple[int, int]:
+    """排序键：可用的按延迟升序，限流的次之，真的不通的垫后。"""
+    ms, reason = _PROBE.get(gw["key"], (None, ""))
+    if ms is not None:
+        return (0, ms)
+    return (1, 0) if is_rate_limited(reason) else (2, 0)
+
+
+def is_rate_limited(reason: str) -> bool:
+    """站是通的、只是嫌请求太密（GitHub raw 常见 429）。
+
+    这类站下载安装包通常没问题，不能当成失效站踢到队尾——排在实测可用的
+    站后面即可。"""
+    text = (reason or "").lower()
+    return "429" in text or "too many requests" in text
+
+
+def ranked_gateways() -> list[dict]:
+    """按最近一次测速排序；没测过就按清单顺序（直连排最后兜底）。"""
+    if not _PROBE:
+        return list(GATEWAYS)
+    return sorted(GATEWAYS, key=_probe_rank)
+
+
+def probe_mirror(gw: dict, ctx=None, timeout: float = PROBE_TIMEOUT) -> int:
+    """量一个镜像站拿文件要多久（毫秒）；不通就抛 UpdateError。"""
+    url = proxy_url(PROBE_URL, gw)
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    start = time.perf_counter()
+    try:
+        with _urlopen(req, timeout, ctx) as resp:
+            resp.read(256)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
+        reason = getattr(e, "reason", None) or getattr(e, "code", None) or str(e)
+        raise UpdateError(f"{gw['label']} 不可用：{reason}") from e
+    return max(1, int((time.perf_counter() - start) * 1000))
+
+
+def remember_probe(key: str, ms: int | None, reason: str = "") -> None:
+    """记下一次测速结果；UI 逐条回填延迟，下载时也按它排队。"""
+    global _PROBE_AT
+    _PROBE[key] = (ms, reason)
+    _PROBE_AT = time.time()
+
+
+def probe_result(key: str) -> tuple[int | None, str]:
+    """某个站最近一次测速结果：(毫秒, 失败原因)；没测过是 (None, "")。"""
+    return _PROBE.get(key, (None, ""))
+
+
+def probe_age() -> float:
+    """上次测速距今多少秒；从没测过返回一个很大的数。"""
+    return time.time() - _PROBE_AT if _PROBE_AT else 1e9
+
+
+def probe_fresh() -> bool:
+    return _PROBE_AT > 0 and probe_age() < PROBE_TTL
+
+
+def resolve_order(mode: str = DEFAULT_MODE, custom_prefix: str = "") -> list[dict]:
+    """按镜像源选择给出下载尝试顺序（首个为目标站，其余依次兜底）。
+
+    自动：先测速（有十分钟内的结果就直接用），可用的按延迟升序排在前面。
+    自定义：用户填的站址排第一，其余镜像站依次兜底。
+    指定某个站：它排第一。任何情况下直连都在兜底序列里。
+    """
+    if mode == CUSTOM:
+        custom = custom_gateway(custom_prefix)
+        if custom:
+            rest = [g for g in GATEWAYS if g["prefix"] != custom["prefix"]]
+            return [custom] + rest
+        mode = AUTO
+    if mode == AUTO:
+        if not _PROBE:
+            probe_all()
+        return ranked_gateways()
+    head = gateway_by_key(mode)
+    if head is None:
+        return ranked_gateways() if _PROBE else list(GATEWAYS)
+    return [head] + [g for g in GATEWAYS if g["key"] != head["key"]]
+
+
+def probe_all(targets=None, workers: int = 8) -> dict[str, tuple[int | None, str]]:
+    """并发测速全部镜像站，结果写进缓存并返回。单个站失败不影响其它站。
+
+    用线程池而不是顺序请求：二十多个站顺序量，光是超时就要按分钟算。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    gws = list(targets if targets is not None else GATEWAYS)
+    try:
+        ctx = _ssl_context()
+    except UpdateError:
+        ctx = None  # 证书读不出来时让每个请求自己报错，别整批失败
+
+    def _one(gw):
+        try:
+            return gw["key"], probe_mirror(gw, ctx), ""
+        except UpdateError as e:
+            return gw["key"], None, str(e)
+        except Exception as e:      # noqa: BLE001 - 测速失败一律记成不可用
+            return gw["key"], None, str(e) or "不可用"
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for key, ms, reason in pool.map(_one, gws):
+            remember_probe(key, ms, reason)
+    return dict(_PROBE)
 
 
 MACOS_KEYCHAINS = (
@@ -131,8 +314,8 @@ def _ssl_context():
     return ctx
 
 
-def _urlopen(req, timeout):
-    ctx = _ssl_context()
+def _urlopen(req, timeout, ctx=None):
+    ctx = _ssl_context() if ctx is None else ctx
     if ctx is None:
         return urllib.request.urlopen(req, timeout=timeout)
     return urllib.request.urlopen(req, timeout=timeout, context=ctx)
@@ -271,7 +454,7 @@ def check_update() -> UpdateInfo | None:
     """返回可更新的版本信息；已是最新返回 None；失败抛 UpdateError。
 
     版本检查走直连（api.github.com / raw.githubusercontent.com 响应快），
-    ghproxy.com 只用于下载更新包，避免开机检查被不可用的代理拖住。"""
+    镜像站只用于下载更新包，避免开机检查被不可用的代理拖住。"""
     info = _release_info() or _branch_info()
     return info if is_newer(info.version) else None
 
@@ -279,13 +462,11 @@ def check_update() -> UpdateInfo | None:
 def download(info: UpdateInfo, gateway: dict | str | bool = True, progress=None, cancel=None) -> str:
     """下载更新包到 ~/.gd12355-helper/updates/，返回本地路径。
 
-    gateway 决定走哪个加速站（dict/key，或兼容旧调用的 True/False）。
+    gateway 决定走哪个镜像站（dict/key/模式名，或兼容旧调用的 True/False）。
     progress(0..100) 逐块回调；cancel() 返回 True 时中止并删除临时文件。
     临时文件 .part + os.replace 原子落地，中途失败不会留下半个包。
     """
-    gw = gateway if isinstance(gateway, dict) else (
-        gateway_by_key(gateway) if isinstance(gateway, str)
-        else (GATEWAYS[0] if gateway else GATEWAYS[-1]))
+    gw = _as_gateway(gateway)
     url = proxy_url(info.download_url, gw)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     folder = Path(UPDATE_DIR)
@@ -313,7 +494,7 @@ def download(info: UpdateInfo, gateway: dict | str | bool = True, progress=None,
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
         tmp.unlink(missing_ok=True)
         reason = getattr(e, "reason", None) or getattr(e, "code", None) or str(e)
-        via = gw["label"] if gw["prefix"] else "直连"
+        via = f"经 {gw['label']} " if gw["prefix"] else "直连"
         raise UpdateError(f"{via}下载失败：{reason}（{url}）") from e
     except UpdateError:
         tmp.unlink(missing_ok=True)
