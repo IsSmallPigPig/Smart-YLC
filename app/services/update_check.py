@@ -2,10 +2,12 @@
 
 检查只走直连，结果写入配置：发现新版本再发系统通知；已是最新或检查失败
 不打扰用户，但会记录时间与原因，系统配置的「关于」里能看到上次结果。
+下载走镜像源设置：自动（测速后选最快）、指定某个站、自定义站址。
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from PySide6.QtCore import QThread, QTimer, Signal
@@ -25,10 +27,11 @@ class CheckWorker(QThread):
 
 
 class DownloadWorker(QThread):
-    """下载更新包：从指定网关开始，失败自动换下一个，最后一个是直连。
+    """下载更新包：按镜像源设置排出尝试顺序，失败自动换下一个站。
 
-    start_gateway 传网关 key（None = 用设置里选的默认）。跳过与起点重复的项，
-    保证每个网关最多试一次；换网关时发 fallback 信号说明上一个为什么不行。
+    自动模式先测速再排队（十分钟内的测速结果直接复用），指定站点则它排第一，
+    无论哪种，直连 GitHub 都留在序列里兜底。换站时发 fallback 说明上一个
+    为什么不行，每个站最多试一次。
     """
 
     progress = Signal(int)
@@ -36,30 +39,31 @@ class DownloadWorker(QThread):
     done = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, info: updater.UpdateInfo, start_gateway: str | None = None,
+    def __init__(self, info: updater.UpdateInfo, start_mode: str | None = None,
                  use_proxy: bool | None = None, parent=None):
         super().__init__(parent)
         self.info = info
-        if use_proxy is not None:  # 兼容旧调用：True=默认站，False=直连
-            start_gateway = updater.DEFAULT_GATEWAY if use_proxy else "direct"
-        self.start_gateway = start_gateway or updater.DEFAULT_GATEWAY
+        if use_proxy is not None:  # 兼容旧调用：True=自动，False=直连
+            start_mode = updater.AUTO if use_proxy else "direct"
+        self.start_mode = start_mode or mirror_mode()
+        self.custom_prefix = custom_mirror()
 
     def _chain(self) -> list[dict]:
-        gws = list(updater.GATEWAYS)
         try:
-            i = [g["key"] for g in gws].index(self.start_gateway)
-        except ValueError:
-            return gws
-        return gws[i:] + gws[:i]
+            order = updater.resolve_order(self.start_mode, self.custom_prefix)
+        except Exception:      # 测速环节出错不该让下载直接失败，按清单顺序试
+            order = list(updater.GATEWAYS)
+        return order or list(updater.GATEWAYS)
 
     def run(self):
         errors = []
-        for idx, gw in enumerate(self._chain()):
+        chain = self._chain()
+        for idx, gw in enumerate(chain):
             try:
                 path = updater.download(self.info, gw, progress=self.progress.emit)
             except updater.UpdateError as e:
                 errors.append(str(e))
-                if idx + 1 < len(self._chain()):
+                if idx + 1 < len(chain):
                     self.fallback.emit(str(e))
                 continue
             except Exception as e:
@@ -68,6 +72,43 @@ class DownloadWorker(QThread):
             self.done.emit(path)
             return
         self.failed.emit("；".join(errors[-2:]) or "下载失败")
+
+
+class MirrorProbeWorker(QThread):
+    """并发测速全部镜像站，逐条把结果发回界面。
+
+    单站最多等 PROBE_TIMEOUT 秒，二十多个站并发测，整轮不超过几秒；
+    界面按收到的顺序回填"（845 ms）/（超时）/（不可用）"，不阻塞主线程。
+    """
+
+    measured = Signal(str, int)      # 站 key, 延迟毫秒
+    unavailable = Signal(str, str)   # 站 key, 原因
+    finished_all = Signal()
+
+    def __init__(self, targets=None, parent=None):
+        super().__init__(parent)
+        self._targets = list(targets if targets is not None else updater.GATEWAYS)
+
+    def run(self):
+        try:
+            ctx = updater._ssl_context()
+        except Exception:      # 证书读不出来时交给逐个请求去报错
+            ctx = None
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(updater.probe_mirror, gw, ctx): gw
+                       for gw in self._targets}
+            for future in as_completed(futures):
+                gw = futures[future]
+                try:
+                    ms = future.result()
+                except Exception as e:      # noqa: BLE001 - 一律记成不可用
+                    reason = str(e) or "不可用"
+                    updater.remember_probe(gw["key"], None, reason)
+                    self.unavailable.emit(gw["key"], reason)
+                else:
+                    updater.remember_probe(gw["key"], ms)
+                    self.measured.emit(gw["key"], ms)
+        self.finished_all.emit()
 
 
 # ---------------------------------------------------------------- 配置
@@ -80,16 +121,27 @@ def set_auto_check(enabled: bool):
     store.update(lambda cfg: cfg.__setitem__("autoCheckUpdate", bool(enabled)))
 
 
-def gateway_mode() -> str:
-    """当前选择的下载网关 key；非法或旧值回退到默认站。"""
-    mode = store.load().get("updateProxy") or updater.DEFAULT_GATEWAY
-    if mode == "ghproxy":       # 旧版本存过 "ghproxy"，映射到 gh-proxy
-        return updater.DEFAULT_GATEWAY
-    return mode if updater.gateway_by_key(mode) else updater.DEFAULT_GATEWAY
+def mirror_mode() -> str:
+    """当前镜像源选择：auto / 某个站的 key / custom；非法或旧值回退到自动。"""
+    raw = str(store.load().get("updateProxy") or updater.DEFAULT_MODE)
+    value = updater.LEGACY_KEYS.get(raw, raw)
+    if value in (updater.AUTO, updater.CUSTOM):
+        return value
+    return value if updater.gateway_by_key(value) else updater.DEFAULT_MODE
 
 
-def set_gateway_mode(mode: str):
-    store.update(lambda cfg: cfg.__setitem__("updateProxy", mode))
+def set_mirror_mode(value: str):
+    store.update(lambda cfg: cfg.__setitem__("updateProxy", value))
+
+
+def custom_mirror() -> str:
+    """自定义镜像站址（已规范化）；没填过返回空串。"""
+    return updater.normalize_prefix(str(store.load().get("updateCustomMirror") or ""))
+
+
+def set_custom_mirror(prefix: str):
+    value = updater.normalize_prefix(prefix)
+    store.update(lambda cfg: cfg.__setitem__("updateCustomMirror", value))
 
 
 def record(status: str, detail: str = ""):
@@ -164,7 +216,7 @@ def check_on_startup(delay_ms: int = 2500, parent=None):
             return
         record("update", info.version)
 
-        downloader = DownloadWorker(info, gateway_mode())
+        downloader = DownloadWorker(info, mirror_mode())
         _WORKERS.append(downloader)
         downloader.finished.connect(
             lambda: _WORKERS.remove(downloader) if downloader in _WORKERS else None)

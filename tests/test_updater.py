@@ -352,7 +352,7 @@ def test_failed_download_cleans_part_file_and_reports_url(tmp_path, monkeypatch,
     fake_urlopen(monkeypatch, {GH_PROXY + url: failure})
     with pytest.raises(updater.UpdateError) as e:
         updater.download(info(url=url), True)
-    assert "加速下载" in str(e.value)
+    assert "下载失败" in str(e.value)
     assert GH_PROXY + url in str(e.value)
     assert list(tmp_path.glob("*.part")) == []
 
@@ -365,45 +365,160 @@ def test_cancelled_download_leaves_no_partial_file(tmp_path, monkeypatch):
     assert list(tmp_path.glob("*.part")) == []
 
 
+# ---------------------------------------------------------------- 镜像源
+
+@pytest.fixture(autouse=True)
+def _reset_probe_cache(monkeypatch):
+    """测速缓存是模块级状态，每个用例从零开始，避免互相影响。"""
+    monkeypatch.setattr(updater, "_PROBE", {})
+    monkeypatch.setattr(updater, "_PROBE_AT", 0.0)
+
+
+def test_mirror_list_is_unique_and_ends_with_direct():
+    keys = [g["key"] for g in updater.GATEWAYS]
+    assert len(keys) == len(set(keys))
+    assert updater.GATEWAYS[-1] is updater.DIRECT
+    assert all(g["prefix"].startswith("https://") for g in updater.MIRRORS)
+
+
+def test_legacy_gateway_keys_still_resolve():
+    assert updater.gateway_by_key("gh-proxy") is updater.MIRRORS[0]
+    assert updater.gateway_by_key("ghproxy") is updater.MIRRORS[0]
+    assert updater.gateway_by_key("gh-proxy.com") is updater.MIRRORS[0]
+    assert updater.gateway_by_key("no-such-mirror") is None
+
+
+def test_normalize_prefix_fills_protocol_and_slash():
+    assert updater.normalize_prefix("my.mirror.cn") == "https://my.mirror.cn/"
+    assert updater.normalize_prefix(" http://a.cn/gh ") == "http://a.cn/gh/"
+    assert updater.normalize_prefix("") == ""
+    assert updater.custom_gateway("mirror.cn")["label"] == "mirror.cn"
+
+
+def test_auto_mode_puts_fastest_mirror_first():
+    updater.remember_probe("gh-proxy.com", 900)
+    updater.remember_probe("gh.zwy.one", 120)
+    updater.remember_probe("ghfast.top", None, "timed out")
+    order = [g["key"] for g in updater.resolve_order(updater.AUTO)]
+    assert order[0] == "gh.zwy.one"
+    assert order.index("gh-proxy.com") < order.index("ghfast.top")  # 超时的垫后
+    assert "direct" in order                                        # 永远留兜底
+
+
+def test_rate_limited_mirror_outranks_dead_ones():
+    """429 只是嫌请求太密，站是通的：排在实测可用的后面、真不通的前面。"""
+    updater.remember_probe("gh-proxy.com", 900)
+    updater.remember_probe("gh.xxooo.cf", None, "HTTP Error 429: Too Many Requests")
+    updater.remember_probe("fastgit.cc", None, "The read operation timed out")
+    order = [g["key"] for g in updater.resolve_order(updater.AUTO)]
+    assert order.index("gh-proxy.com") < order.index("gh.xxooo.cf")
+    assert order.index("gh.xxooo.cf") < order.index("fastgit.cc")
+    assert updater.is_rate_limited("HTTP Error 429: Too Many Requests") is True
+    assert updater.is_rate_limited("timed out") is False
+
+
+def test_single_mirror_mode_starts_from_that_mirror():
+    order = [g["key"] for g in updater.resolve_order("gh.zwy.one")]
+    assert order[0] == "gh.zwy.one"
+    assert order[-1] == "direct"
+    assert len(order) == len(updater.GATEWAYS)
+
+
+def test_custom_mirror_leads_the_order(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
+    update_check.set_custom_mirror("my.mirror.cn")
+    order = updater.resolve_order(updater.CUSTOM, update_check.custom_mirror())
+    assert order[0]["prefix"] == "https://my.mirror.cn/"
+    assert order[-1]["key"] == "direct"
+
+
+def test_empty_custom_prefix_falls_back_to_auto():
+    updater.remember_probe("gh.zwy.one", 100)
+    assert updater.resolve_order(updater.CUSTOM, "")[0]["key"] == "gh.zwy.one"
+
+
+def test_probe_cache_expires():
+    updater.remember_probe("gh-proxy.com", 500)
+    assert updater.probe_fresh() is True
+    assert updater.probe_result("gh-proxy.com") == (500, "")
+    assert updater.probe_result("wget.la") == (None, "")
+
+
+def test_probe_all_records_each_mirror(monkeypatch):
+    """测速整轮跑完：通的记延迟，不通的记原因，不抛异常打断其他站。"""
+    def _probe(gw, ctx=None, timeout=None):
+        if gw["key"] == "wget.la":
+            raise updater.UpdateError("wget.la 不可用：timed out")
+        return 300
+
+    monkeypatch.setattr(updater, "probe_mirror", _probe)
+    updater.probe_all([updater.gateway_by_key("gh-proxy.com"), updater.gateway_by_key("wget.la")])
+    assert updater.probe_result("gh-proxy.com") == (300, "")
+    assert updater.probe_result("wget.la")[0] is None
+    assert "timed out" in updater.probe_result("wget.la")[1]
+
+
 # ---------------------------------------------------------------- Qt 回退
 
-def test_download_worker_walks_gateway_chain(monkeypatch):
-    """起点网关失败后自动换下一个，最终成功；每个失败都发 fallback。"""
+def test_download_worker_walks_the_ordered_chain(monkeypatch):
+    """目标站失败后自动换下一个，最终成功；每次失败都发 fallback。"""
     from PySide6.QtCore import QCoreApplication
 
     QCoreApplication.instance() or QCoreApplication([])
+    chain = [updater.gateway_by_key("gh-proxy.com"), updater.DIRECT]
+    monkeypatch.setattr(updater, "resolve_order", lambda *a, **k: chain)
     calls = []
 
     def _download(inf, gw, **kwargs):
-        calls.append(gw["key"] if isinstance(gw, dict) else gw)
+        calls.append(gw["key"])
         if gw["key"] != "direct":
-            raise updater.UpdateError(f"{gw['key']} 下载失败：代理不可用")
+            raise updater.UpdateError(f"{gw['label']} 不可用：连接被重置")
         return "/tmp/Smart-YLC.zip"
 
     monkeypatch.setattr(updater, "download", _download)
-    worker = update_check.DownloadWorker(info(), "gh-proxy")
+    worker = update_check.DownloadWorker(info(), "gh-proxy.com")
     fallbacks, done, failed = [], [], []
     worker.fallback.connect(fallbacks.append)
     worker.done.connect(done.append)
     worker.failed.connect(failed.append)
     worker.run()  # 直接跑 run，不启动真实线程
 
-    # 从 gh-proxy 起，顺序覆盖全部网关到 direct
-    assert calls == ["gh-proxy", "ghproxy.net", "direct"]
-    assert len(fallbacks) == 2 and "代理不可用" in fallbacks[0]
+    assert calls == ["gh-proxy.com", "direct"]
+    assert len(fallbacks) == 1 and "连接被重置" in fallbacks[0]
     assert done == ["/tmp/Smart-YLC.zip"] and failed == []
 
 
-def test_download_worker_all_gateways_fail_reports_error(monkeypatch):
+def test_download_worker_auto_mode_uses_measured_order(monkeypatch):
+    """自动模式：按测速结果从最快的站开始，不用再问一遍走哪个。"""
     from PySide6.QtCore import QCoreApplication
 
     QCoreApplication.instance() or QCoreApplication([])
+    updater.remember_probe("gh.zwy.one", 100)
+    updater.remember_probe("gh-proxy.com", 900)
+    seen = []
+    monkeypatch.setattr(updater, "download",
+                        lambda inf, gw, **kw: seen.append(gw["key"]) or "/tmp/Smart-YLC.zip")
+
+    worker = update_check.DownloadWorker(info(), updater.AUTO)
+    done = []
+    worker.done.connect(done.append)
+    worker.run()
+    assert seen == ["gh.zwy.one"]
+    assert done == ["/tmp/Smart-YLC.zip"]
+
+
+def test_download_worker_all_mirrors_fail_reports_error(monkeypatch):
+    from PySide6.QtCore import QCoreApplication
+
+    QCoreApplication.instance() or QCoreApplication([])
+    monkeypatch.setattr(updater, "resolve_order",
+                        lambda *a, **k: [updater.gateway_by_key("wget.la"), updater.DIRECT])
 
     def _download(inf, gw, **kwargs):
-        raise updater.UpdateError(f"{gw['key']} 下载失败：超时")
+        raise updater.UpdateError(f"经 {gw['label']} 下载失败：超时")
 
     monkeypatch.setattr(updater, "download", _download)
-    worker = update_check.DownloadWorker(info(), "direct")
+    worker = update_check.DownloadWorker(info(), "wget.la")
     failed = []
     worker.failed.connect(failed.append)
     worker.run()
@@ -432,28 +547,39 @@ def test_check_worker_reports_failure_instead_of_crashing(monkeypatch):
 def test_update_config_defaults_and_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
     assert update_check.auto_check_enabled() is True
-    assert update_check.gateway_mode() == updater.DEFAULT_GATEWAY
+    assert update_check.mirror_mode() == updater.AUTO  # 默认自动选择
     assert "尚未检查" in update_check.last_check_text()
 
     update_check.set_auto_check(False)
-    update_check.set_gateway_mode("direct")
+    update_check.set_mirror_mode("direct")
     update_check.record("update", "9.9.9")
     assert update_check.auto_check_enabled() is False
-    assert update_check.gateway_mode() == "direct"
+    assert update_check.mirror_mode() == "direct"
     assert "9.9.9" in update_check.last_check_text()
 
 
-def test_invalid_proxy_mode_falls_back(tmp_path, monkeypatch):
+def test_invalid_mirror_mode_falls_back_to_auto(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
     store.save({"updateProxy": "something-else"})
-    assert update_check.gateway_mode() == updater.DEFAULT_GATEWAY
+    assert update_check.mirror_mode() == updater.AUTO
 
 
-def test_legacy_ghproxy_value_maps_to_new_default(tmp_path, monkeypatch):
-    """老配置里存过 "ghproxy"（ghproxy.com 已停服），迁移到当前默认站。"""
+def test_legacy_ghproxy_value_maps_to_first_mirror(tmp_path, monkeypatch):
+    """老配置里存过 "ghproxy" / "gh-proxy"（旧 key），迁移到对应站。"""
     monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
     store.save({"updateProxy": "ghproxy"})
-    assert update_check.gateway_mode() == "gh-proxy"
+    assert update_check.mirror_mode() == "gh-proxy.com"
+    store.save({"updateProxy": "gh-proxy"})
+    assert update_check.mirror_mode() == "gh-proxy.com"
+
+
+def test_custom_mirror_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
+    assert update_check.custom_mirror() == ""
+    update_check.set_custom_mirror("my.mirror.cn")
+    assert update_check.custom_mirror() == "https://my.mirror.cn/"
+    update_check.set_mirror_mode(updater.CUSTOM)
+    assert update_check.mirror_mode() == updater.CUSTOM
 
 
 def test_startup_check_respects_switch_off(tmp_path, monkeypatch):

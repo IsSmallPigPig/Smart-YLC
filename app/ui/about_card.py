@@ -1,4 +1,4 @@
-"""系统配置的「关于」分组：作者主页、反馈、检查更新、下载加速。
+"""系统配置的「关于」分组：作者主页、反馈、检查更新（含镜像源）。
 
 检查与下载用右下角的浮动进度条反馈（和「同步数据」同一种），下载时按百分比
 推进。下载完成后拉起独立进程静默安装，不弹安装窗口；装完发系统通知提醒重启。
@@ -22,7 +22,7 @@ from qfluentwidgets import (
 
 from app import __version__
 from app.services import silent_update, update_check, updater
-from app.ui.combo import ComboBox
+from app.ui.mirror_combo import MirrorComboBox
 from app.ui.page import CONTROL_WIDTH, CollapsibleCard, SettingRow
 
 
@@ -85,24 +85,16 @@ class AboutCard(CollapsibleCard):
             "提供反馈", desc=self.FEEDBACK_DESC, icon=FIF.FEEDBACK,
             control=_fill(feedback_btn)))
 
+        # 镜像源与检查按钮同一行：左侧选走哪个站，右侧执行检查/下载
+        self.mirror_combo = MirrorComboBox()
         self.check_btn = _button(FIF.UPDATE, "检查更新")
+        self.check_btn.setFixedWidth(CONTROL_WIDTH)
         self.check_btn.clicked.connect(self._on_action)
         self.update_row = SettingRow(
-            "检查更新", icon=FIF.UPDATE, control=_fill(self.check_btn))
+            "检查更新", icon=FIF.UPDATE,
+            control=_controls(self.mirror_combo, self.check_btn))
         self.body_lay.addWidget(self.update_row)
         self._refresh_status()
-
-        self.proxy_combo = ComboBox()
-        self.proxy_combo.addItems(updater.gateway_labels())
-        keys = list(updater.gateway_keys())
-        try:
-            self.proxy_combo.setCurrentIndex(keys.index(update_check.gateway_mode()))
-        except ValueError:
-            self.proxy_combo.setCurrentIndex(0)
-        self.proxy_combo.currentIndexChanged.connect(self._on_proxy_changed)
-        self.body_lay.addWidget(SettingRow(
-            "下载加速", desc="更新弹窗里每个通道都能临时选；这里定默认", icon=FIF.CLOUD,
-            control=_fill(self.proxy_combo), separator=False))
 
     # ------------------------------------------------------------ 状态小字
 
@@ -145,11 +137,6 @@ class AboutCard(CollapsibleCard):
             position=InfoBarPosition.BOTTOM_RIGHT, parent=self.window())
 
     # ------------------------------------------------------------ 检查更新
-
-    def _on_proxy_changed(self, index: int):
-        keys = list(updater.gateway_keys())
-        if 0 <= index < len(keys):
-            update_check.set_gateway_mode(keys[index])
 
     def _on_action(self):
         """一个按钮依次承担：检查更新 → 下载新版本 → 打开下载目录。"""
@@ -203,28 +190,25 @@ class AboutCard(CollapsibleCard):
     # ------------------------------------------------------------ 下载更新
 
     def _download(self):
+        """按镜像源设置直接开下，不再临时问一遍走哪个站。"""
         if self._info is None:
             return
         if self._download_worker is not None and self._download_worker.isRunning():
             return
-        # 每个通道一行下载按钮，点哪个走哪个；选完记住为默认
-        from app.ui.gateway_picker import pick_gateway
+        self._download_via(self.mirror_combo.mode())
 
-        def _start(gw):
-            update_check.set_gateway_mode(gw["key"])
-            self._download_via(gw)
-
-        pick_gateway(self.window(), _start, self._info.version)
-
-    def _download_via(self, gw: dict):
+    def _download_via(self, mode: str):
         if self._download_worker is not None and self._download_worker.isRunning():
             return
         self._downloaded = ""
         self._fallback = ""
         self.check_btn.setEnabled(False)
         self.check_btn.setText("正在下载")
-        self._open_toast("下载更新").set_progress(0, 100, "正在下载更新包 0%")
-        worker = update_check.DownloadWorker(self._info, gw["key"])
+        # 自动模式还没测过速时，下载前会先探一轮路，文案要说清在等什么
+        waiting = "正在测速挑选镜像站…" if (
+            mode == updater.AUTO and not updater.probe_fresh()) else "正在下载更新包 0%"
+        self._open_toast("下载更新").set_progress(0, 100, waiting)
+        worker = update_check.DownloadWorker(self._info, mode)
         self._download_worker = worker
         worker.progress.connect(self._on_download_progress)
         worker.fallback.connect(self._on_proxy_fallback)

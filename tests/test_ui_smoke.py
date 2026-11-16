@@ -616,30 +616,33 @@ def test_branch_picker_lists_only_normal_accounts(app):
     assert pick_branch(accounts[:1], None, lambda user: None) is None
 
 
-def test_gateway_picker_lists_all_download_channels(app, monkeypatch):
-    """更新下载弹窗：每个网关一行、各带一个下载按钮，点选记为该通道且防重入。"""
-    from PySide6.QtWidgets import QPushButton, QWidget
+def test_mirror_combo_lists_sites_and_defaults_to_auto(app, isolated_store):
+    """镜像源：自动 → 各站 → 直连 → 自定义；默认自动，选中即写配置。"""
+    from app.services import update_check, updater
+    from app.ui.mirror_combo import AUTO_TEXT, CUSTOM_TEXT, MirrorComboBox
 
-    from app.services import updater
-    from app.ui.gateway_picker import GatewayPickerDialog
+    combo = MirrorComboBox()
+    assert combo.count() == len(updater.MIRRORS) + 3
+    assert combo.itemText(0) == AUTO_TEXT
+    assert combo.itemData(0) == updater.AUTO
+    assert combo.itemText(combo.count() - 1) == CUSTOM_TEXT
+    # 默认自动选择，收起状态也只显示「自动选择」（延迟只在列表里）
+    assert combo.mode() == updater.AUTO
+    assert combo.text() == AUTO_TEXT
 
-    host = QWidget()
-    host.resize(600, 400)
-    dlg = GatewayPickerDialog(host, "9.9.9")
-    assert dlg.chosen is None
-    # 每个网关一个「下载」按钮（弹窗自带取消/确认按钮，按文案数）
-    btns = [b for b in dlg.widget.findChildren(QPushButton) if b.text() == "下载"]
-    assert len(btns) == len(updater.GATEWAYS)
-    # 关窗动画在 offscreen 会崩，accept 换成空操作，只验证选通道这条契约
-    monkeypatch.setattr(dlg, "accept", lambda *a: None)
-    gw = updater.GATEWAYS[1]
-    dlg._on_pick(gw)
-    assert dlg.chosen["key"] == gw["key"]
-    assert dlg._closing is True
-    # 已选定后再点别的通道不改变结果
-    dlg._on_pick(updater.GATEWAYS[0])
-    assert dlg.chosen["key"] == gw["key"]
-    dlg.deleteLater()
+    index = combo._index_of("gh.zwy.one")
+    combo.setCurrentIndex(index)
+    assert combo.mode() == "gh.zwy.one"
+    assert update_check.mirror_mode() == "gh.zwy.one"
+    assert combo.text() == "gh.zwy.one"
+
+    # 测速结果回填成「站名 (ms)」，收起状态的文案不带延迟
+    combo._on_measured("gh.zwy.one", 845)
+    assert combo.itemText(index) == "gh.zwy.one (845 ms)"
+    assert combo.text() == "gh.zwy.one"
+    combo._on_unavailable("wget.la", "timed out")
+    assert combo.itemText(combo._index_of("wget.la")) == "wget.la (超时)"
+    combo.deleteLater()
 
 
 def test_notice_rows_are_compact(app):
