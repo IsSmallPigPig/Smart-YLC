@@ -80,7 +80,7 @@ def test_settings_page_builds(app, isolated_store):
     # 账号卡片只管账号表格；系统备份单独成卡，不再混在「账号文件」里
     assert page.file_btn.text() == "账号表格"
     assert [a.text() for a in page.file_menu.actions()] == [
-        "从表格文件中导入", "下载账号模板"]
+        "导入文件", "下载模版"]
     assert page.backup_export_btn.text() == "导出备份"
     assert page.backup_import_btn.text() == "恢复备份"
     assert page.roster_more_btn.text() == "名单管理"
@@ -587,21 +587,26 @@ def test_health_summary_merges_reasons(app, isolated_store):
     assert "密码错误 1" in content and "需验证码 1" in content and "网络错误 1" in content
 
 
-def test_branch_picker_marks_abnormal_accounts(app):
-    """异常账号也列出来，标在名字后面：加号不能因为全异常就不弹选择框。"""
+def test_branch_picker_lists_only_normal_accounts(app):
+    """只列状态正常的账号，并在弹窗里说明隐藏了多少异常账号。"""
     from PySide6.QtWidgets import QWidget
 
-    from app.ui.branch_picker import BranchPickerDialog
+    from app.ui.branch_picker import BranchPickerDialog, pick_branch
 
     host = QWidget()
     host.resize(600, 400)
-    dlg = BranchPickerDialog([
+    accounts = [
         {"userName": "a", "remark": "高三一班", "health": {"status": "captcha"}},
         {"userName": "b", "remark": "高二二班", "health": {"status": "ok"}},
-    ], host, note="1 个账号状态异常")
-    assert dlg.combo.count() == 2
-    assert "需验证码" in dlg.combo.itemText(0)
-    assert "需验证码" not in dlg.combo.itemText(1)
+    ]
+    dlg = BranchPickerDialog(accounts, host)
+    assert dlg.combo.count() == 1
+    assert dlg.combo.itemText(0) == "高二二班（b）"
+    from qfluentwidgets import CaptionLabel
+
+    assert any("已隐藏 1 个异常账号" in lbl.text()
+               for lbl in dlg.widget.findChildren(CaptionLabel))
+    assert pick_branch(accounts[:1], None, lambda user: None) is None
 
 
 def test_notice_rows_are_compact(app):
@@ -643,17 +648,34 @@ def test_messages_content_digest_tracks_changes(app):
         [view("u1", 1, "2026-11-16 10:00"), view("u1", 3, "2026-11-16 11:00")])
 
 
-def test_browser_tab_row_drags_on_press(app):
-    """拖窗必须在按下时交给系统。
+def test_browser_tab_row_drags_window_itself(app):
+    """拖窗自己算位移，不把 mouseDown 交给 AppKit 的系统拖动。"""
+    from types import SimpleNamespace
 
-    macOS 的 performWindowDragWithEvent 只认 mouseDown；等鼠标移动再从
-    mouseMove 调，AppKit 报「Window move completed without beginning」，
-    而且这一下经常真的拖不动。
-    """
-    from app.ui.browser_page import ChromeRow
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtWidgets import QWidget
 
-    assert "mousePressEvent" in ChromeRow.__dict__
-    assert "mouseMoveEvent" not in ChromeRow.__dict__
+    from app.ui.browser_page import ChromeRow, _WindowDragger
+
+    assert {"mousePressEvent", "mouseMoveEvent", "mouseReleaseEvent"} <= set(
+        ChromeRow.__dict__)
+
+    host = QWidget()
+    host.move(100, 100)
+    app.processEvents()
+    drag = _WindowDragger(host)
+    event = lambda x: SimpleNamespace(
+        button=lambda: Qt.MouseButton.LeftButton,
+        globalPosition=lambda: QPointF(x, 120))
+    try:
+        assert drag.press(event(200))
+        assert drag.move(event(260))
+        app.processEvents()
+        assert host.pos().x() == 160
+        assert drag.release()
+        assert not drag.move(event(300))
+    finally:
+        host.deleteLater()
 
 
 def test_upload_search_filters_rows(app, isolated_store):
@@ -863,19 +885,20 @@ def test_health_roles_resolve_and_no_hardcoded_status_hex(app, isolated_store):
     assert offenders == []
 
 
-def test_notice_error_title_uses_palette_danger(app, isolated_store):
-    """公告面板的错误标题按主题取语义色，而不是写死的红。"""
-    from qfluentwidgets import Theme, setTheme
+def test_notice_rows_keep_default_text_color(app, isolated_store):
+    """公告面板用背景传达等级，标题不再单独染成红字。"""
+    from pathlib import Path
 
-    from app.ui.notice_panel import _title_color
+    from app.services.notices import Notice
+    from app.ui.notice_panel import _role_of
 
-    try:
-        setTheme(Theme.LIGHT)
-        assert _title_color().name() == "#c42b1c"
-        setTheme(Theme.DARK)
-        assert _title_color().name() == "#ff99a4"
-    finally:
-        setTheme(Theme.DARK)
+    source = (Path(__file__).resolve().parent.parent
+              / "app" / "ui" / "notice_panel.py").read_text(encoding="utf-8")
+    assert "setTextColor" not in source
+    assert _role_of(Notice(key="a", title="", tone="error")) == "danger"
+    assert _role_of(Notice(key="b", title="", tone="warning")) == "warning"
+    assert _role_of(Notice(key="c", title="", tone="info")) == "info"
+    assert _role_of(Notice(key="d", title="")) == "warning"
 
 
 def test_upload_add_dirs_dedupes_nested(app, isolated_store, tmp_path):
@@ -1731,3 +1754,103 @@ def test_design_doc_records_tinted_prompt_style():
     assert "提示用背景色，不用细色条" in text
     assert "异常是「需要关注」，底色用黄" in text
     assert "右键菜单用 Fluent 控件" in text
+
+
+def test_account_file_menu_uses_short_labels(app, isolated_store):
+    """账号表格下拉菜单用「导入文件 / 下载模版」。"""
+    from app.ui.settings_page import SettingsPage
+
+    page = SettingsPage()
+    try:
+        labels = [a.text() for a in page.file_menu.actions()]
+        assert "导入文件" in labels
+        assert "下载模版" in labels
+        assert "从表格文件中导入" not in labels
+        assert "下载账号模板" not in labels
+    finally:
+        page.deleteLater()
+
+
+def test_notice_panel_tints_by_severity(app):
+    """父卡取子行最高等级底色，每条子行用自己的等级，文字不改色。"""
+    from app.services.notices import Notice
+    from app.ui.notice_panel import NoticePanel, _NoticeRow
+
+    panel = NoticePanel()
+    panel.set_notices([
+        Notice(key="a", title="需验证码", tone="warning"),
+        Notice(key="b", title="登录冷却", tone="error"),
+        Notice(key="c", title="待处理", tone="info"),
+    ])
+    assert panel._role == "danger"
+    roles = {r._notice.title: r._role for r in panel.findChildren(_NoticeRow)}
+    assert roles == {"需验证码": "warning", "登录冷却": "danger", "待处理": "info"}
+    panel.deleteLater()
+
+
+def test_branch_card_tints_only_abnormal(app, isolated_store):
+    """正常、纯欠缴、无记录的支部保持原背景，只有异常铺 warning 底。"""
+    from app.domain.org_manage import BranchNode, MemberView
+    from app.ui.org_manage_page import BranchCard, OrgManagePage
+
+    page = OrgManagePage(FakeWindow())
+    cases = {
+        "abnormal": ({"system": 1, "abnormal": 1,
+                      "by_kind": {"identity": 0, "report": 1, "archive": 0, "fees": 0}},
+                     "warning"),
+        "fees": ({"system": 1, "abnormal": 1,
+                  "by_kind": {"identity": 0, "report": 0, "archive": 0, "fees": 1}}, None),
+        "normal": ({"system": 1, "abnormal": 0,
+                    "by_kind": {"identity": 0, "report": 0, "archive": 0, "fees": 0}}, None),
+    }
+    try:
+        for key, (stats, expected) in cases.items():
+            node = BranchNode(code=key, label=key,
+                              members=[MemberView("团员", "13800000001")])
+            page._stats_cache = {key: {
+                "total": 1, "unpaid_amount": 0.0, **stats,
+            }}
+            card = page._feed_card(node)
+            try:
+                assert isinstance(card, BranchCard)
+                assert card.role == expected, key
+            finally:
+                card.deleteLater()
+    finally:
+        page.deleteLater()
+
+
+def test_browser_screenshot_wiring(app, isolated_store, monkeypatch):
+    """浏览器有截图按钮；保存目录固定；提示条带查看图像与打开目录。"""
+    import os
+
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QPushButton, QWidget
+    from qfluentwidgets import InfoBar
+
+    from app.ui import browser_page
+    from app.ui.browser_page import SHOT_DIR, BrowserWindow
+
+    assert SHOT_DIR == os.path.join(
+        os.path.dirname(browser_page.CONFIG_FILE), "screenshots")
+    # 系统级拖动是那条 "Window move completed without beginning" 的来源
+    source = (browser_page.__file__).replace(".pyc", ".py")
+    assert "windowHandle().startSystemMove" not in open(source, encoding="utf-8").read()
+
+    host = QWidget()
+    opened: list[str] = []
+    monkeypatch.setattr(QDesktopServices, "openUrl",
+                        lambda url: opened.append(url.toLocalFile()))
+    try:
+        BrowserWindow._show_shot_bar(host, "/tmp/shot.png")
+        app.processEvents()
+        bars = host.findChildren(InfoBar)
+        assert bars
+        texts = [b.text() for b in bars[0].findChildren(QPushButton)]
+        assert "查看图像" in texts and "打开目录" in texts
+        for btn in bars[0].findChildren(QPushButton):
+            if btn.text() == "打开目录":
+                btn.click()
+        assert opened == ["/tmp"]
+    finally:
+        host.deleteLater()

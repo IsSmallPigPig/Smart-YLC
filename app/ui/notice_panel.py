@@ -26,7 +26,6 @@ from qfluentwidgets import (
 )
 
 from app.services.notices import LEVEL_ISSUE, Notice
-from app.ui import palette as P
 from app.ui.page import chevron_icon, note_label, paint_tinted_card, set_tip, theme_font
 
 HEADER_H = 48
@@ -49,18 +48,25 @@ def _divider() -> QColor:
     return QColor(255, 255, 255, 26) if isDarkTheme() else QColor(0, 0, 0, 18)
 
 
-def _title_color() -> QColor:
-    """错误态标题色：与 InfoBar 的 ERROR 文字同色系，不再是整块红底。"""
-    return P.fg("danger")
+_TONE_ROLE = {"error": "danger", "warning": "warning",
+              "info": "info", "success": "success"}
+_TONE_RANK = {"danger": 3, "warning": 2, "info": 1, "success": 1}
+
+
+def _role_of(notice: Notice) -> str:
+    """问题的底色等级：tone 是通知的语义，没写时按「问题=需关注」兜底。"""
+    tone = notice.tone or ("warning" if notice.level == LEVEL_ISSUE else "info")
+    return _TONE_ROLE.get(tone, "warning")
 
 
 class _NoticeRow(QWidget):
-    """一条问题：标题 + 具体原因 + 右侧处理入口。行本身不画卡片，只在底部画分隔线。"""
+    """一条问题：标题 + 原因 + 处理入口。整行底色按自身等级着色。"""
 
     def __init__(self, notice: Notice, on_action, parent=None):
         super().__init__(parent)
         self._notice = notice
         self._on_action = on_action
+        self._role = _role_of(notice)
         self._last = False
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -94,8 +100,8 @@ class _NoticeRow(QWidget):
 
     def apply(self, notice: Notice):
         self._notice = notice
+        self._role = _role_of(notice)
         self.title_lbl.setText(notice.title)
-        self.title_lbl.setTextColor(_title_color(), _title_color())
         self.detail_lbl.setText(notice.detail)
         self.detail_lbl.setVisible(bool(notice.detail))
         has_action = bool(notice.action and notice.action_text)
@@ -121,13 +127,13 @@ class _NoticeRow(QWidget):
         self.deleteLater()
 
     def paintEvent(self, _e):
-        if self._last:
-            return
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(QPen(_divider(), 1))
-        y = self.height() - 1
-        p.drawLine(PAD_X, y, self.width() - PAD_X, y)
+        paint_tinted_card(self, p, self._role, radius=8, alpha=38)
+        if not self._last:
+            p.setPen(QPen(_divider(), 1))
+            y = self.height() - 1
+            p.drawLine(PAD_X, y, self.width() - PAD_X, y)
 
 
 class NoticePanel(QWidget):
@@ -139,6 +145,7 @@ class NoticePanel(QWidget):
         self._expanded = False  # 默认折叠，只留一行摘要
         self._notices: list[Notice] = []
         self._rows: dict[str, _NoticeRow] = {}
+        self._role = "warning"   # 父卡取子行里的最高等级，set_notices 时重算
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
         outer = QVBoxLayout(self)
@@ -204,6 +211,9 @@ class NoticePanel(QWidget):
             row.set_last(i == len(self._rows) - 1)
 
         self._notices = issues
+        # 父卡片取所有子行里最重的等级，一眼能看出这堆问题最坏到什么程度
+        roles = [_role_of(n) for n in issues]
+        self._role = max(roles, key=lambda r: _TONE_RANK[r]) if roles else "warning"
         if not issues:
             self._anim.stop()
             self._body.setVisible(False)
@@ -240,7 +250,7 @@ class NoticePanel(QWidget):
         self._anim.start()
 
     def _restyle(self):
-        """主题切换后行标题的错误色要跟着变（颜色是按当前主题算的）。"""
+        """主题切换后底色要跟着换（浅深两套色值）。"""
         for row in self._rows.values():
             row.apply(row._notice)
         self.update()
@@ -258,18 +268,14 @@ class NoticePanel(QWidget):
     # ---------- 外观 ----------
 
     def paintEvent(self, _e):
-        """整块卡片：圆角 + 半透明底 + 细边框，行与行之间只靠分隔线区隔。
-
-        已知问题用 warning 黄底整块着色：与支部卡片、顶部提示条同一种语言，
-        读的人不用先认出红色文字才知道这里有事。标题仍保留语义色文字。
-        """
+        """整块卡片：底色取子行里的最高等级，各行再叠自己的等级色。"""
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect().adjusted(0, 0, -1, -1)
         p.setPen(QPen(_card_border(), 1))
         p.setBrush(_card_bg())
         p.drawRoundedRect(r, RADIUS, RADIUS)
-        paint_tinted_card(self, p, "warning", radius=RADIUS, alpha=22)
+        paint_tinted_card(self, p, self._role, radius=RADIUS, alpha=22)
         p.setPen(QPen(_card_border(), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(r, RADIUS, RADIUS)

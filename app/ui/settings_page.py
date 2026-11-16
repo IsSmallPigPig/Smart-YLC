@@ -310,11 +310,11 @@ class SettingsPage(FluentPage):
         # 账号表格导入只管账号本身；系统备份（整份设置）单独放到「系统备份」卡片，
         # 免得它挂在「账号文件」下面让人误以为只备份支部账号。
         self.file_btn = DropDownPushButton(FIF.LIBRARY, "账号表格")
-        set_tip(self.file_btn, "导入账号表格或下载账号模板")
+        set_tip(self.file_btn, "导入文件或下载模版")
         self.file_menu = RoundMenu(parent=self.file_btn)
-        act_sheet = Action(FIF.DOCUMENT, "从表格文件中导入")
+        act_sheet = Action(FIF.DOCUMENT, "导入文件")
         act_sheet.triggered.connect(self._import_accounts)
-        act_template = Action(FIF.DOWNLOAD, "下载账号模板")
+        act_template = Action(FIF.DOWNLOAD, "下载模版")
         act_template.triggered.connect(self._download_account_template)
         for action in (act_sheet, act_template):
             self.file_menu.addAction(action)

@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+from datetime import datetime
 
-from PySide6.QtCore import QRect, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QProgressBar,
     QVBoxLayout,
@@ -38,9 +41,12 @@ from qfluentwidgets import (
     BodyLabel,
     FluentIcon as FIF,
     InfoBar,
+    InfoBarIcon,
+    InfoBarPosition,
     IconWidget,
     IndeterminateProgressRing,
     PrimaryPushButton,
+    TransparentPushButton,
     TransparentToolButton,
     isDarkTheme,
     qconfig,
@@ -48,13 +54,13 @@ from qfluentwidgets import (
 from qfluentwidgets.window.fluent_window import FluentWindowBase, MSFluentTitleBar
 
 from app.constants import CONFIG_FILE, SITE_BASE_URL
-from app.domain.account_health import split_accounts
 from app.domain.login_protocol import build_login_url, parse_login_response
 from app.domain.upload_inspect import split_branch_label
 from app.services import login_gate, store
 from app.ui.page import note_label, set_tip, theme_font, window_background
 
 PROFILE_ROOT = os.path.join(os.path.dirname(CONFIG_FILE), "webprofiles")
+SHOT_DIR = os.path.join(os.path.dirname(CONFIG_FILE), "screenshots")
 MAX_TABS = 6
 """登录等待页最多盖这么久。超时就把网页露出来，别让人对着转圈干等。"""
 LOGIN_TIMEOUT_MS = 25_000
@@ -264,21 +270,68 @@ def native_button_center(window) -> int | None:
         return None
 
 
+class _WindowDragger:
+    """标题栏拖动：按下记全局位置，移动时自己 move 窗口。
+
+    Qt 的 startSystemMove() 在 macOS 上最终调用 AppKit 的
+    performWindowDragWithEvent:。这次交接偶尔丢失，日志里刷
+    “Window move completed without beginning”，这一次拖动也跟着失效。
+    自己算位移不经过 AppKit，拖动稳定，也不会再刷这条警告。
+    """
+
+    def __init__(self, host: QWidget):
+        self._host = host
+        self._press = QPoint()
+        self._origin = QPoint()
+        self._dragging = False
+
+    def press(self, e) -> bool:
+        if e.button() != Qt.MouseButton.LeftButton:
+            return False
+        self._press = e.globalPosition().toPoint()
+        self._origin = self._host.window().pos()
+        self._dragging = True
+        self._host.setCursor(Qt.CursorShape.ClosedHandCursor)
+        return True
+
+    def move(self, e) -> bool:
+        if not self._dragging:
+            return False
+        self._host.window().move(self._origin + e.globalPosition().toPoint() - self._press)
+        return True
+
+    def release(self) -> bool:
+        if not self._dragging:
+            return False
+        self._dragging = False
+        self._host.unsetCursor()
+        return True
+
+
 class ChromeRow(QWidget):
     """标签条的空白处：按在空白处就拖动窗口。
 
-    必须在 mousePress 里交给系统。macOS 的 `performWindowDragWithEvent:` 认的是
-    mouseDown 事件；等鼠标移动后再从 mouseMove 调，AppKit 会报
-    “Window move completed without beginning”，而且这一下经常真的拖不动。
     标签、加号、导航按钮都是子控件，自己吃掉按下事件，不受影响。
     """
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drag = _WindowDragger(self)
+
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            handle = self.window().windowHandle()
-            if handle is not None and handle.startSystemMove():
-                return
+        if self._drag.press(e):
+            return
         super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._drag.move(e):
+            return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._drag.release():
+            return
+        super().mouseReleaseEvent(e)
 
 
 class LoginView(QWidget):
@@ -379,6 +432,10 @@ class BrowserWindow(FluentWindowBase):
 
     def _build_title_bar(self):
         self.setTitleBar(MSFluentTitleBar(self))
+        # 标题栏本身也要接住拖动：qframelesswindow 在 macOS 上会调 startSystemMove，
+        # 就是那条 “move completed without beginning” 的来源。
+        self._title_drag = _WindowDragger(self.titleBar)
+        self.titleBar.installEventFilter(self)
         # 标题栏高度按系统按钮的中线定（macOS 42，Windows 32）；标签行只有 32 高，
         # 垂直居中后与红绿灯、加号、后退前进在同一条中线上。
         self.titleBar.setFixedHeight(TITLE_BAR_HEIGHT)
@@ -415,13 +472,17 @@ class BrowserWindow(FluentWindowBase):
         set_tip(self.reload_btn, "重新加载当前页")
         self.login_btn = TransparentToolButton(FIF.GLOBE, self.tab_row)
         set_tip(self.login_btn, "重新登录该支部")
-        for btn in (self.back_btn, self.fwd_btn, self.reload_btn, self.login_btn):
+        self.shot_btn = TransparentToolButton(FIF.CAMERA, self.tab_row)
+        set_tip(self.shot_btn, "截图当前网页，自动复制到剪贴板")
+        for btn in (self.back_btn, self.fwd_btn, self.reload_btn, self.login_btn,
+                    self.shot_btn):
             btn.setFixedSize(NAV_BUTTON, NAV_BUTTON)
             row.addWidget(btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self.back_btn.clicked.connect(lambda: self._nav("back"))
         self.fwd_btn.clicked.connect(lambda: self._nav("forward"))
         self.reload_btn.clicked.connect(lambda: self._nav("reload"))
         self.login_btn.clicked.connect(self._relogin)
+        self.shot_btn.clicked.connect(self._take_screenshot)
 
         # 插在图标之后、窗口按钮之前：标签靠左，窗口按钮始终在最右侧。
         # 显式垂直居中：标题栏比标签行高，靠默认布局会贴顶。
@@ -732,12 +793,12 @@ class BrowserWindow(FluentWindowBase):
         self._raise_page("")
 
     def pick_new_tab(self):
-        """弹窗问要访问哪个支部，确认后开它的标签页。
+        """弹窗问要访问哪个支部，只列状态正常的账号。
 
-        账号全异常时也照常弹：列表里标出状态，还能打开网页端手动恢复。
-        以前这里直接返回并抬起欢迎页，正好盖在网页上，就是截图里那个「首页」。
+        没有正常账号时明说原因，不静默返回：以前账号全异常时直接抬起欢迎页，
+        正好盖在网页上，看着就是「点了新建标签没反应」。
         """
-        from app.ui.branch_picker import pick_branch
+        from app.ui.branch_picker import normal_accounts, pick_branch
 
         if self.tab_count() >= MAX_TABS:
             self._explain(f"最多同时打开 {MAX_TABS} 个标签，先关掉一个再来")
@@ -746,12 +807,13 @@ class BrowserWindow(FluentWindowBase):
         if not accounts:
             self._explain("还没有支部账号，先到系统配置添加")
             return
-        usable, excluded = split_accounts(accounts)
         note = ""
-        if excluded and not usable:
-            note = f"{len(excluded)} 个账号状态异常，打开后可能需要重新登录"
+        hidden = len(accounts) - len(normal_accounts(accounts))
+        if hidden:
+            note = f"已隐藏 {hidden} 个状态异常的账号，先到系统配置处理"
         self._set_welcome_hint("")
-        pick_branch(accounts, self, self._open, self._current, note=note)
+        if pick_branch(accounts, self, self._open, self._current, note=note) is None:
+            self._explain("没有状态正常的支部账号，先到系统配置测活")
 
     def _open(self, user: str):
         if user in self._views:  # 已经开着，直接切过去
@@ -881,8 +943,8 @@ class BrowserWindow(FluentWindowBase):
             return
         margins = self.tab_row.layout().contentsMargins()
         spacing = self.tab_row.layout().spacing()
-        reserved = (self.new_tab_btn.width() + 4 * NAV_BUTTON
-                    + spacing * (5 + n))
+        reserved = (self.new_tab_btn.width() + 5 * NAV_BUTTON
+                    + spacing * (6 + n))
         space = self.tab_row.width() - margins.left() - margins.right() - reserved
         slot = max(WebTab.MIN_WIDTH, min(WebTab.MAX_WIDTH, space // n))
         for tab in self._tabs.values():
@@ -899,6 +961,7 @@ class BrowserWindow(FluentWindowBase):
         self.fwd_btn.setEnabled(bool(history and history.canGoForward()))
         self.reload_btn.setEnabled(view is not None)
         self.login_btn.setEnabled(view is not None)
+        self.shot_btn.setEnabled(view is not None)
 
     def _nav(self, action: str):
         view = self._views.get(self._current)
@@ -911,6 +974,63 @@ class BrowserWindow(FluentWindowBase):
             history.forward()
         elif action == "reload":
             view.reload()
+
+    # ---------- 截图 ----------
+
+    def _take_screenshot(self):
+        """截取当前网页：保存到本地、复制到剪贴板，右下角给出查看与打开目录入口。"""
+        view = self._views.get(self._current)
+        if view is None:
+            InfoBar.warning("截图", "先打开一个支部网页", duration=3000, parent=self)
+            return
+
+        # QWebEngineView 的原生图层偶尔让 QWidget.grab() 拿到空图，回退到屏幕抓该窗口
+        pixmap = view.grab()
+        if pixmap.isNull():
+            screen = QApplication.primaryScreen()
+            wid = int(view.winId())
+            if screen is not None and wid:
+                pixmap = screen.grabWindow(wid)
+        if pixmap.isNull():
+            InfoBar.error("截图失败", "没有拿到网页图像，请重试", duration=4000, parent=self)
+            return
+
+        os.makedirs(SHOT_DIR, exist_ok=True)
+        label = re.sub(r'[\\/:*?"<>|]', "_",
+                       self._labels.get(self._current, self._current))
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(SHOT_DIR, f"{label}-{stamp}.png")
+        if not pixmap.save(path, "PNG"):
+            InfoBar.error("截图失败", "图片没能保存到本地", duration=4000, parent=self)
+            return
+        QApplication.clipboard().setPixmap(pixmap)
+        self._show_shot_bar(path)
+
+    def _show_shot_bar(self, path: str):
+        bar = InfoBar(
+            icon=InfoBarIcon.SUCCESS,
+            title="已截图",
+            content=f"已复制到剪贴板 · {os.path.basename(path)}",
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=10000,
+            parent=self,
+        )
+
+        def open_image():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            bar.close()
+
+        def open_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
+            bar.close()
+
+        for text, handler in (("查看图像", open_image), ("打开目录", open_dir)):
+            btn = TransparentPushButton(text=text, parent=bar)
+            btn.clicked.connect(handler)
+            bar.addWidget(btn)
+        bar.show()
 
     # ---------- 网页视图 ----------
 
@@ -963,9 +1083,17 @@ class BrowserWindow(FluentWindowBase):
         return view
 
     def eventFilter(self, obj, event):
-        """浏览区尺寸变化时把每一层跟上去。"""
+        """浏览区尺寸变化时把每一层跟上去；标题栏空白区自己拖动。"""
         from PySide6.QtCore import QEvent
 
+        if obj is self.titleBar:
+            t = event.type()
+            if t == QEvent.Type.MouseButtonPress and self._title_drag.press(event):
+                return True
+            if t == QEvent.Type.MouseMove and self._title_drag.move(event):
+                return True
+            if t == QEvent.Type.MouseButtonRelease and self._title_drag.release():
+                return True
         if event.type() == QEvent.Type.Resize and obj is self.area:
             self._place_pages()
         return super().eventFilter(obj, event)
