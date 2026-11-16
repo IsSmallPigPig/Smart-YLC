@@ -149,11 +149,15 @@
 - 收尾统一走 `finish(text=...)` 把结论留在卡上再自动关；**失败不能只弹错误条**，
   否则「进行中」的浮层会一直挂着——先 `close()` 浮层，再单独弹一条错误信息条。
 - 「关于项目」的检查与下载就走这里：行内按钮依次是「检查更新」→「下载 x.y.z」→
-  「打开目录」，动作不漂在窗口边缘。
-- 下载完成由 `updater.launch_installer` 交给系统：Windows 运行 exe 后主程序退出
-  （安装程序要替换在用的 exe；上传还在跑时先不退出，留给用户选时机），macOS 挂载 dmg。
+  「正在安装」，动作不漂在窗口边缘。
+- 下载完成交给 `app/services/silent_update.py`：先拉起 `--silent-install` 独立助手，再退出
+  主程序让出文件。Windows 用 Inno Setup 的 `/VERYSILENT /NORESTART /SUPPRESSMSGBOXES`，
+  macOS 挂载 dmg 后复制 `.app` 到「应用程序」。助手装完用系统通知提示重启；失败则保留
+  更新包并把按钮退回「打开目录」。
 
 ### 后台提醒（bg_toast）
+- 托盘右键菜单用 `RoundMenu` + `Action`（打开主界面 / 立即检查并通知 / 退出），
+  与窗口内菜单同一种圆角、间距和图标，不用原生 `QMenu` 的方形样式。
 - 窗口收进托盘后仍要能看见，而且**点了要回到该处理的页面**，不是跳到别的应用。
 - 通道：Windows / Linux 用托盘气泡（原生，点击由 `messageClicked` 触发）；
   macOS 用应用自己的浮窗——osascript 的通知归属「脚本编辑器」，点开会打开它，
@@ -206,6 +210,12 @@
 - 打包用 Nuitka standalone（`scripts/build.py`）：资源路径统一由 `brand.assets_dir()` /
   `icons_dir()` 判断源码、PyInstaller `_MEIPASS`、Nuitka 可执行文件目录三种落点。
 - 网络/解析/写盘全放后台线程（`CallbackWorker`），不阻塞界面线程。
+- 同步收尾的 `mark_synced()`（整份 config.json 读写）也走 `CallbackWorker`，不在界面线程
+  写盘；否则每轮同步结束时拖动窗口会卡一下。
+- 单实例用 `QLocalServer`：第二个进程只发送 `show` 后退出，已有实例把窗口叫到前面。
+  托盘与主界面共用同一把锁，避免两套 30 秒同步线程同时跑。
+- 访问支部标题栏固定 32px（系统默认），标签、导航图标与窗口按钮同高；标签条拖动要
+  超过 4px 才调用 `startSystemMove()`，单击不会误入原生拖拽。
 - 大量卡片用 `BatchedBuild` 分批建，首帧先出内容。
 - 切页直接替换，不给整页套透明度动画：`QGraphicsOpacityEffect` 会把整页（含 banner）
   先渲染成低透明度离屏图，首帧是一张发虚、边界全无的页面——banner 像闪一下、卡片像

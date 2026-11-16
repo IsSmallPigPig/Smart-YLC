@@ -1012,7 +1012,11 @@ class OrgManagePage(FluentPage):
         self.sync_btn.setEnabled(True)
         self._close_progress(finished=not self._stopped)
         self._stopped = False
-        mark_synced()
+        # 整份配置写盘放到后台：收尾时界面线程只更新按钮与进度，不被 IO 压住
+        from app.ui.page import CallbackWorker
+
+        self._mark_worker = CallbackWorker(mark_synced, self)
+        self._mark_worker.start()
         self.refresh()
         InfoBar.success("同步完成", "系统成员缓存已更新，组织树已刷新", duration=3000, parent=self)
 

@@ -58,7 +58,7 @@ MAX_TABS = 6
 """登录等待页最多盖这么久。超时就把网页露出来，别让人对着转圈干等。"""
 LOGIN_TIMEOUT_MS = 25_000
 SITE_HOME = f"{SITE_BASE_URL}/bg/index_main.html"
-TITLE_BAR_HEIGHT = 48
+TITLE_BAR_HEIGHT = 32
 """macOS 的系统按钮画在标题栏最右侧（宽 75），标题栏内容要提前让开。"""
 SYSTEM_BUTTON_INSET = 88 if sys.platform == "darwin" else 8
 """标题栏右侧的导航按钮：后退 / 前进 / 刷新 / 重新登录。"""
@@ -231,15 +231,41 @@ class PlusButton(QWidget):
 
 
 class ChromeRow(QWidget):
-    """标签条空白处可拖动窗口：标题栏被标签占住后仍要能拖。"""
+    """标签条空白处可拖动窗口：标题栏被标签占住后仍要能拖。
+
+    按下只记起点，移动超过 4px 才真正交给系统拖窗。原来在 mousePress 就
+    调 startSystemMove，单击也会进入一次原生拖拽；主线程正忙时这次调用会
+    压住后续事件，看起来就是“拖不动”。等鼠标确实移动再启动，点击不受影响。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._press_pos = None
+        self._drag_started = False
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
-            handle = self.window().windowHandle()
-            if handle is not None:
-                handle.startSystemMove()
-                return
+            self._press_pos = e.globalPosition().toPoint()
+            self._drag_started = False
         super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if (self._press_pos is not None
+                and not self._drag_started
+                and e.buttons() & Qt.MouseButton.LeftButton):
+            moved = (e.globalPosition().toPoint() - self._press_pos).manhattanLength()
+            if moved >= 4:
+                handle = self.window().windowHandle()
+                if handle is not None:
+                    self._drag_started = True
+                    handle.startSystemMove()
+                    return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        self._press_pos = None
+        self._drag_started = False
+        super().mouseReleaseEvent(e)
 
 
 class LoginView(QWidget):
@@ -339,6 +365,10 @@ class BrowserWindow(FluentWindowBase):
 
     def _build_title_bar(self):
         self.setTitleBar(MSFluentTitleBar(self))
+        # 标签条按系统标题栏的默认高度排，不再用 48px 的 Fluent 默认值：
+        # 窗口按钮（红绿灯 / 最小化组）只有 32px 高，标题栏高出一截就会让
+        # 标签与前进后退按钮整体下沉，和系统按钮错开半个按钮。
+        self.titleBar.setFixedHeight(TITLE_BAR_HEIGHT)
         self.titleBar.iconLabel.hide()
         self.titleBar.titleLabel.hide()
         lay = self.titleBar.hBoxLayout
@@ -348,6 +378,7 @@ class BrowserWindow(FluentWindowBase):
                 lay.setStretch(i, 0)
 
         self.tab_row = ChromeRow(self.titleBar)
+        self.tab_row.setFixedHeight(TITLE_BAR_HEIGHT)
         row = QHBoxLayout(self.tab_row)
         row.setContentsMargins(10, 0, SYSTEM_BUTTON_INSET, 0)
         row.setSpacing(4)

@@ -6,10 +6,10 @@ import sys
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QTimer, QThread, Signal, Qt
-from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
-from qfluentwidgets import setTheme, Theme
+from qfluentwidgets import Action, FluentIcon as FIF, RoundMenu
 
 from app import __version__
 from app.services import store
@@ -44,17 +44,20 @@ class TrayDaemon(QObject):
         from app.ui.page import set_tip
 
         set_tip(self.tray, f"智慧团建管理员辅助 {__version__}（后台）")
-        menu = QMenu()
-        act_open = QAction("打开主界面")
+        # Fluent 菜单：与窗口内其它菜单同一种圆角、间距和图标排版，
+        # 不再用 QMenu 的系统原生样式（Windows 上是方形灰菜单）。
+        menu = RoundMenu(parent=None)
+        act_open = Action(FIF.HOME, "打开主界面")
         act_open.triggered.connect(self.open_window)
-        act_now = QAction("立即检查并通知")
+        act_now = Action(FIF.SYNC, "立即检查并通知")
         act_now.triggered.connect(self.check_now)
-        act_quit = QAction("退出")
+        act_quit = Action(FIF.POWER_BUTTON, "退出")
         act_quit.triggered.connect(self.quit)
         menu.addAction(act_open)
         menu.addAction(act_now)
         menu.addSeparator()
         menu.addAction(act_quit)
+        self.menu = menu   # QSystemTrayIcon 不接管所有权，必须自己留着
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._on_activated)
         self.tray.show()
@@ -128,10 +131,20 @@ def run_tray() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    # 与主界面共用单实例锁：已有实例时只把它的窗口叫出来，不再开第二个托盘
+    from app.services.single_instance import SingleInstance
+
+    guard = SingleInstance()
+    if not guard.attach():
+        return 0
+    app.aboutToQuit.connect(guard.close)
+
     from app.setup import setup_app
 
     setup_app()
     daemon = TrayDaemon(app)
+    guard.set_handler(lambda _command="": daemon.open_window())
     from app.services.update_check import check_on_startup
 
     check_on_startup()  # 后台模式只发系统通知，没有窗口可挂信息条

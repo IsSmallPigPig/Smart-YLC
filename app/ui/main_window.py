@@ -168,6 +168,7 @@ class MainWindow(MSFluentWindow):
         self._refreshing = False
         self._refresh_silent = True
         self._refresh_worker: "QThread | None" = None
+        self._mark_worker: "QThread | None" = None
         self._last_sync_ts = 0.0
         self._sync_timer = QTimer(self)
         self._sync_timer.setInterval(30 * 1000)
@@ -432,7 +433,12 @@ class MainWindow(MSFluentWindow):
 
         def _after_sync():
             self.org_manage_page.refresh()
-            mark_synced()
+            # 记录刷新时间是整份 config.json 的读写；放界面线程会在每轮同步收尾
+            # 压住输入（拖动窗口正好卡一下）。交给后台线程，写完不影响后续链。
+            from app.ui.page import CallbackWorker
+
+            self._mark_worker = CallbackWorker(mark_synced, self)
+            self._mark_worker.start()
             msg_w = MessageFetchWorker(accounts, force=fast)
             self._refresh_worker = msg_w
             msg_w.new_ready.connect(self._notify_new_messages)

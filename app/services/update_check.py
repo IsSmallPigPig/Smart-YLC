@@ -84,6 +84,26 @@ def record(status: str, detail: str = ""):
     }))
 
 
+def _notify_failure(title: str, message: str):
+    """静默流程只在失败时打扰用户；成功留给安装结束后的重启提醒。"""
+    from app.services.notify import send
+
+    send(title, message[:180])
+
+
+def _start_silent_install(path: str, version: str = "") -> bool:
+    from app.services import silent_update
+
+    try:
+        silent_update.start(path)
+    except Exception as e:
+        record("error", f"启动静默安装失败：{e}")
+        _notify_failure("更新未完成", f"更新包已下载，但无法静默安装：{e}")
+        return False
+    record("installing", version)
+    return True
+
+
 def last_check_text() -> str:
     c = store.load().get("lastUpdateCheck") or {}
     if not c.get("at"):
@@ -94,6 +114,8 @@ def last_check_text() -> str:
         tail = "已是最新版本"
     elif status == "update":
         tail = f"发现新版本 {c.get('detail', '')}"
+    elif status == "installing":
+        tail = f"正在静默安装 {c.get('detail', '')}"
     elif status == "error":
         tail = f"检查失败：{c.get('detail', '')}"
     else:
@@ -105,7 +127,10 @@ _WORKERS: list[QThread] = []
 
 
 def check_on_startup(delay_ms: int = 2500, parent=None):
-    """启动后延迟静默检查；parent 传主窗口时额外显示一条不抢占焦点的提示。"""
+    """启动后延迟检查；发现新版本直接静默下载并安装，不弹下载或安装窗口。
+
+    parent 只为兼容既有调用保留：成功路径不再往主窗口挂信息条，失败才发系统通知。
+    """
     try:
         if not auto_check_enabled():
             return
@@ -121,20 +146,22 @@ def check_on_startup(delay_ms: int = 2500, parent=None):
             record("latest")
             return
         record("update", info.version)
-        from app.ui import bg_toast
 
-        bg_toast.alert("智慧团委发现新版本",
-                       f"{info.version} 已发布，打开「系统配置 - 关于」即可下载",
-                       tone="info")
-        if parent is not None:
-            try:
-                from qfluentwidgets import InfoBar, InfoBarPosition
+        downloader = DownloadWorker(info, proxy_mode() == "ghproxy")
+        _WORKERS.append(downloader)
+        downloader.finished.connect(
+            lambda: _WORKERS.remove(downloader) if downloader in _WORKERS else None)
 
-                InfoBar.info("检测到新版本", f"最新版本: {info.version}",
-                             duration=8000, position=InfoBarPosition.BOTTOM_RIGHT,
-                             parent=parent)
-            except Exception:
-                pass
+        def _downloaded(path: str):
+            _start_silent_install(path, info.version)
+
+        def _download_failed(message: str):
+            record("error", f"后台下载失败：{message[:150]}")
+            _notify_failure("自动更新未完成", message)
+
+        downloader.done.connect(_downloaded)
+        downloader.failed.connect(_download_failed)
+        downloader.start()
 
     def _failed(message: str):
         record("error", message[:180])

@@ -296,6 +296,9 @@ def test_browser_window_shell_builds(app, isolated_store):
 
     win = BrowserWindow()
     assert win.tab_count() == 0
+    # 标题栏按系统默认 32px 排，标签与导航按钮才不会比窗口按钮低半截
+    assert win.titleBar.height() == 32
+    assert win.tab_row.height() == 32
     assert not win.back_btn.isEnabled()
     assert win.empty.isVisible()  # 没有标签时只有欢迎页
     # 继承来的空 stackedWidget 会停在窗口左上角画一块不透明底，必须藏起来
@@ -610,51 +613,71 @@ def test_update_download_failure_clears_progress(app, isolated_store):
     assert "重新下载" in card.check_btn.text()
 
 
-def test_download_launches_installer(app, isolated_store, tmp_path, monkeypatch):
-    """下载完不该停在「文件躺在文件夹里」：直接把安装包交给系统运行。"""
+def _instant_card_timers(monkeypatch, card_holder):
+    """测试里把卡片自己的延时立刻执行，别的 QTimer 保持原样。"""
+    from PySide6.QtCore import QTimer
+
+    original = QTimer.singleShot
+
+    def _single(msec, callback, *args, **kwargs):
+        if getattr(callback, "__self__", None) is card_holder.get("card"):
+            callback(*args, **kwargs)
+            return
+        return original(msec, callback, *args, **kwargs)
+
+    monkeypatch.setattr(QTimer, "singleShot", _single)
+
+
+def test_download_starts_silent_install(app, isolated_store, tmp_path, monkeypatch):
+    """下载完就交给独立进程静默安装，不再弹出安装窗口。"""
     from PySide6.QtWidgets import QVBoxLayout
 
-    from app.services import updater
+    from app.services import silent_update
     from app.ui.about_card import AboutCard
 
     calls = []
-    monkeypatch.setattr(updater, "launch_installer",
-                        lambda path: calls.append(path) or "run")
+    monkeypatch.setattr(silent_update, "start", lambda path: calls.append(path) or True)
+    holder = {}
+    _instant_card_timers(monkeypatch, holder)
 
     host = QWidget()
     host.resize(900, 600)
     lay = QVBoxLayout(host)
     card = AboutCard()
+    holder["card"] = card
     lay.addWidget(card)
     host.show()
     _pump(app, 50)
 
-    pkg = tmp_path / "SmartYouth-macOS-arm64.dmg"
+    pkg = tmp_path / "SmartYouth-Windows-x64-setup.exe"
     pkg.write_bytes(b"x")
     card._open_toast("下载更新").set_progress(100, 100, "正在下载更新包 100%")
     card._on_downloaded(str(pkg))
 
     assert calls == [str(pkg)]
     assert card._toast is None
-    assert card.check_btn.text() == "打开目录"
+    assert card.check_btn.text() == "正在安装"
 
 
-def test_installer_launch_failure_keeps_downloaded_package(app, isolated_store, tmp_path, monkeypatch):
-    """启动失败也要说清「包已经下好了」，并指回「打开目录」手动运行。"""
+def test_silent_install_failure_keeps_downloaded_package(app, isolated_store, tmp_path, monkeypatch):
+    """助手拉不起来时保留更新包，并让按钮回到「打开目录」手动安装。"""
     from PySide6.QtWidgets import QVBoxLayout
 
-    from app.services import updater
+    from app.services import silent_update
     from app.ui.about_card import AboutCard
 
     def _boom(path):
-        raise updater.UpdateError("没有权限打开")
+        raise silent_update.SilentInstallError("没有权限打开")
 
-    monkeypatch.setattr(updater, "launch_installer", _boom)
+    monkeypatch.setattr(silent_update, "start", _boom)
+    holder = {}
+    _instant_card_timers(monkeypatch, holder)
 
     host = QWidget()
     host.resize(900, 600)
     lay = QVBoxLayout(host)
     card = AboutCard()
+    holder["card"] = card
     lay.addWidget(card)
     host.show()
     _pump(app, 50)
@@ -666,6 +689,7 @@ def test_installer_launch_failure_keeps_downloaded_package(app, isolated_store, 
 
     assert card._toast is None
     assert card._downloaded == str(pkg)
+    assert card.check_btn.isEnabled()
     assert card.check_btn.text() == "打开目录"
 
 
@@ -1009,3 +1033,35 @@ def test_back_button_stays_visible_without_history(app, isolated_store):
         assert win.titleBar.titleLabel.geometry().left() == left
     finally:
         win.close()
+
+
+# ---------------------------------------------------------------- 单实例
+
+def test_second_instance_is_rejected(app, monkeypatch):
+    from app.services import single_instance
+
+    name = f"SmartYLC-test-{os.getpid()}"
+    monkeypatch.setattr(single_instance, "server_name", lambda: name)
+    first = single_instance.SingleInstance()
+    assert first.attach() is True
+    second = single_instance.SingleInstance()
+    assert second.attach() is False
+    first.close()
+
+
+def test_single_instance_notifies_existing_window(app, monkeypatch):
+    from app.services import single_instance
+
+    name = f"SmartYLC-notify-{os.getpid()}"
+    monkeypatch.setattr(single_instance, "server_name", lambda: name)
+    first = single_instance.SingleInstance()
+    assert first.attach() is True
+    got = []
+    first.set_handler(got.append)
+    assert single_instance.notify_running() is True
+    for _ in range(20):
+        app.processEvents()
+        if got:
+            break
+    assert got == ["show"]
+    first.close()
