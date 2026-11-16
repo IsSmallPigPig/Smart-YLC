@@ -534,10 +534,10 @@ def test_theme_switch_fades_then_applies(app, isolated_store):
     assert page.scrollWidget.graphicsEffect() is None
 
 
-def test_settings_control_column_stays_compact(app, isolated_store):
-    """控件列按内容取宽：不超过六字按钮的宽度，次要项收进齿轮弹窗。"""
+def test_settings_controls_share_one_width(app, isolated_store):
+    """行内控件统一 126px：按钮 106、下拉 125、下拉框 76 各取宽会左右都对不齐。"""
     from app.ui.about_card import AboutCard
-    from app.ui.page import CONTROL_MAX_WIDTH
+    from app.ui.page import CONTROL_MAX_WIDTH, CONTROL_WIDTH
     from app.ui.settings_page import SettingsPage
 
     page = SettingsPage()
@@ -549,6 +549,31 @@ def test_settings_control_column_stays_compact(app, isolated_store):
         assert holder is not None, "该行没有控件列"
         assert holder.maximumWidth() == CONTROL_MAX_WIDTH
         assert holder.width() <= CONTROL_MAX_WIDTH
+
+    for widget in (page.web_btn, page.file_btn, page.theme_combo,
+                   page.expected_pages_edit, page.notify_more_btn,
+                   card.check_btn):
+        assert widget.width() == CONTROL_WIDTH
+
+
+def test_settings_rows_all_have_desc(app, isolated_store):
+    """每行标题下都要有一句小字：空着的那几行全是用户问「这里没有说明」的地方。"""
+    from qfluentwidgets import StrongBodyLabel
+
+    from app.ui.page import SettingRow
+    from app.ui.settings_page import SettingsPage
+
+    page = SettingsPage()
+    page.resize(1000, 1800)
+    page.show()
+    app.processEvents()
+    missing = []
+    for row in page.findChildren(SettingRow):
+        desc = getattr(row, "desc_label", None)
+        if desc is None or not desc.text().strip():
+            labels = row.findChildren(StrongBodyLabel)
+            missing.append(labels[0].text() if labels else "?")
+    assert missing == []
 
 
 def test_banner_light_theme_is_pale_with_dark_text(app, isolated_store):
