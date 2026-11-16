@@ -35,7 +35,7 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install nuitka ordered-set zstandard
           pip install "PySide6>=6.12" "PySide6-Fluent-Widgets>=1.11" pypdf pillow openpyxl requests pymupdf
 
       - name: 生成应用图标（icns）
@@ -55,26 +55,9 @@ jobs:
           # 导出一次确认 icns 里真有图：空图标时 iconutil 也可能成功返回
           sips -g pixelWidth "build/$APP_NAME.icns" > /dev/null
 
-      - name: PyInstaller 打包（.app）
-        run: |
-          pyinstaller --noconfirm --clean \
-            --windowed --name "$APP_NAME" \
-            --osx-bundle-identifier "$BUNDLE_ID" \
-            --collect-all qfluentwidgets \
-            --icon "build/$APP_NAME.icns" \
-            --add-data "app/assets:assets" \
-            main.py
-
-      - name: 改成中文应用名
-        run: |
-          # Finder / 启动台显示的是 .app 的文件名，所以直接改包名；
-          # 包内可执行文件名保持 ASCII，不影响签名与自启动路径
-          mv "dist/$APP_NAME.app" "dist/$APP_DISPLAY_NAME.app"
-          PLIST="dist/$APP_DISPLAY_NAME.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_DISPLAY_NAME" "$PLIST" \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleName string $APP_DISPLAY_NAME" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_DISPLAY_NAME" "$PLIST" \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_DISPLAY_NAME" "$PLIST"
+      - name: Nuitka 打包（.app）
+        # 脚本负责资源、bundle id、版本，以及把产物改名成 dist/智慧团委.app
+        run: python scripts/build.py
 
       - name: 校验应用图标
         run: |
@@ -90,7 +73,7 @@ jobs:
             exit 1
           fi
           if ! cmp -s "build/$APP_NAME.icns" "$ICON"; then
-            echo "::error::打包进 .app 的图标与 build/$APP_NAME.icns 不一致（回退成 PyInstaller 默认图标）"
+            echo "::error::打包进 .app 的图标与 build/$APP_NAME.icns 不一致（回退成默认图标）"
             exit 1
           fi
           echo "应用图标已嵌入：$NAME ($(stat -f%z "$ICON") 字节)"
@@ -134,35 +117,13 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install nuitka ordered-set zstandard
           pip install "PySide6>=6.12" "PySide6-Fluent-Widgets>=1.11" pypdf pillow openpyxl requests pymupdf
 
-      - name: PyInstaller 打包（onedir，启动快）
-        # 不用 --onefile：单文件每次启动都要把整个运行时解压到临时目录，冷启动明显慢。
-        # onedir 把运行时铺在安装目录里，启动只加载 DLL，快得多。
-        run: |
-          pyinstaller --noconfirm --clean `
-            --onedir --windowed --name $env:APP_NAME `
-            --collect-all qfluentwidgets `
-            --icon app/assets/smart-ylc.ico `
-            --add-data "app/assets;assets" `
-            main.py
-
-      - name: 改成中文应用名
-        # onedir 产物是 dist/<APP_NAME>/<APP_NAME>.exe；只改 exe 文件名，
-        # 目录保持 ASCII（安装脚本按 dist\SmartYouth 取文件）
+      - name: Nuitka 打包（standalone）
+        # 脚本输出固定为 dist/SmartYouth/智慧团委.exe，签名与 Inno Setup 都按这个路径取件
+        run: python scripts/build.py
         shell: pwsh
-        run: |
-          $dir = Join-Path "dist" $env:APP_NAME
-          $src = Join-Path $dir ($env:APP_NAME + ".exe")
-          $dst = Join-Path $dir ($env:APP_DISPLAY_NAME + ".exe")
-          if (-not (Test-Path -LiteralPath $src)) {
-            Write-Host "dist 内容：" ; Get-ChildItem "dist" -Recurse -Depth 1 | Select-Object FullName
-            throw "找不到 $src"
-          }
-          Move-Item -LiteralPath $src -Destination $dst -Force
-          $info = Get-Item -LiteralPath $dst
-          Write-Host ("重命名完成：{0}（{1:N0} 字节）" -f $info.FullName, $info.Length)
 
       - name: 准备代码签名证书
         id: cert

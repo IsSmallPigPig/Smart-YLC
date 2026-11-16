@@ -199,6 +199,12 @@
 
 ## 8. 交互与性能
 
+- **启动画面先于重活**：`app/main.py` 在 QApplication 之后立刻 show 一张只用 PySide6 自绘的
+  启动卡（`app/ui/boot.py`），然后才导入 qfluentwidgets、构造主窗口和页面。卡的尺寸取
+  `main_window_rect()`，MainWindow 用同一个函数，交棒时几何不差像素；两者底色按同一公式
+  算，主窗口自己的整窗启动界面盖着，boot 淡出时看不到接缝。启动失败时 boot 一定被关掉。
+- 打包用 Nuitka standalone（`scripts/build.py`）：资源路径统一由 `brand.assets_dir()` /
+  `icons_dir()` 判断源码、PyInstaller `_MEIPASS`、Nuitka 可执行文件目录三种落点。
 - 网络/解析/写盘全放后台线程（`CallbackWorker`），不阻塞界面线程。
 - 大量卡片用 `BatchedBuild` 分批建，首帧先出内容。
 - 切页直接替换，不给整页套透明度动画：`QGraphicsOpacityEffect` 会把整页（含 banner）
