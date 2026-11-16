@@ -55,7 +55,7 @@ class AboutCard(CollapsibleCard):
     FEEDBACK_DESC = "遇到问题或有建议，欢迎告诉我们"
 
     def __init__(self, parent=None):
-        super().__init__("关于项目", expanded=True, parent=parent)
+        super().__init__("关于项目", expanded=True, desc="版本、反馈与自动更新", parent=parent)
         self._info: updater.UpdateInfo | None = None
         self._check_worker = None
         self._download_worker = None

@@ -1,8 +1,8 @@
 """后台提醒：应用在托盘里时也能看到、点一下就跳到对应页面。
 
-macOS 上 osascript 发出的通知，点开的是「脚本编辑器」——通知归属的是发通知的进程，
-osascript 的归属改不了，也拿不到点击回调。所以后台提醒改用应用自己的浮窗：
-置顶、不抢焦点，点卡片就把主界面叫出来并切到该处理的那一页。
+macOS 打包版优先用系统原生通知，点击回调由 UNUserNotificationCenter 的 delegate
+交回应用；源码运行没有 bundle id 时回落到应用自己的浮窗——置顶、不抢焦点，
+点卡片就把主界面叫出来并切到该处理的那一页。
 
 Windows 仍用托盘气泡（原生、支持 messageClicked），点击回调在这里排队挂上；
 气泡发不出去时同样回落到浮窗，不再静默丢消息。
@@ -234,7 +234,17 @@ def alert(title: str, body: str = "", tone: str = "",
     Windows / Linux 先走托盘气泡（原生、可点击）；macOS 与发不出去时用应用内浮窗。
     两条路径都能绑定点击，点了就执行 on_click（默认把主界面叫出来）。"""
     global _host
-    if platform.system() != "Darwin":
+    # macOS 打包版走系统原生通知，点击能回到应用；源码运行没有 bundle id 时
+    # 直接回落浮窗，不要走 osascript（它会把点击带到脚本编辑器）。
+    if platform.system() == "Darwin":
+        try:
+            from app.services import macos_notify
+
+            if macos_notify.send(title, body, on_click=on_click or _default_action):
+                return True
+        except Exception:
+            pass
+    else:
         from app.services.notify import send
 
         if send(title, body, tray, on_click):

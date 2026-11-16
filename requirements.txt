@@ -6,3 +6,5 @@ openpyxl
 requests
 pytest
 pymupdf
+pyobjc-framework-Cocoa; sys_platform == "darwin"
+pyobjc-framework-UserNotifications; sys_platform == "darwin"

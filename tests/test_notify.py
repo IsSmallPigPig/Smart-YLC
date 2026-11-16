@@ -37,3 +37,29 @@ def test_send_without_tray_fails_softly(monkeypatch):
     monkeypatch.setattr(notify, "_fallback_tray", lambda: None)
 
     assert notify.send("标题", "正文") is False
+
+
+def test_macos_native_notification_is_preferred(monkeypatch):
+    """macOS 打包版先走系统原生通知，点击回调能带回应用。"""
+    from app.services import macos_notify, notify
+
+    monkeypatch.setattr(notify.platform, "system", lambda: "Darwin")
+    calls = []
+
+    def _native(title, body, on_click=None):
+        calls.append((title, body, on_click))
+        return True
+
+    monkeypatch.setattr(macos_notify, "send", _native)
+    callback = lambda: None
+    assert notify.send("标题", "内容", on_click=callback) is True
+    assert calls == [("标题", "内容", callback)]
+
+
+def test_macos_native_unavailable_returns_false_for_click(monkeypatch):
+    """源码运行没有 bundle id 时，带点击需求的提醒交给应用内浮窗。"""
+    from app.services import macos_notify, notify
+
+    monkeypatch.setattr(notify.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(macos_notify, "send", lambda *a, **k: False)
+    assert notify.send("标题", "内容", on_click=lambda: None) is False

@@ -30,14 +30,16 @@ from PySide6.QtWidgets import (
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from qfluentwidgets import (
+    Action,
     CheckBox,
+    DropDownPushButton,
     FluentIcon as FIF,
     InfoBar,
     LineEdit,
     PrimaryPushButton,
     PushButton,
+    RoundMenu,
     TableWidget,
-    ToolButton,
 )
 
 from app.ui import dialogs
@@ -198,8 +200,8 @@ class SettingsPage(FluentPage):
         self.header.set_image_path(store.load().get("headerImage", ""))
         self._place_banner()
 
-        def group(title: str, expanded: bool) -> CollapsibleCard:
-            card = CollapsibleCard(title, expanded=expanded)
+        def group(title: str, expanded: bool, desc: str = "") -> CollapsibleCard:
+            card = CollapsibleCard(title, expanded=expanded, desc=desc)
             lay.addWidget(card)
             return card
 
@@ -223,32 +225,35 @@ class SettingsPage(FluentPage):
             return box
 
         # ── 支部账号 ──
-        acc_card = group("支部账号", True)
+        acc_card = group("支部账号", True, "账号、登录状态与同步")
         self.acc_card = acc_card  # 供通知跳转时展开并定位
         self.active_combo = ComboBox()
+        self.active_combo.setPlaceholderText("尚未添加")
+        self.active_combo.setFixedWidth(112)
         self.active_combo.currentTextChanged.connect(self._on_active_changed)
-        self.web_btn = ToolButton(FIF.GLOBE)
-        set_tip(self.web_btn, "在独立窗口打开所选账号的网页端，标签之间互不顶号")
+        self.web_btn = PushButton(FIF.GLOBE, "打开网页")
+        set_tip(self.web_btn, "在独立窗口打开所选账号的网页端")
         self.web_btn.clicked.connect(self._open_web)
         # 说明都放按钮的悬浮提示里：行内只留控件，靠布局对齐就够了
         row(acc_card, SettingRow(
             "当前账号", icon=FIF.PEOPLE,
             control=controls(self.active_combo, self.web_btn)))
 
-        self.health_btn = ToolButton(FIF.HEART)
-        set_tip(self.health_btn, "全部测活：查一遍所有账号的登录状态")
+        self.health_btn = PushButton(FIF.HEART, "全部测活")
+        set_tip(self.health_btn, "查一遍所有账号的登录状态")
         self.health_btn.clicked.connect(lambda: self.start_health_check(force=True))
         self.refresh_all_btn = PrimaryPushButton(FIF.CLOUD_DOWNLOAD, "同步数据")
-        set_tip(self.refresh_all_btn, "依次刷新成员缓存、站内信、组织状况")
+        set_tip(self.refresh_all_btn, "刷新成员缓存、站内信与组织状况")
         self.refresh_all_btn.clicked.connect(self._refresh_all_clicked)
-        row(acc_card, SettingRow("账号测活", icon=FIF.HEART,
+        row(acc_card, SettingRow("登录状态", desc="测活并同步全部账号",
+                                 icon=FIF.HEART,
                                  control=controls(self.refresh_all_btn, self.health_btn)))
 
-        self.del_checked_btn = ToolButton(FIF.DELETE)
-        set_tip(self.del_checked_btn, "删除勾选")
+        self.del_checked_btn = PushButton(FIF.DELETE, "删除勾选")
+        set_tip(self.del_checked_btn, "删除勾选的账号")
         self.del_checked_btn.clicked.connect(self._delete_checked)
-        self.refresh_btn = ToolButton(FIF.UPDATE)
-        set_tip(self.refresh_btn, "刷新所选账号")
+        self.refresh_btn = PushButton(FIF.UPDATE, "刷新所选")
+        set_tip(self.refresh_btn, "刷新选中的账号")
         self.refresh_btn.clicked.connect(self._refresh_selected)
 
         # 账号表：勾选框 + 账号 + 密码 + 备注 + 届别 + 状态 + 健康状态 + 最近检查
@@ -291,27 +296,42 @@ class SettingsPage(FluentPage):
                                  icon=FIF.ADD,
                                  control=controls(self.add_open_btn)))
 
-        self.file_btn = PushButton(FIF.LIBRARY, "导入导出")
-        set_tip(self.file_btn, "批量导入账号、下载模板、导出配置")
-        self.file_btn.clicked.connect(self._open_file_dialog)
-        row(acc_card, SettingRow("账号文件", icon=FIF.SAVE_AS,
+        self.file_btn = DropDownPushButton(FIF.LIBRARY, "导入导出")
+        set_tip(self.file_btn, "导入账号或系统备份，也可以导出备份")
+        self.file_menu = RoundMenu(parent=self.file_btn)
+        act_sheet = Action(FIF.DOCUMENT, "从表格文件中导入")
+        act_sheet.triggered.connect(self._import_accounts)
+        act_backup = Action(FIF.CLOUD_DOWNLOAD, "从系统备份中导入")
+        act_backup.triggered.connect(self._import_config_json)
+        act_template = Action(FIF.DOWNLOAD, "下载账号模板")
+        act_template.triggered.connect(self._download_account_template)
+        act_export = Action(FIF.SHARE, "导出系统备份")
+        act_export.triggered.connect(self._export_config_json)
+        for action in (act_sheet, act_backup, act_template, act_export):
+            self.file_menu.addAction(action)
+        self.file_btn.setMenu(self.file_menu)
+        row(acc_card, SettingRow("账号文件", desc="表格导入或备份恢复",
+                                 icon=FIF.SAVE_AS,
                                  control=controls(self.file_btn)),
             last=True)
 
         # ── 名单导入 ──
-        ros_card = group("名单导入", True)
-        self.roster_btn = PrimaryPushButton("导入名单")
+        ros_card = group("名单管理", True, "导入团员与团支书名单")
+        self.roster_btn = PrimaryPushButton(FIF.PEOPLE, "导入名单")
         self.roster_btn.clicked.connect(self._import_roster)
-        self.template_btn = ToolButton(FIF.DOWNLOAD)
-        set_tip(self.template_btn, "下载名单模板")
-        self.template_btn.clicked.connect(self._download_template)
-        self.roster_del_btn = ToolButton(FIF.DELETE)
-        set_tip(self.roster_del_btn, "删除选中的名单")
-        self.roster_del_btn.clicked.connect(self._delete_selected_roster)
-        self.roster_row = SettingRow("团员名单",
+        self.roster_more_btn = DropDownPushButton(FIF.SETTING, "名单管理")
+        set_tip(self.roster_more_btn, "下载模板或删除选中的名单")
+        roster_menu = RoundMenu(parent=self.roster_more_btn)
+        act_roster_tpl = Action(FIF.DOWNLOAD, "下载名单模板")
+        act_roster_tpl.triggered.connect(self._download_template)
+        act_roster_del = Action(FIF.DELETE, "删除选中名单")
+        act_roster_del.triggered.connect(self._delete_selected_roster)
+        roster_menu.addAction(act_roster_tpl)
+        roster_menu.addAction(act_roster_del)
+        self.roster_more_btn.setMenu(roster_menu)
+        self.roster_row = SettingRow("团员名单", desc="尚未导入",
                                      icon=FIF.PEOPLE,
-                                     control=controls(self.roster_btn, self.template_btn,
-                                                       self.roster_del_btn))
+                                     control=controls(self.roster_btn, self.roster_more_btn))
         row(ros_card, self.roster_row)
 
         self.roster_table = TableWidget()
@@ -327,18 +347,21 @@ class SettingsPage(FluentPage):
         roster_block.lay.addWidget(self.roster_table)
         row(ros_card, roster_block)
 
-        self.sec_btn = PrimaryPushButton("导入支书")
+        self.sec_btn = PrimaryPushButton(FIF.CERTIFICATE, "导入支书")
         self.sec_btn.clicked.connect(self._import_secretaries)
-        self.sec_tpl_btn = ToolButton(FIF.DOWNLOAD)
-        set_tip(self.sec_tpl_btn, "下载支书名单模板（只需班级和姓名）")
-        self.sec_tpl_btn.clicked.connect(self._download_secretary_template)
-        self.sec_del_btn = ToolButton(FIF.DELETE)
-        set_tip(self.sec_del_btn, "删除选中的支书")
-        self.sec_del_btn.clicked.connect(self._delete_selected_secretaries)
-        self.sec_row = SettingRow("支书名单",
+        self.sec_more_btn = DropDownPushButton(FIF.SETTING, "支书管理")
+        set_tip(self.sec_more_btn, "下载模板或删除选中的支书")
+        sec_menu = RoundMenu(parent=self.sec_more_btn)
+        act_sec_tpl = Action(FIF.DOWNLOAD, "下载支书模板")
+        act_sec_tpl.triggered.connect(self._download_secretary_template)
+        act_sec_del = Action(FIF.DELETE, "删除选中支书")
+        act_sec_del.triggered.connect(self._delete_selected_secretaries)
+        sec_menu.addAction(act_sec_tpl)
+        sec_menu.addAction(act_sec_del)
+        self.sec_more_btn.setMenu(sec_menu)
+        self.sec_row = SettingRow("支书名单", desc="尚未导入",
                                   icon=FIF.CERTIFICATE,
-                                  control=controls(self.sec_btn, self.sec_tpl_btn,
-                                                   self.sec_del_btn))
+                                  control=controls(self.sec_btn, self.sec_more_btn))
         row(ros_card, self.sec_row)
         self.sec_table = TableWidget()
         self.sec_table.verticalHeader().hide()
@@ -351,10 +374,10 @@ class SettingsPage(FluentPage):
         row(ros_card, sec_block, last=True)
 
         # ── 编号规则 ──
-        rule_card = group("编号规则", False)
+        rule_card = group("上传规则", False, "编号规则与志愿书页数")
         self.rule_btn = PushButton(FIF.EDIT, "编辑规则")
         self.rule_btn.clicked.connect(self._open_rule_dialog)
-        self.rule_row = SettingRow("编号规则",
+        self.rule_row = SettingRow("编号规则", desc="尚未设置",
                                    icon=FIF.CODE, control=controls(self.rule_btn))
         row(rule_card, self.rule_row)
         self.expected_pages_edit = LineEdit()
@@ -366,7 +389,7 @@ class SettingsPage(FluentPage):
                                   separator=False))
 
         # ── 外观设置 ──
-        look_card = group("外观设置", False)
+        look_card = group("外观设置", False, "主题、材质与首页头图")
         self.theme_combo = ComboBox()
         for label in ("跟随系统", "浅色模式", "暗色模式"):
             self.theme_combo.addItem(label)
@@ -388,7 +411,7 @@ class SettingsPage(FluentPage):
                                   icon=FIF.TRANSPARENT, control=controls(self.material_combo)))
         self.header_pick_btn = PushButton(FIF.PHOTO, "选择图片")
         self.header_pick_btn.clicked.connect(self._pick_header_image)
-        self.header_clear_btn = ToolButton(FIF.DELETE)
+        self.header_clear_btn = PushButton(FIF.SYNC, "恢复默认")
         set_tip(self.header_clear_btn, "清除头图，恢复默认")
         self.header_clear_btn.clicked.connect(self._clear_header_image)
         row(look_card, SettingRow("首页头图",
@@ -397,13 +420,13 @@ class SettingsPage(FluentPage):
                                   ), last=True)
 
         # ── 工作配置 ──
-        ws_card = group("工作配置", False)
+        ws_card = group("工作与通知", False, "目录、通知与开机启动")
         self.ws_edit = LineEdit()
-        self.ws_edit.setPlaceholderText("选择工作目录")
+        self.ws_edit.setPlaceholderText("尚未选择")
         self.ws_btn = PushButton(FIF.FOLDER, "选择目录")
         self.ws_btn.clicked.connect(self._pick_workspace)
         self.workspace_row = SettingRow(
-            "工作目录", desc="未选择目录", icon=FIF.FOLDER,
+            "工作目录", desc="尚未选择", icon=FIF.FOLDER,
             control=controls(self.ws_btn))
         row(ws_card, self.workspace_row)
 
@@ -417,8 +440,8 @@ class SettingsPage(FluentPage):
         self.notify_interval = ComboBox()
         for hours in notify_schedule.INTERVAL_CHOICES:
             self.notify_interval.addItem(f"每 {hours} 小时", userData=hours)
-        self.notify_more_btn = ToolButton(FIF.SETTING)
-        set_tip(self.notify_more_btn, "发送时间、间隔与手动测试")
+        self.notify_more_btn = PushButton(FIF.SETTING, "通知设置")
+        set_tip(self.notify_more_btn, "发送时间、间隔与测试通知")
         self.notify_more_btn.clicked.connect(self._open_notify_dialog)
         self.notify_row = SettingRow(
             "通知频率", icon=FIF.DATE_TIME,
@@ -428,9 +451,9 @@ class SettingsPage(FluentPage):
         self.notify_interval.currentIndexChanged.connect(self._on_notify_mode_changed)
 
         # 未开启时普通按钮「开启自启」，已开启时高亮按钮「关闭自启」，状态一眼可见
-        self.autostart_btn = PushButton()
+        self.autostart_btn = PushButton(FIF.POWER_BUTTON, "开启自启")
         self.autostart_btn.clicked.connect(self._toggle_autostart)
-        self.autostart_on_btn = PrimaryPushButton()
+        self.autostart_on_btn = PrimaryPushButton(FIF.POWER_BUTTON, "关闭自启")
         self.autostart_on_btn.clicked.connect(self._toggle_autostart)
         self.autostart_box = QWidget()
         auto_lay = QHBoxLayout(self.autostart_box)
@@ -555,7 +578,7 @@ class SettingsPage(FluentPage):
             # 存量 PDF 全当新文件重处理一遍，每次都提示「已加入待上传列表」。
             self._ws_known = {e.get("path") for e in self._pending_entries()}
         else:
-            self.workspace_row.set_desc("")
+            self.workspace_row.set_desc("尚未选择")
 
         # 文档检查：预期页数
         pages = cfg.get("expectedPages", "")
@@ -574,7 +597,7 @@ class SettingsPage(FluentPage):
 
     def _update_rule_preview(self):
         count = len(self.org_rule().effective_patterns())
-        self.rule_row.set_desc(f"当前 {count} 条规则")
+        self.rule_row.set_desc(f"当前 {count} 条规则" if count else "尚未设置")
 
     def _open_rule_dialog(self):
         dlg = RuleDialog(self.org_rule(), self.window())
@@ -641,7 +664,7 @@ class SettingsPage(FluentPage):
         self.roster = merged if merged.rows else None
         if getattr(self, "roster_row", None) is not None:
             n = len(merged.rows)
-            self.roster_row.set_desc(f"已导入 {n} 名团员" if n else "")
+            self.roster_row.set_desc(f"已导入 {n} 名团员" if n else "尚未导入")
         self._refresh_roster_table()
         self.roster_changed.emit(self.roster)
 
@@ -902,27 +925,6 @@ class SettingsPage(FluentPage):
         self._add_dialog = dialog
         dialog.show()
         dialog.user_edit.setFocus()
-
-    def _open_file_dialog(self):
-        """账号文件：导入、模板、导出三个命令收在一个入口里。
-
-        弹窗里的按钮每次打开都新建（不再偷设置页上的持久控件），关窗随弹窗一起销毁——
-        避免控件被反复 reparent 后变成顶层浮动小窗、或关窗后被隐藏从设置页消失。"""
-        from qfluentwidgets import PushButton
-
-        dialog = self._config_dialog("账号文件", "批次导入账号，或整份导入导出配置（换机迁移）")
-        import_btn = PushButton(FIF.DOCUMENT, "批量导入")
-        import_btn.clicked.connect(self._import_accounts)
-        tpl_btn = PushButton(FIF.DOWNLOAD, "账号模板")
-        tpl_btn.clicked.connect(self._download_account_template)
-        dialog.add_row(import_btn, tpl_btn)
-
-        cfg_in_btn = PushButton(FIF.CLOUD_DOWNLOAD, "导入配置")
-        cfg_in_btn.clicked.connect(self._import_config_json)
-        cfg_out_btn = PushButton(FIF.SHARE, "导出配置")
-        cfg_out_btn.clicked.connect(self._export_config_json)
-        dialog.add_row(cfg_in_btn, cfg_out_btn)
-        dialog.show()
 
     def _open_notify_dialog(self):
         """通知频率：发送时间、间隔与手动测试。
@@ -1724,7 +1726,7 @@ class SettingsPage(FluentPage):
             self._watcher.removePath(p)
         watching = [d for d in dirs if self._watcher.addPath(d)]
         if not watching:
-            self.workspace_row.set_desc("")
+            self.workspace_row.set_desc("尚未选择")
             return
         if len(watching) == 1:
             name = os.path.basename(watching[0].rstrip(os.sep)) or watching[0]
@@ -1871,7 +1873,7 @@ class SettingsPage(FluentPage):
         self.sec_table.blockSignals(False)
         self.sec_table.setFixedHeight(min(max(len(rows), 1), 8) * 36 + 42)
         fit_table_columns(self.sec_table, stretch_last=True)
-        self.sec_row.set_desc(f"已登记 {len(rows)} 个支部" if rows else "")
+        self.sec_row.set_desc(f"已登记 {len(rows)} 个支部" if rows else "尚未导入")
 
     def _delete_selected_secretaries(self):
         """删除选中行的团支书记录（与删除所选学期名单同款交互）。"""

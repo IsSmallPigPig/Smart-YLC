@@ -107,7 +107,7 @@ def _start_silent_install(path: str, version: str = "") -> bool:
 def last_check_text() -> str:
     c = store.load().get("lastUpdateCheck") or {}
     if not c.get("at"):
-        return "尚未检查过更新"
+        return "尚未检查"
     when = str(c["at"])[5:16].replace("T", " ")
     status = c.get("status", "")
     if status == "latest":
