@@ -283,7 +283,8 @@ def test_upload_branch_cards_use_tags(app, isolated_store):
     assert card.title_label.text() == "高三十二班"
     assert [p.text() for p in card._tags] == ["普通高中", "2 份", "缺团员 1"]
     assert "·" not in card.title_label.text()
-    assert "缺团员" in upload.summary.text()
+    assert upload.stat_values["total"].text() == "2"
+    assert upload.stat_values["branches"].text() == "1"
 
 
 @pytest.mark.skipif(
@@ -559,8 +560,8 @@ def test_upload_drop_payload_takes_folders_and_pdf_parents(app, isolated_store, 
     assert UploadPage._drop_payload(QMimeData()) == ([], [])
 
 
-def test_upload_folder_card_shows_ignored_files(app, isolated_store, tmp_path):
-    """来源目录卡片：标题是文件夹名、灰字是路径，展开后才列出文件与排除项。"""
+def test_upload_folder_card_is_plain_card(app, isolated_store, tmp_path):
+    """来源目录本身折叠；导入的文件夹只是一张普通卡片，不再各自展开一份文件清单。"""
     from app.domain.archive_scan import scan_folder
     from app.domain.upload_inspect import FileStatus
     from app.ui.upload_page import UploadPage
@@ -577,16 +578,12 @@ def test_upload_folder_card_shows_ignored_files(app, isolated_store, tmp_path):
                                   branch="普通高中高三七班")]
     upload._rebuild_sources()
 
+    assert upload.source_card.title_label.text() == "来源目录"
     card = upload._folder_cards[str(folder)]
     assert card.title_label.text() == "高一1班"
     assert card.desc_label.text() == str(folder)
     assert [p.text() for p in card._tags] == ["1 份", "忽略 1"]
-    assert card.body.isHidden()               # 收起状态不铺行
-
-    card.set_expanded(True)
-    _pump(app, 30)
-    assert card._filled
-    assert not card.body.isHidden()
+    assert not hasattr(card, "body")          # 普通卡片，不再自带折叠/文件清单
 
 
 def test_update_download_failure_clears_progress(app, isolated_store):
