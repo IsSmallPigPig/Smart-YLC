@@ -2,6 +2,37 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.6.1
+
+### 新增
+- **Linux 版本（x86_64 .deb）**：`ubuntu-22.04` 构建（glibc 下限更低，兼容 Ubuntu
+  22.04+/Debian 12+），PyInstaller onedir 装到 `/opt/SmartYouth`，带桌面项、hicolor
+  图标与 `smartyouth` 命令；QtWebEngine 的 NSS/X11 运行时依赖列进 Depends。
+  发布前用 Xvfb 冒烟跑冻结产物（`--smoke-test` 真构造主窗口再退出），分析期 import
+  成功不代表能跑，这一步才算数。
+- **浏览器截图**：标签栏相机按钮，页面图像存到 `~/.gd12355-helper/screenshots/`
+  并复制到剪贴板，右下角提示条带「查看图像 / 打开目录」。
+- **表格右键菜单**：账号 / 名单 / 支书三张表挂 Fluent `RoundMenu`（打开网页、复制
+  账号、测活、删除、下载模板等），不再用系统原生右键。
+
+### 修复
+- **Windows 导出表格失败「乱码 cannot be used in worksheets」**：系统抓回的成员
+  姓名等字段偶发混入不可见控制字符（`\x07` 等），openpyxl 写单元格时拒绝并把原值
+  打进阶错消息——看着就是乱码。写盘边界统一清洗（`xlsx_clean.py`，与 openpyxl
+  同口径剥 `\x00-\x1F`，保留 tab/换行），缓存里的历史脏数据不用重新同步也能导出；
+  工作表名同样先剥控制字符再过滤非法符号。
+- **浏览器窗口拖动偶发报错且拖不动**（macOS「Window move completed without
+  beginning」）：不走系统 `startSystemMove()`，改由应用自己跟位移调 `window().move()`。
+- **访问支部弹窗只列状态正常的账号**，并写明隐藏了几个异常账号；全部异常时给出
+  明确提示而不是静默无反应。
+- **提示底色收敛**：支部卡片只有异常铺 warning 黄底，正常与纯欠缴保持原背景；
+  公告面板父卡取子行最高警告等级底色、各行用自己的等级，文字恢复默认色。
+
+### 调整
+- 账号表格下拉菜单改为「导入文件 / 下载模版」。
+- Windows 签名支持 SignPath：配了 `SIGNPATH_API_TOKEN` 等 Secrets 时，安装包整个
+  打 zip 交 SignPath 云端签名（私钥不落 CI）；未配置时回退原有自签名流程。
+
 ## v1.5.9
 
 ### 改进

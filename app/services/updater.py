@@ -118,7 +118,7 @@ def _read(url: str, timeout: int = TIMEOUT) -> bytes:
         raise UpdateError(f"{url} 请求失败：{reason}") from e
 
 
-INSTALLABLE = (".zip", ".dmg", ".pkg", ".exe", ".msi")
+INSTALLABLE = (".zip", ".dmg", ".pkg", ".exe", ".msi", ".deb")
 
 
 def _pick_asset(assets: list[dict], platform: str | None = None) -> dict | None:

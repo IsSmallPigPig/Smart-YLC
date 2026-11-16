@@ -3,6 +3,7 @@
   （无参数）      打开主窗口
   --tray          托盘后台模式：无窗口，每日定时检查 + 系统通知
   --silent-install <包路径>  安装助手：静默安装并通知用户重启（内部使用）
+  --smoke-test    打包冒烟检查：真正构造主窗口后退出，供 CI 验证冻结产物
 """
 
 from __future__ import annotations
@@ -10,11 +11,62 @@ from __future__ import annotations
 import sys
 
 
+def _smoke_test() -> int:
+    """构造 QApplication + MainWindow 走一遍真实启动链路，然后退出。
+
+    CI（尤其 Linux）上 PyInstaller 分析期 import 成功不代表冻结产物能跑：
+    缺系统库、缺插件都在这一步才暴露。HOME 指到临时目录——constants 里
+    CONFIG_FILE 按 expanduser 在 import 时求值，先设环境变量再 import app 模块，
+    冒烟过程读写不到用户真实配置。
+
+    平台插件不在这里强设：无头 CI 由 xvfb-run 提供真实 X11 显示。
+    offscreen 不能替代——qframelesswindow 的无边框初始化在无真实窗口系统时段错误。
+    """
+    import os
+    import tempfile
+
+    tmp_home = tempfile.mkdtemp(prefix="smartyouth-smoke-")
+    os.environ["HOME"] = tmp_home
+    os.environ["USERPROFILE"] = tmp_home
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    app = QApplication(sys.argv)
+
+    from app.setup import setup_app
+
+    setup_app()
+
+    from app.ui.brand import app_icon
+
+    app.setWindowIcon(app_icon())
+
+    from app.ui.main_window import MainWindow
+
+    w = MainWindow()
+    w.show()
+    app.processEvents()
+    w.close()
+    app.processEvents()
+    print("SMOKE OK", flush=True)
+    # 主窗口带后台线程（批量构建、定时器），走 Qt 正常退出会撞在线程析构顺序上；
+    # 冒烟只要「构造成功」这个结论，输出后直接硬退，退出码照常 0
+    import os
+
+    os._exit(0)
+    return 0
+
+
 def run() -> int:
     if "--tray" in sys.argv:
         from app.tray import run_tray
 
         return run_tray()
+
+    if "--smoke-test" in sys.argv:
+        return _smoke_test()
 
     if "--silent-install" in sys.argv:
         from app.services.silent_update import install_and_notify

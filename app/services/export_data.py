@@ -25,6 +25,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from app.services.xlsx_clean import ILLEGAL_XLSX_CHARS, clean, clean_row
+
 from app.domain.check_rules import (
     MemberRecord,
     build_fee_results,
@@ -257,7 +259,9 @@ _ILLEGAL_SHEET = re.compile(r"[\\/*?:\[\]]")
 
 
 def _safe_sheet(title: str) -> str:
-    return _ILLEGAL_SHEET.sub("", title)[:31] or "数据"
+    # 控制字符先剥掉：支部名同样可能带脏字符，会原样进工作表名
+    cleaned = ILLEGAL_XLSX_CHARS.sub("", str(title))
+    return _ILLEGAL_SHEET.sub("", cleaned)[:31] or "数据"
 
 
 def save_workbook(path: str, sheets: dict) -> int:
@@ -271,9 +275,9 @@ def save_workbook(path: str, sheets: dict) -> int:
     total = 0
     for title, (headers, rows) in sheets.items():
         ws = wb.create_sheet(_safe_sheet(title))
-        ws.append(headers)
+        ws.append([clean(h) for h in headers])
         for row in rows:
-            ws.append([row.get(h, "") for h in headers])
+            ws.append(clean_row(row, headers))
         total += len(rows)
         for cell in ws[1]:
             cell.font = Font(bold=True)
