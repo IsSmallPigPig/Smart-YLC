@@ -300,12 +300,16 @@ jobs:
       - name: 安装系统依赖
         # PyInstaller 分析阶段要真的 import PySide6，缺 libGL/libEGL 直接崩；
         # Qt xcb 平台插件的运行时依赖也一并列进 deb 的 Depends；xvfb 供冒烟检查。
+        # libxkbcommon-x11-0 / libxcb-xkb0 是 Qt6XcbQpa 的硬依赖（PyInstaller 只带
+        # Qt6XcbQpa 本身，不带这两个系统库），缺了 xcb 插件报 "found but could not load"。
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon0 libdbus-1-3 \
             fontconfig libglib2.0-0 libx11-6 libxcb1 \
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxkbcommon-x11-0 libxcb-xkb0 libxcb-xinput0 libsm6 libice6 \
+            libxrender1 libxi6
 
       - name: 安装依赖
         run: |
@@ -322,8 +326,13 @@ jobs:
         # 必须用 Xvfb 而不是 QT_QPA_PLATFORM=offscreen——无边框窗口初始化
         # 在没有真实窗口系统时会段错误。浏览器页的 Chromium 沙箱在 CI root
         # 环境起不来，用 QTWEBENGINE_CHROMIUM_FLAGS 关掉（只影响这次冒烟）。
+        # 先跑 ldd 诊断：xcb 插件报 "found but could not load" 时，Qt 只说
+        # 插件名不说缺哪个库，这里直接把 not found 的 .so 列进日志。
         run: |
-          QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox" \
+          XCB=$(find dist/SmartYouth -name "libqxcb.so" -path "*platforms*" | head -1)
+          echo "xcb plugin: $XCB"
+          ldd "$XCB" 2>/dev/null | grep "not found" || echo "（xcb 插件依赖完整）"
+          QT_DEBUG_PLUGINS=1 QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox" \
             timeout 90 xvfb-run -a dist/SmartYouth/SmartYouth --smoke-test
           echo "冻结产物冒烟通过"
 
@@ -349,7 +358,7 @@ jobs:
             > "$PKG/usr/share/applications/SmartYouth.desktop"
           ln -sf /opt/SmartYouth/SmartYouth "$PKG/usr/bin/smartyouth"
           SIZE=$(du -sk "$PKG/opt/SmartYouth" | cut -f1)
-          printf 'Package: smartyouth\nVersion: %s\nArchitecture: amd64\nInstalled-Size: %s\nMaintainer: AnkoQAQ <ismsmallpigpig@outlook.com>\nDepends: libegl1, libgl1, libxkbcommon0, libdbus-1-3, fontconfig, libglib2.0-0, libx11-6, libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-randr0, libxcb-render-util0, libxcb-shape0, libxcb-xinerama0, libnss3, libnspr4, libxcomposite1, libxdamage1, libxfixes3, libxtst6, libasound2, libcairo2, libpango-1.0-0, libatspi2.0-0, libcups2\nSection: utils\nPriority: optional\nDescription: 智慧团委助手（Smart-YLC helper）\n 多支部账号一屏管理：档案上传、组织状况、站内信与数据导出。\n Qt/PySide6 运行时已随包携带，安装到 /opt/SmartYouth。\n' \
+          printf 'Package: smartyouth\nVersion: %s\nArchitecture: amd64\nInstalled-Size: %s\nMaintainer: AnkoQAQ <ismsmallpigpig@outlook.com>\nDepends: libegl1, libgl1, libxkbcommon0, libdbus-1-3, fontconfig, libglib2.0-0, libx11-6, libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-randr0, libxcb-render-util0, libxcb-shape0, libxcb-xinerama0, libxkbcommon-x11-0, libxcb-xkb0, libxcb-xinput0, libsm6, libice6, libxrender1, libxi6, libnss3, libnspr4, libxcomposite1, libxdamage1, libxfixes3, libxtst6, libasound2, libcairo2, libpango-1.0-0, libatspi2.0-0, libcups2\nSection: utils\nPriority: optional\nDescription: 智慧团委助手（Smart-YLC helper）\n 多支部账号一屏管理：档案上传、组织状况、站内信与数据导出。\n Qt/PySide6 运行时已随包携带，安装到 /opt/SmartYouth。\n' \
             "$VER" "$SIZE" > "$PKG/DEBIAN/control"
           dpkg-deb --build --root-owner-group "$PKG" \
             "dist/$APP_NAME-Linux-x64.deb"
