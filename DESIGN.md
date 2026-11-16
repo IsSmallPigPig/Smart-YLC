@@ -215,8 +215,13 @@
   写盘；否则每轮同步结束时拖动窗口会卡一下。
 - 单实例用 `QLocalServer`：第二个进程只发送 `show` 后退出，已有实例把窗口叫到前面。
   托盘与主界面共用同一把锁，避免两套 30 秒同步线程同时跑。
-- 访问支部标题栏固定 32px（系统默认），标签、导航图标与窗口按钮同高；标签条拖动要
-  超过 4px 才调用 `startSystemMove()`，单击不会误入原生拖拽。
+- 访问支部标题栏高度取系统按钮中线两倍（macOS 42、Windows 32）：macOS 的红绿灯由
+  AppKit 摆在窗口顶部往下 21px 处，不是 32px 标题栏的中点，按 32 排会整体高 5px。
+  标签行固定 32 高、在标题栏里 `AlignVCenter`，加号与导航图标因此和圆点同一条中线；
+  showEvent 里用 `native_button_center()` 量一次实际位置再校正，常量只做兜底。
+- 标签条拖窗在 `mousePressEvent` 里直接 `startSystemMove()`：macOS 的
+  `performWindowDragWithEvent:` 只认 mouseDown，等鼠标移动 4px 后再从 mouseMove 调，
+  AppKit 会报 `Window move completed without beginning`，且这一下常常真的拖不动。
 - 大量卡片用 `BatchedBuild` 分批建，首帧先出内容。
 - 组织管理切页只在数据真的变了时重建：切页 5 分钟内直接用现有支部树，刷新结果用
   「支部 + 成员数 + 分类计数」摘要比较，相同就跳过；重建前先把旧卡片 `hide()` 再

@@ -58,10 +58,19 @@ MAX_TABS = 6
 """登录等待页最多盖这么久。超时就把网页露出来，别让人对着转圈干等。"""
 LOGIN_TIMEOUT_MS = 25_000
 SITE_HOME = f"{SITE_BASE_URL}/bg/index_main.html"
-TITLE_BAR_HEIGHT = 32
-"""macOS 的系统按钮画在标题栏最右侧（宽 75），标题栏内容要提前让开。"""
+TAB_HEIGHT = 32
+"""标签与标题栏按钮的高度。"""
+TITLE_BAR_HEIGHT = 42 if sys.platform == "darwin" else 32
+"""标题栏总高。
+
+macOS 的红绿灯由 AppKit 摆在窗口顶部往下约 21px 处，不是标题栏中点；标题栏
+做成两倍高度、让标签行居中，标签和导航按钮才和系统按钮落在同一条中线上。
+Windows 的自绘按钮贴顶、本身 32px 高，标题栏就跟它们一样高。
+实际数值在 showEvent 里按系统按钮的真实位置再校一次。
+"""
+# macOS 的系统按钮画在标题栏最右侧（宽 75），标题栏内容要提前让开。
 SYSTEM_BUTTON_INSET = 88 if sys.platform == "darwin" else 8
-"""标题栏右侧的导航按钮：后退 / 前进 / 刷新 / 重新登录。"""
+# 标题栏右侧的导航按钮：后退 / 前进 / 刷新 / 重新登录。
 NAV_BUTTON = 32
 
 """页面登录态判定。
@@ -230,42 +239,45 @@ class PlusButton(QWidget):
         p.drawLine(c.x(), c.y() - 5, c.x(), c.y() + 5)
 
 
-class ChromeRow(QWidget):
-    """标签条空白处可拖动窗口：标题栏被标签占住后仍要能拖。
+def native_button_center(window) -> int | None:
+    """系统红绿灯的垂直中心（从窗口顶部起算，Qt 坐标）。
 
-    按下只记起点，移动超过 4px 才真正交给系统拖窗。原来在 mousePress 就
-    调 startSystemMove，单击也会进入一次原生拖拽；主线程正忙时这次调用会
-    压住后续事件，看起来就是“拖不动”。等鼠标确实移动再启动，点击不受影响。
+    AppKit 把它们放在窗口顶部往下约 21px 处，跟 32px 高的标题栏中点差 5px；
+    按这个位置居中，标签和导航按钮才和圆点在同一条线上。非 macOS 或窗口
+    还没建好时返回 None，调用方按常量兜底。
     """
+    if sys.platform != "darwin":
+        return None
+    try:
+        import Cocoa
+        import objc
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._press_pos = None
-        self._drag_started = False
+        view = objc.objc_object(c_void_p=window.winId().__int__())
+        ns_window = view.window()
+        button = ns_window.standardWindowButton_(Cocoa.NSWindowCloseButton)
+        if button is None:
+            return None
+        rect = button.convertRect_toView_(button.bounds(), None)
+        return round(window.height() - (rect.origin.y + rect.size.height / 2))
+    except Exception:
+        return None
+
+
+class ChromeRow(QWidget):
+    """标签条的空白处：按在空白处就拖动窗口。
+
+    必须在 mousePress 里交给系统。macOS 的 `performWindowDragWithEvent:` 认的是
+    mouseDown 事件；等鼠标移动后再从 mouseMove 调，AppKit 会报
+    “Window move completed without beginning”，而且这一下经常真的拖不动。
+    标签、加号、导航按钮都是子控件，自己吃掉按下事件，不受影响。
+    """
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
-            self._press_pos = e.globalPosition().toPoint()
-            self._drag_started = False
+            handle = self.window().windowHandle()
+            if handle is not None and handle.startSystemMove():
+                return
         super().mousePressEvent(e)
-
-    def mouseMoveEvent(self, e):
-        if (self._press_pos is not None
-                and not self._drag_started
-                and e.buttons() & Qt.MouseButton.LeftButton):
-            moved = (e.globalPosition().toPoint() - self._press_pos).manhattanLength()
-            if moved >= 4:
-                handle = self.window().windowHandle()
-                if handle is not None:
-                    self._drag_started = True
-                    handle.startSystemMove()
-                    return
-        super().mouseMoveEvent(e)
-
-    def mouseReleaseEvent(self, e):
-        self._press_pos = None
-        self._drag_started = False
-        super().mouseReleaseEvent(e)
 
 
 class LoginView(QWidget):
@@ -365,9 +377,8 @@ class BrowserWindow(FluentWindowBase):
 
     def _build_title_bar(self):
         self.setTitleBar(MSFluentTitleBar(self))
-        # 标签条按系统标题栏的默认高度排，不再用 48px 的 Fluent 默认值：
-        # 窗口按钮（红绿灯 / 最小化组）只有 32px 高，标题栏高出一截就会让
-        # 标签与前进后退按钮整体下沉，和系统按钮错开半个按钮。
+        # 标题栏高度按系统按钮的中线定（macOS 42，Windows 32）；标签行只有 32 高，
+        # 垂直居中后与红绿灯、加号、后退前进在同一条中线上。
         self.titleBar.setFixedHeight(TITLE_BAR_HEIGHT)
         self.titleBar.iconLabel.hide()
         self.titleBar.titleLabel.hide()
@@ -378,7 +389,7 @@ class BrowserWindow(FluentWindowBase):
                 lay.setStretch(i, 0)
 
         self.tab_row = ChromeRow(self.titleBar)
-        self.tab_row.setFixedHeight(TITLE_BAR_HEIGHT)
+        self.tab_row.setFixedHeight(TAB_HEIGHT)
         row = QHBoxLayout(self.tab_row)
         row.setContentsMargins(10, 0, SYSTEM_BUTTON_INSET, 0)
         row.setSpacing(4)
@@ -410,8 +421,9 @@ class BrowserWindow(FluentWindowBase):
         self.reload_btn.clicked.connect(lambda: self._nav("reload"))
         self.login_btn.clicked.connect(self._relogin)
 
-        # 插在图标之后、窗口按钮之前：标签靠左，窗口按钮始终在最右侧
-        lay.insertWidget(1, self.tab_row, 1)
+        # 插在图标之后、窗口按钮之前：标签靠左，窗口按钮始终在最右侧。
+        # 显式垂直居中：标题栏比标签行高，靠默认布局会贴顶。
+        lay.insertWidget(1, self.tab_row, 1, Qt.AlignmentFlag.AlignVCenter)
 
     # ---------- 内容 ----------
 
@@ -555,9 +567,28 @@ class BrowserWindow(FluentWindowBase):
 
     def showEvent(self, e):
         super().showEvent(e)
+        QTimer.singleShot(0, self._sync_title_metrics)
         QTimer.singleShot(0, self._apply_native_chrome)
         # 窗口一出现就在空闲期把 Chromium 引擎拉起来（见 _warm_engine）
         QTimer.singleShot(120, self._warm_engine)
+
+    def _sync_title_metrics(self):
+        """按系统按钮的真实位置定标题栏高度。
+
+        常量只是兜底：红绿灯的纵向位置由 AppKit 决定，macOS 版本之间会差几个
+        像素。读一次实测中线，标题栏取两倍高度，标签行居中后正好对齐。
+        """
+        if self.height() < 100:      # 几何还没定，保持常量，别拿错值去改
+            return
+        center = native_button_center(self)
+        if center is None:
+            return
+        height = max(TAB_HEIGHT + 4, 2 * center)
+        if height == self.titleBar.height():
+            return
+        self.titleBar.setFixedHeight(height)
+        self.hBoxLayout.setContentsMargins(0, height, 0, 0)
+        self.tab_row.setFixedHeight(TAB_HEIGHT)
 
     def _warm_engine(self):
         """预热 Chromium：第一次建 QWebEngineProfile 要初始化引擎。
