@@ -73,6 +73,7 @@ def _health_stub(accounts):
     return SimpleNamespace(
         accounts=accounts, _worker=None, health_btn=MagicMock(), refresh_btn=MagicMock(),
         _on_account_checked=MagicMock(), _flush_health_results=MagicMock(),
+        _show_health_progress=MagicMock(), _on_health_finished=MagicMock(),
     )
 
 

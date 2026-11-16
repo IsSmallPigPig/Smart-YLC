@@ -243,17 +243,42 @@ class MainWindow(MSFluentWindow):
         accounts = [n for n in pending if n.action.startswith("accounts:")]
         others = [n for n in pending if not n.action.startswith("accounts:")]
 
-        if len(accounts) == 1:
-            self._show_notice_bar(accounts[0])
-        elif accounts:
-            from app.services.notices import Notice
-
-            self._show_notice_bar(Notice(
-                key="accounts", title="", detail=f"{len(accounts)} 个账号异常",
-                action=accounts[0].action, action_text="去设置", tone="error"))
+        if accounts:
+            self._show_account_notice(accounts)
 
         for notice in others[:3]:  # 其余问题逐条，最多 3 条；全部在公告面板里
             self._show_notice_bar(notice)
+
+    def _show_account_notice(self, notices):
+        """账号异常只留一条消息条，新的替换旧的。
+
+        以前每来一批新问题就单独弹一条，一轮测活能叠出三块「N 个账号异常」。
+        单个账号保持「哪个班异常」的原话；多个账号按原因归并成一句。
+        """
+        if len(notices) == 1:
+            bar = self._show_notice_bar(notices[0])
+        else:
+            from app.domain.account_health import HEALTH_LABEL
+            from app.services.notices import Notice
+
+            buckets: dict[str, int] = {}
+            for acc in self.settings_page.accounts:
+                status = (acc.get("health") or {}).get("status") or ""
+                if status in ("ok", "unknown", ""):
+                    continue
+                label = HEALTH_LABEL.get(status, "状态异常").split("（")[0]
+                buckets[label] = buckets.get(label, 0) + 1
+            bad = sum(buckets.values()) or len(notices)
+            detail = " · ".join(f"{k} {v}" for k, v in
+                                sorted(buckets.items(), key=lambda kv: -kv[1]))
+            content = f"{bad} 个账号异常" + (f"：{detail}" if detail else "")
+            bar = self._show_notice_bar(Notice(
+                key="accounts", title="", detail=content, brief=content,
+                action=notices[0].action, action_text="去设置", tone="error"))
+        old = getattr(self, "_account_bar", None)
+        if old is not None and old is not bar:
+            old.close()
+        self._account_bar = bar
 
     def _show_notice_bar(self, notice):
         """用 qfluentwidgets 的 InfoBar 呈现一条通知。
@@ -806,18 +831,12 @@ class MainWindow(MSFluentWindow):
             painter.fillRect(self.rect(), page_bg_color())
 
     def _apply_window_background(self):
-        # 深色保持全透明，保留原来的背景呈现与毛玻璃质感；首页头图渐隐到
-        # 透明后直接融进这层真实底色。浅色要铺一层稳定浅底：Fluent 的
-        # CardWidget 在浅色下只有 67% 白，全透明窗底会让桌面颜色透进卡片，
-        # 深色文字压在深色条纹上就读不清。light/dark 随主题切换自动生效。
-        # Windows 的 Mica 自带桌面取色，窗口底全透明即可，不再叠半透明层。
-        if self._translucent:
-            if sys.platform == "win32":
-                self.setCustomBackgroundColor(QColor(0, 0, 0, 0), QColor(0, 0, 0, 0))
-            else:
-                self.setCustomBackgroundColor(QColor(249, 249, 251, 200), QColor(0, 0, 0, 0))
-        else:
-            self.setCustomBackgroundColor(QColor(240, 244, 249), QColor(32, 32, 32))
+        # 底色由 page.window_background 统一给：账号网页窗口用的是同一套，
+        # 两个窗口的透明度不会各调一份。深色全透明，亮度交给混合层；浅色铺
+        # 近白防止桌面颜色透进卡片（浅色 CardWidget 只有 67% 白）。
+        from app.ui.page import window_background
+
+        self.setCustomBackgroundColor(*window_background(self._translucent))
 
     def apply_material(self, material: str):
         """切换毛玻璃材质：主窗口和已打开的支部浏览器窗口一起换。

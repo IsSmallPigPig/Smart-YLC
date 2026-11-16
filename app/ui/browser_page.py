@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     FluentIcon as FIF,
+    InfoBar,
     IconWidget,
     IndeterminateProgressRing,
     PrimaryPushButton,
@@ -51,7 +52,7 @@ from app.domain.account_health import split_accounts
 from app.domain.login_protocol import build_login_url, parse_login_response
 from app.domain.upload_inspect import split_branch_label
 from app.services import login_gate, store
-from app.ui.page import note_label, theme_font, set_tip
+from app.ui.page import note_label, set_tip, theme_font, window_background
 
 PROFILE_ROOT = os.path.join(os.path.dirname(CONFIG_FILE), "webprofiles")
 MAX_TABS = 6
@@ -332,10 +333,11 @@ class BrowserWindow(FluentWindowBase):
         self.setMicaEffectEnabled(False)
         self.setStyleSheet("BrowserWindow{background: transparent}")
         cfg = store.load()
-        from app.services.materials import normalize
+        from app.services.materials import preferred
 
-        self._material = normalize(cfg.get("translucentMaterial")
-                                   or ("acrylic" if cfg.get("translucent") else "none"))
+        # 跟主窗口用同一个取值函数：没设置过时是 Mica，而不是「配置里没有这个键
+        # 就当关闭」。以前这里自己拼了一遍默认值，结果主窗口毛玻璃、浏览器纯色。
+        self._material = preferred(cfg)
         self._translucent = False
         self._material_applied = False
         self._auto_logins: dict[str, int] = {}
@@ -636,13 +638,14 @@ class BrowserWindow(FluentWindowBase):
             self._acrylic_view = None
             self._acrylic_container = None
         if not self._material_applied:
-            # 材质层要等原生窗口稳定后再挂，否则使用初始几何建层会错位
+            # 材质层等这一拍的原生窗口就位后立刻挂：以前推迟 150ms，窗口先露出
+            # 一层不透明底色，看起来就是「打开时不带毛玻璃」。挂不上再重试一次。
             def _apply(retry: bool = True):
                 self.set_material(self._material)
                 if not self._material_applied and retry:
                     QTimer.singleShot(200, lambda: _apply(False))
 
-            QTimer.singleShot(150, _apply)
+            QTimer.singleShot(0, _apply)
 
 
     def _acrylic_alive(self) -> bool:
@@ -697,16 +700,7 @@ class BrowserWindow(FluentWindowBase):
         self.update()
 
     def _apply_background(self):
-        if self._translucent:
-            # 混合层只负责"透"，亮度由这层底色定：不铺就是桌面颜色，深色桌面下
-            # 整窗发黑。浅色铺近白，深色铺中深灰，两层叠加才是毛玻璃的效果。
-            # Windows 的 Mica 自带桌面取色，窗口底全透明即可，不再叠半透明层。
-            if sys.platform == "win32":
-                self.setCustomBackgroundColor(QColor(0, 0, 0, 0), QColor(0, 0, 0, 0))
-            else:
-                self.setCustomBackgroundColor(QColor(249, 249, 251, 200), QColor(44, 46, 50, 190))
-        else:
-            self.setCustomBackgroundColor(QColor(240, 244, 249), QColor(32, 32, 32))
+        self.setCustomBackgroundColor(*window_background(self._translucent))
 
     # ---------- 账号 ----------
 
@@ -725,39 +719,54 @@ class BrowserWindow(FluentWindowBase):
         self.welcome_hint.setText(text)
         self.welcome_hint.setVisible(bool(text))
 
+    def _explain(self, text: str):
+        """说明为什么没打开。
+
+        没有标签时写在欢迎页上；已经有标签就用消息条——欢迎页是透明的，
+        抬到 QWebEngineView 上面会透出下面的网页，看起来像「首页糊在浏览器上」。
+        """
+        if self._views:
+            InfoBar.warning("访问支部", text, duration=5000, parent=self)
+            return
+        self._set_welcome_hint(text)
+        self._raise_page("")
+
     def pick_new_tab(self):
-        """弹窗问要访问哪个支部，确认后开它的标签页；只列状态正常的账号。"""
+        """弹窗问要访问哪个支部，确认后开它的标签页。
+
+        账号全异常时也照常弹：列表里标出状态，还能打开网页端手动恢复。
+        以前这里直接返回并抬起欢迎页，正好盖在网页上，就是截图里那个「首页」。
+        """
         from app.ui.branch_picker import pick_branch
 
         if self.tab_count() >= MAX_TABS:
+            self._explain(f"最多同时打开 {MAX_TABS} 个标签，先关掉一个再来")
             return
-        usable, excluded = split_accounts(self._accounts())
-        if not usable:
-            self._set_welcome_hint(
-                "没有可用的支部账号" if not excluded
-                else "支部账号状态都不正常，先测活恢复，或在系统配置重新登录")
-            self._raise_page("")
+        accounts = [a for a in self._accounts() if a.get("userName")]
+        if not accounts:
+            self._explain("还没有支部账号，先到系统配置添加")
             return
+        usable, excluded = split_accounts(accounts)
+        note = ""
+        if excluded and not usable:
+            note = f"{len(excluded)} 个账号状态异常，打开后可能需要重新登录"
         self._set_welcome_hint("")
-        pick_branch(usable, self, self._open, self._current)
+        pick_branch(accounts, self, self._open, self._current, note=note)
 
     def _open(self, user: str):
         if user in self._views:  # 已经开着，直接切过去
             self._activate(user)
             return
         if self.tab_count() >= MAX_TABS:
-            self._set_welcome_hint(f"最多同时打开 {MAX_TABS} 个标签，先关掉一个再来")
-            self._raise_page("")
+            self._explain(f"最多同时打开 {MAX_TABS} 个标签，先关掉一个再来")
             return
         acc = self._account(user)
         # 下面两种都是「点了没反应」的来源，必须说清为什么没开
         if not acc:
-            self._set_welcome_hint("这个账号已经不在系统配置里，先刷新账号列表")
-            self._raise_page("")
+            self._explain("这个账号已经不在系统配置里，先刷新账号列表")
             return
         if not acc.get("password"):
-            self._set_welcome_hint("这个账号还没有密码，先到系统配置补上")
-            self._raise_page("")
+            self._explain("这个账号还没有密码，先到系统配置补上")
             return
         self._set_welcome_hint("")
         self._creds[user] = self._cred_sig(acc)
@@ -773,8 +782,7 @@ class BrowserWindow(FluentWindowBase):
             self._activate(user)
             return
         if self.tab_count() >= MAX_TABS:   # 连点两下可能同时排进两个
-            self._set_welcome_hint(f"最多同时打开 {MAX_TABS} 个标签，先关掉一个再来")
-            self._raise_page("")
+            self._explain(f"最多同时打开 {MAX_TABS} 个标签，先关掉一个再来")
             return
         self._ensure_view(user)
         self._activate(user)

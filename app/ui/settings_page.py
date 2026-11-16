@@ -111,6 +111,11 @@ class HealthWorker(QThread):
     def __init__(self, accounts: list[dict]):
         super().__init__()
         self.accounts = accounts
+        self._stop = False
+
+    def stop(self):
+        """浮条上点关闭：不再往下测，已拿到的结果照常落盘。"""
+        self._stop = True
 
     def _check_one(self, acc: dict) -> tuple[str, str, str]:
         from app.services import login_gate
@@ -129,6 +134,8 @@ class HealthWorker(QThread):
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(self._check_one, dict(a)) for a in self.accounts]
             for fut in as_completed(futures):
+                if self._stop:
+                    break
                 try:
                     self.account_checked.emit(*fut.result())
                 except Exception as e:  # 单账号线程异常不影响其余结果
@@ -1478,6 +1485,15 @@ class SettingsPage(FluentPage):
             return
         self.health_btn.setEnabled(False)
         self.refresh_btn.setEnabled(False)
+        # 手动触发（按钮 / 新增账号 / 改密码）跟组织状况一样挂右下角进度浮条；
+        # 定时轮询不打扰。结果不再逐个账号弹消息条，结束时汇总成一条。
+        self._health_visible = force
+        self._health_done = 0
+        self._health_total = len(accounts)
+        self._health_checked: list[str] = []
+        self._health_cancelled = False
+        if force:
+            self._show_health_progress()
 
         def _enable_buttons():
             self.health_btn.setEnabled(True)
@@ -1486,8 +1502,71 @@ class SettingsPage(FluentPage):
         self._worker = HealthWorker(accounts)
         self._worker.account_checked.connect(self._on_account_checked)
         self._worker.finished.connect(_enable_buttons)
-        self._worker.finished.connect(self._flush_health_results)  # 兜底：突发结束后必有一次落盘
+        self._worker.finished.connect(self._on_health_finished)
         self._worker.start()
+
+    # ---------- 测活进度 ----------
+
+    def _show_health_progress(self):
+        from app.ui.widgets import ProgressToast
+
+        self._close_health_progress()
+        self._health_progress = ProgressToast(
+            "正在刷新登录状态", self.window(), on_close=self._stop_health)
+        self._health_progress.set_progress(0, self._health_total)
+        self._health_progress.show()
+
+    def _stop_health(self):
+        """浮条上点关闭：不再往下测，已经拿到的结果照常落盘。
+
+        浮条自己会收起；这里只记下「用户取消了」，结束时不再补一条汇总。
+        线程要等手上那批请求返回才会结束，所以别在这里等它。"""
+        self._health_cancelled = True
+        self._health_progress = None
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.stop()
+
+    def _close_health_progress(self, finished: bool = False):
+        toast, self._health_progress = getattr(self, "_health_progress", None), None
+        if toast is None:
+            return
+        if finished:
+            toast.finish()      # 补满 100% 后自行淡出，不在这里销毁
+        else:
+            toast.close()
+
+    def _on_health_finished(self):
+        cancelled = getattr(self, "_health_cancelled", False)
+        self._health_cancelled = False
+        self._close_health_progress(finished=not cancelled)
+        self._flush_health_results()
+        visible = getattr(self, "_health_visible", False)
+        # 手动这几轮已经用一条汇总说清了，公告面板照常收，不再叠消息条
+        self.refresh_notices(quiet=visible)
+        if visible and not cancelled:
+            self._report_health()
+
+    def _report_health(self):
+        """一轮测活结束给一条汇总：按原因归并，不再逐个账号弹消息条。"""
+        checked = getattr(self, "_health_checked", [])
+        buckets: dict[str, int] = {}
+        for user in checked:
+            acc = next((a for a in self.accounts if a.get("userName") == user), None)
+            status = ((acc or {}).get("health") or {}).get("status") or ""
+            if status in ("ok", "unknown", ""):
+                continue
+            label = HEALTH_LABEL.get(status, "状态异常").split("（")[0]
+            buckets[label] = buckets.get(label, 0) + 1
+        if not buckets:
+            InfoBar.success("登录状态正常", f"{len(checked)} 个账号全部正常",
+                            duration=4000, parent=self)
+            return
+        bad = sum(buckets.values())
+        detail = " · ".join(f"{k} {v}" for k, v in
+                            sorted(buckets.items(), key=lambda kv: -kv[1]))
+        InfoBar.warning(f"{bad} 个账号异常",
+                        f"{detail}；点账号行的健康状态可打开网页端重新登录",
+                        duration=9000, parent=self)
 
     # ---------- 浏览器打开（携带登录态） ----------
 
@@ -1559,6 +1638,12 @@ class SettingsPage(FluentPage):
                 "status": status, "message": message,
                 "checkedAt": datetime.now().isoformat(timespec="seconds"),
             }
+        self._health_done = getattr(self, "_health_done", 0) + 1
+        if user:
+            getattr(self, "_health_checked", []).append(user)
+        toast = getattr(self, "_health_progress", None)
+        if toast is not None:
+            toast.set_progress(self._health_done, self._health_total)
         # 结果逐条回 GUI；50ms 防抖合并为一次「写盘 + 表格刷新」——
         # 逐条 _save_config 是全量 JSON 读写（~15ms × 账号数），52 账号会卡主线程 ~1s
         if getattr(self, "_health_refresh_timer", None) is None:
@@ -1572,10 +1657,13 @@ class SettingsPage(FluentPage):
     def _flush_health_results(self):
         self._save_config()
         self._refresh_table()
-        self.refresh_notices()
 
-    def refresh_notices(self):
-        """把账号异常汇总成通知：每个异常账号一条，修好后自动消失。"""
+    def refresh_notices(self, quiet: bool = False):
+        """把账号异常汇总成通知：每个异常账号一条，修好后自动消失。
+
+        quiet=True 只写公告面板、不弹消息条：一轮测活已经用一条汇总说清了，
+        逐账号再弹一次就变成截图里那三块叠在一起的红条。
+        """
         center = getattr(getattr(self, "window_ref", None), "notice_center", None)
         if center is None:
             return
@@ -1604,6 +1692,7 @@ class SettingsPage(FluentPage):
                 # 消息条只报「哪个账号异常」，原因留给公告面板
                 brief=f"{remark or user} 账号异常",
                 scope="settings",   # 账号问题在系统配置处理，不出现在上传页的公告里
+                silent=quiet,
             ))
         center.replace_prefix("account:", notices)
 

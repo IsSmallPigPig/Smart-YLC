@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
@@ -32,6 +33,20 @@ PAGE_MARGINS = (32, 24, 32, 24)
 # 深色模式用深蓝压住窗口底色。两处都从这里取，免得改一处忘另一处。
 BANNER_STOPS_LIGHT = (QColor(166, 199, 235), QColor(214, 230, 246))
 BANNER_STOPS_DARK = (QColor(38, 84, 140), QColor(24, 42, 68))
+
+
+def window_background(translucent: bool) -> tuple[QColor, QColor]:
+    """窗口底色 (浅色, 深色)：主窗口和账号网页窗口共用同一套。
+
+    有材质时深色完全透明——亮度由混合层决定，再叠一层深灰会让毛玻璃变浑，
+    两个窗口的透明度就对不上了。浅色铺近白，否则桌面颜色会透进卡片。Windows
+    的 Mica 自带桌面取色，浅深都透明。没有材质时铺不透明纯色，避免窗口发黑。
+    """
+    if not translucent:
+        return QColor(240, 244, 249), QColor(32, 32, 32)
+    if sys.platform == "win32":
+        return QColor(0, 0, 0, 0), QColor(0, 0, 0, 0)
+    return QColor(249, 249, 251, 200), QColor(0, 0, 0, 0)
 
 
 def banner_stops() -> tuple[QColor, QColor]:

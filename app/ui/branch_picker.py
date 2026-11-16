@@ -9,8 +9,9 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QDialog
 
-from qfluentwidgets import SubtitleLabel
+from qfluentwidgets import CaptionLabel, SubtitleLabel
 
+from app.domain.account_health import HEALTH_LABEL, account_status
 from app.ui.combo import ComboBox
 from app.ui.dialogs import FluentPanelDialog
 
@@ -19,7 +20,7 @@ class BranchPickerDialog(FluentPanelDialog):
     """选中支部后 accept()，调用方从 chosen 取账号名。"""
 
     def __init__(self, accounts: list[dict], parent: QObject | None = None,
-                 current: str = ""):
+                 current: str = "", note: str = ""):
         super().__init__(parent)
         # 必须是独立窗口：基类把 FramelessWindowHint 设成唯一标志位，弹窗会退化成
         # 父窗口里的普通子控件。账号网页窗口里是原生网页图层（QWebEngineView），
@@ -32,6 +33,8 @@ class BranchPickerDialog(FluentPanelDialog):
         self.widget.setMinimumWidth(420)
         self.viewLayout.setSpacing(10)
         self.viewLayout.addWidget(SubtitleLabel("访问支部", self.widget))
+        if note:
+            self.viewLayout.addWidget(CaptionLabel(note, self.widget))
 
         self.combo = ComboBox(self.widget)
         for acc in accounts:
@@ -39,6 +42,10 @@ class BranchPickerDialog(FluentPanelDialog):
             if not user:
                 continue
             label = str(acc.get("remark") or user)
+            # 状态异常的账号也列出来：网页端还能手动登录恢复，标在后面别让人选错
+            status = account_status(acc)
+            if status and status not in ("ok", "unknown"):
+                label += f"（{HEALTH_LABEL.get(status, '状态异常').split('（')[0]}）"
             self.combo.addItem(f"{label}（{user}）", userData=user)
         index = self.combo.findData(current)
         if index >= 0:
@@ -56,12 +63,13 @@ class BranchPickerDialog(FluentPanelDialog):
 
 
 def pick_branch(accounts: list[dict], parent: QObject | None,
-                on_pick, current: str = "") -> BranchPickerDialog | None:
+                on_pick, current: str = "", note: str = ""
+                ) -> BranchPickerDialog | None:
     """非模态弹出；选中后回调 on_pick(账号名)。没有账号时返回 None。"""
     usable = [a for a in accounts if a.get("userName")]
     if not usable:
         return None
-    dlg = BranchPickerDialog(usable, parent, current)
+    dlg = BranchPickerDialog(usable, parent, current, note)
     picked: list[str] = []
 
     def _deliver():
