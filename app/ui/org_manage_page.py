@@ -21,7 +21,6 @@ from qfluentwidgets import (
     CardWidget,
     FluentIcon as FIF,
     IconWidget,
-    IndeterminateProgressRing,
     InfoBar,
     PrimaryPushButton,
     PrimaryToolButton,
@@ -42,8 +41,11 @@ from app.domain.check_rules import (
 from app.domain.org_manage import (
     SOURCE_LABEL,
     SYSTEM_FIELDS,
+    STATUS_FILTERS,
+    STATUS_LABEL,
     BranchNode,
     MemberView,
+    branch_status,
     build_branches,
     filter_members,
 )
@@ -52,12 +54,14 @@ from app.services import login_gate, store
 from app.services.api import SiteClient
 from app.ui.anim import animate_expand, fade_in, value_animation
 from app.ui.charts import BarRowWidget
+from app.ui.combo import ComboBox
 from app.ui import palette as P
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.export_flow import start_export
-from app.ui.page import (BatchedBuild, CardRow, FluentPage, PageBanner, PageHeader,
-                         banner_text_colors, chevron_icon, note_label,
-                         set_tip, section_title, theme_font)
+from app.ui.page import (BatchedBuild, BusyOverlay, CardRow, FluentPage,
+                         PageBanner, PageHeader, banner_text_colors,
+                         chevron_icon, note_label, set_tip, section_title,
+                         theme_font)
 
 SOURCE_COLOR = P.SOURCE
 KIND_COLOR = P.KIND
@@ -299,6 +303,7 @@ class OrgManagePage(FluentPage):
         self._progress_total = 0
         self._stopped = False
         self._workers: list = []
+        self._busy: BusyOverlay | None = None  # 首次加载遮罩，卡片分批建完才收
         self._branches: list[BranchNode] = []
         self._stats_cache: dict = {}
         self._stats = {"local": 0, "system": 0, "both": 0}
@@ -337,6 +342,15 @@ class OrgManagePage(FluentPage):
         self.sys_only.setChecked(True)
         set_tip(self.sys_only, "显示全部团员；关掉只看系统名单")
         self.sys_only.toggled.connect(lambda *_: self._rebuild())
+
+        # 状态筛选：全部 / 正常 / 异常 / 欠缴，与卡片左侧色条同一套判定
+        self.status_combo = ComboBox()
+        for key in STATUS_FILTERS:
+            self.status_combo.addItem(STATUS_LABEL[key], userData=key)
+        self.status_combo.setFixedWidth(104)
+        set_tip(self.status_combo, "只看正常、异常或欠缴的支部")
+        self.status_combo.currentIndexChanged.connect(lambda *_: self._rebuild())
+
         self.sync_btn = PrimaryPushButton(FIF.SYNC, "同步数据")
         set_tip(self.sync_btn, "同步系统数据：刷新成员、站内信与组织状况")
         self.sync_btn.clicked.connect(self._sync)
@@ -345,6 +359,7 @@ class OrgManagePage(FluentPage):
         set_tip(self.export_btn, "导出数据")
         self.export_btn.clicked.connect(lambda: start_export(self))
         # 功能按钮统一落在 banner 右下角（不居中）；详情态由 _set_toolbar 收起
+        self.header.add_control(self.status_combo)
         self.header.add_control(self.sys_only)
         self.header.add_control(self.export_btn)
         self.header.add_control(self.sync_btn)
@@ -371,25 +386,51 @@ class OrgManagePage(FluentPage):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._place_banner()
+        self._place_busy()
 
     def _place_banner(self):
         """头图几何：铺满页面宽度、贴顶，跟随窗口宽度变化。"""
         if getattr(self, "header", None) is not None:
             self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
 
+    def _place_busy(self):
+        if self._busy is None:
+            return
+        top = PageBanner.HEIGHT
+        self._busy.setGeometry(0, top, self.viewport().width(),
+                               max(0, self.viewport().height() - top))
+        self._busy.raise_()
+
+    def _show_busy(self, text: str = "正在加载组织数据…"):
+        if self._busy is None:
+            self._busy = BusyOverlay(self, text)
+        self._busy.set_text(text)
+        self._place_busy()
+        self._busy.ring.start()
+        self._busy.show()
+        self._busy.raise_()
+
+    def _hide_busy(self):
+        if self._busy is None:
+            return
+        self._busy.ring.stop()
+        self._busy.hide()
+
     def showEvent(self, e):
         super().showEvent(e)
         self._place_banner()
+        self._place_busy()
         import time
 
         now = time.monotonic()
         # 已经有树就别每次切页都重算：30 秒同步会自己刷新，切页只负责显示。
         # 原来 2 秒就过期，切回来必然清空重建，卡片一批批长出来，看着就是闪。
         if not self._branches or now - getattr(self, "_refreshed_at", 0) > 300:
+            # 只有首次数据还没落地时铺加载页；后台静默刷新不打扰正在看的列表
+            if not self._branches:
+                self._show_busy()
             self.refresh()
             self._refreshed_at = now
-            if not self._branches:
-                self._show_loading_feed()  # 首帧先给「正在加载」，不要空白
         detail = bool(self._detail_code)
         self._set_nav(detail)
         self.feed_box.setVisible(not detail)
@@ -429,6 +470,7 @@ class OrgManagePage(FluentPage):
     def _set_toolbar(self, detail: bool):
         """详情里已有大标题和三列统计，工具条不再重复一遍人数。"""
         self.stat_label.setVisible(not detail)
+        self.status_combo.setVisible(not detail)
         self.sys_only.setVisible(not detail)
         self.export_btn.setVisible(not detail)
         self.sync_btn.setVisible(not detail)
@@ -508,6 +550,9 @@ class OrgManagePage(FluentPage):
         def _on_fail(msg):
             self._refresh_running = False
             self._refresh_callbacks.clear()
+            self._hide_busy()
+            if not self._branches and not self.feed_lay.count():
+                self.feed_lay.addWidget(self._empty_state("组织数据加载失败"))
             InfoBar.warning("组织树刷新失败", msg, duration=4000, parent=self)
 
         worker.ok.connect(_on_ok)
@@ -541,9 +586,10 @@ class OrgManagePage(FluentPage):
         # 卡片会一批批重长出来。详情态不跳过，成员数字可能变了。
         digest = self._feed_digest_of(self._branches, stats)
         if digest == getattr(self, "_feed_digest", None) and not self._detail_code:
+            self._hide_busy()
             return
         self._feed_digest = digest
-        self._rebuild()
+        self._rebuild(on_done=self._hide_busy)
 
     @staticmethod
     def _feed_digest_of(branches, stats) -> tuple:
@@ -601,15 +647,21 @@ class OrgManagePage(FluentPage):
                 widget.hide()
                 widget.deleteLater()
 
-    def _rebuild(self):
+    def _rebuild(self, on_done=None):
         self._feed_builder.cancel()
         self._clear(self.feed_lay)
         shown = filter_members(self._branches, self._search,
                                not self.sys_only.isChecked())
+        status = self.status_combo.currentData()
+        if status and status != "all":
+            shown = [b for b in shown
+                     if branch_status(self._branch_stats(b)) == status]
         shown_count = sum(len(b.members) for b in shown)
         self.stat_label.setText(self._stat_text(shown_count))
         if not shown:
             self.feed_lay.addWidget(self._empty_state("没有匹配的支部"))
+            if on_done is not None:
+                on_done()
             return
         if self._detail_code:
             b = next((n for n in self._branches if n.code == self._detail_code), None)
@@ -620,8 +672,10 @@ class OrgManagePage(FluentPage):
                 self._set_nav(False)
                 self.feed_box.setVisible(True)
                 self.detail_box.setVisible(False)
-        # 卡片分批建：首批同步（首帧就有内容），其余按帧补齐
-        self._feed_builder.start(shown, lambda b: self.feed_lay.addWidget(self._feed_card(b)))
+        # 卡片分批建：首批同步（首帧就有内容），其余按帧补齐；全部建完才收加载页
+        self._feed_builder.start(shown,
+                                 lambda b: self.feed_lay.addWidget(self._feed_card(b)),
+                                 on_done=on_done)
 
     @staticmethod
     def _empty_state(text: str) -> QWidget:
@@ -637,36 +691,20 @@ class OrgManagePage(FluentPage):
         box.setMinimumHeight(160)
         return box
 
-    def _show_loading_feed(self):
-        """首次进入且还没有支部数据：先铺一个「正在加载」，避免切页时一片空白。"""
-        self._feed_builder.cancel()
-        self._clear(self.feed_lay)
-        box = QWidget()
-        lay = QVBoxLayout(box)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.setSpacing(10)
-        ring = IndeterminateProgressRing(box)
-        ring.setFixedSize(36, 36)
-        ring.start()
-        lay.addWidget(ring, 0, Qt.AlignmentFlag.AlignHCenter)
-        lay.addWidget(note_label("正在加载组织数据…"), 0, Qt.AlignmentFlag.AlignHCenter)
-        box.setMinimumHeight(200)
-        self.feed_lay.addWidget(box)
-
     # ---------- 支部卡片 ----------
 
     def _feed_card(self, b: BranchNode) -> QWidget:
         st = self._branch_stats(b)
-        if not st["system"]:
-            accent = P.MUTED
-        elif st["abnormal"]:
-            accent = P.DANGER
-        elif st["by_kind"]["fees"]:
-            accent = P.KIND["fees"]
-        else:
-            accent = P.OK
+        # 色条与筛选共用一套互斥判定：异常优先于欠缴，纯欠缴才是蓝色。
+        # 旧写法先判 st["abnormal"]，而欠缴也在 abnormal 里，欠缴蓝色从不可达。
+        accent = {
+            "none": "muted",
+            "abnormal": "danger",
+            "fees": "fees",
+            "normal": "success",
+        }[branch_status(st)]
 
-        card = BranchCard(accent)
+        card = BranchCard(P.fg(accent))
         card.setCursor(Qt.CursorShape.PointingHandCursor)
         h = QHBoxLayout(card)
         h.setContentsMargins(24, 14, 18, 14)
@@ -684,13 +722,13 @@ class OrgManagePage(FluentPage):
             names = [m.name for m in b.members if m.name]
             if names:
                 label = "、".join(names[:3]) + (f" 等 {len(names)} 人" if len(names) > 3 else "")
-                h.addWidget(_pill(label, "#6b7280"), 0, Qt.AlignmentFlag.AlignVCenter)
+                h.addWidget(_pill(label, P.solid("fg3")), 0, Qt.AlignmentFlag.AlignVCenter)
 
         h.addLayout(self._metric(str(st["total"]), "团员"), 0)
         h.addLayout(self._metric(str(st["abnormal"]), "异常",
-                                 P.DANGER if st["abnormal"] else P.MUTED), 0)
+                                 "danger" if st["abnormal"] else "muted"), 0)
         h.addLayout(self._metric(str(st["by_kind"]["fees"]), "欠缴",
-                                 P.KIND["fees"] if st["by_kind"]["fees"] else P.MUTED), 0)
+                                 "fees" if st["by_kind"]["fees"] else "muted"), 0)
         h.addSpacing(24)  # 给自绘箭头留出位置
 
         for w in card.findChildren(QWidget):
@@ -699,13 +737,13 @@ class OrgManagePage(FluentPage):
         return card
 
     @staticmethod
-    def _metric(value: str, label: str, color: str = P.BRAND) -> QVBoxLayout:
+    def _metric(value: str, label: str, role: str = "brand") -> QVBoxLayout:
         col = QVBoxLayout()
         col.setSpacing(1)
         col.setContentsMargins(12, 0, 12, 0)
         num = theme_font(BodyLabel(value), 19, int(QFont.Weight.DemiBold))
-        num.setTextColor(QColor(color) if isDarkTheme() else QColor(color).darker(110),
-                         QColor(color) if isDarkTheme() else QColor(color).darker(110))
+        c = P.fg(role)
+        num.setTextColor(c, c)
         col.addWidget(num, 0, Qt.AlignmentFlag.AlignHCenter)
         col.addWidget(note_label(label), 0, Qt.AlignmentFlag.AlignHCenter)
         return col
@@ -799,10 +837,10 @@ class OrgManagePage(FluentPage):
         nums = QHBoxLayout()
         nums.setSpacing(0)
         blocks = []
-        for i, (num, label, color) in enumerate((
-            (st["total"], "团员总数", P.BRAND),
-            (st["abnormal"], "异常团员", P.DANGER),
-            (st["by_kind"]["fees"], "欠缴团费", P.KIND["fees"]),
+        for i, (num, label, role) in enumerate((
+            (st["total"], "团员总数", "brand"),
+            (st["abnormal"], "异常团员", "danger"),
+            (st["by_kind"]["fees"], "欠缴团费", "fees"),
         )):
             if i:
                 line = QWidget()
@@ -813,8 +851,8 @@ class OrgManagePage(FluentPage):
             block = QVBoxLayout()
             block.setSpacing(2)
             n_lbl = theme_font(BodyLabel("0"), 28, int(QFont.Weight.DemiBold))
-            n_lbl.setTextColor(QColor(color) if isDarkTheme() else QColor(color).darker(110),
-                               QColor(color) if isDarkTheme() else QColor(color).darker(110))
+            c = P.fg(role)
+            n_lbl.setTextColor(c, c)
             block.addWidget(n_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
             block.addWidget(note_label(label), 0, Qt.AlignmentFlag.AlignHCenter)
             nums.addLayout(block, 1)

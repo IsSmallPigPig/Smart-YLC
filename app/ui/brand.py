@@ -24,10 +24,8 @@ from app.ui.hidpi import hidpi_canvas, scale_to
 def assets_dir() -> Path:
     """资源目录：源码里是 app/assets，打包后在可执行文件旁边。
 
-    三种落点都要认：
-    - PyInstaller：sys._MEIPASS/assets
-    - Nuitka standalone：<可执行文件目录>/app/assets（macOS 在 .app/Contents/MacOS 下）
-    - 源码：app/ui 的上一级 → app/assets"""
+    落点按优先级：PyInstaller 的 sys._MEIPASS/assets → 可执行文件旁的 assets →
+    源码里 app/ui 的上一级。后几项作兜底，正常打包只走第一项。"""
     candidates = []
     frozen = getattr(sys, "_MEIPASS", None)
     if frozen:

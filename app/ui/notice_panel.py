@@ -26,6 +26,7 @@ from qfluentwidgets import (
 )
 
 from app.services.notices import LEVEL_ISSUE, Notice
+from app.ui import palette as P
 from app.ui.page import chevron_icon, note_label, set_tip, theme_font
 
 HEADER_H = 48
@@ -50,7 +51,7 @@ def _divider() -> QColor:
 
 def _title_color() -> QColor:
     """错误态标题色：与 InfoBar 的 ERROR 文字同色系，不再是整块红底。"""
-    return QColor("#FF99A4") if isDarkTheme() else QColor("#C42B1C")
+    return P.fg("danger")
 
 
 class _NoticeRow(QWidget):

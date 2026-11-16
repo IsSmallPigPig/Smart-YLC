@@ -101,7 +101,7 @@ class Toast(QWidget):
         self.title_lbl.setFont(f)
         text.addWidget(self.title_lbl)
         self.body_lbl = _Elided(body, self)
-        self.body_lbl.setTextColor(QColor(P.MUTED), QColor("#b9bcc4"))
+        self.body_lbl.setTextColor(*P.text_colors("fg2"))
         text.addWidget(self.body_lbl)
         if not body:
             self.body_lbl.hide()
@@ -109,7 +109,7 @@ class Toast(QWidget):
 
         if has_action:
             self.hint = CaptionLabel("查看", self)
-            self.hint.setTextColor(QColor(P.BRAND), QColor("#8ab4ff"))
+            self.hint.setTextColor(*P.text_colors("brand"))
             box.addWidget(self.hint, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.close_btn = TransparentToolButton(FIF.CLOSE, self)

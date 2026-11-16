@@ -1,30 +1,80 @@
-"""统一配色中心。
+"""统一配色中心（Fluent 2）。
 
-把散落在各页面的高饱和橙 / 紫（#ef6c00、#c2410c、#8e24aa、#C026D3 之类）收拢到一处，
-换成冷色系、低饱和、彼此协调的色阶。深浅主题下配白字都清晰，在深色背景上也醒目。
+语义色与中性文字色按 Fluent 2 的明暗两套值集中在这里；异常、警告、成功、
+信息等状态在两种主题下用各自对应的色值，不再靠 .darker() 猜一个暗色版本。
 
 用法：
-    from app.ui import palette as P
-    P.KIND["fees"]            # 欠缴团费
-    P.DANGER                  # 异常 / 错误
+    P.fg("danger")                 # 当前主题下的 QColor，给画笔/数字用
+    P.text_colors("danger")        # (浅色, 深色) 两个 QColor，给 setTextColor 用
+    P.solid("danger")              # 当前主题下的 hex 字符串，给自绘标签用
+    P.KIND["fees"]                 # 分类色（非语义色，用于区分异常类别）
+
+分类色 KIND 刻意保持四种不同色相：Fluent 2 规定语义色只用于传达状态，
+不能拿四种语义色当装饰给类别上色，否则「红色=异常」的约定会被稀释。
+
+Fluent 2 语义色参考：https://fluent2.microsoft.design/color
 """
 
-# 语义 / 品牌
-BRAND = "#2563eb"          # 主蓝：链接、主按钮、图表主色、团员数
-BRAND_SOFT = "#3b82f6"
-OK = "#16a34a"             # 正常 / 成功
-DANGER = "#dc2626"         # 异常 / 错误（比旧 #c62828 更干净）
-WARNING = "#b45309"        # 需关注（深琥珀，非刺眼橙）
-MUTED = "#6b7280"          # 次要 / 占位 / 无数据
-TRANSFER = BRAND           # 转接申请
+from __future__ import annotations
 
-# 异常分类色阶：冷色系、彼此区分但不刺眼；原橙色 / 紫色在此统一替换
-KIND = {
-    "identity": "#2563eb",   # 信息错误
-    "report":   "#0891b2",   # 没有报道
-    "archive":  "#0d9488",   # 没有档案
-    "fees":     "#4f7cac",   # 欠缴团费（原紫色 → 钢蓝）
+from PySide6.QtGui import QColor
+from qfluentwidgets import isDarkTheme
+
+# 语义色 / 中性文字色 / 品牌色：(浅色, 深色)
+# 中性色对应 Fluent 的 Neutral Foreground 1/2/3。
+# fees 沿用原钢蓝分类色的亮版，保证深色主题下欠缴数字读得清。
+ROLES: dict[str, tuple[str, str]] = {
+    "success": ("#0F7B0F", "#6CCB5F"),
+    "warning": ("#9D5D00", "#FCE100"),
+    "danger": ("#C42B1C", "#FF99A4"),
+    "info": ("#0078D4", "#4CC2FF"),
+    "brand": ("#2563EB", "#8AB4FF"),
+    "fees": ("#4F7CAC", "#9DC6EF"),
+    "fg": ("#242424", "#FFFFFF"),
+    "fg2": ("#424242", "#C8C8C8"),
+    "fg3": ("#616161", "#8A8A8A"),
+    "muted": ("#616161", "#8A8A8A"),
 }
 
-# 数据来源（本地 / 系统 / 双方都有）
-SOURCE = {"local": "#6b7280", "system": "#2563eb", "both": "#16a34a"}
+# 兼容旧调用：实心徽章与图表条用的是饱和底 + 白字，两种主题都取浅色档的饱和值。
+# 这里换成 Fluent 2 对应语义色的饱和档（白字对比度足够），不再是 Tailwind 色。
+BRAND = ROLES["brand"][0]
+BRAND_SOFT = "#3B82F6"
+OK = ROLES["success"][0]
+DANGER = ROLES["danger"][0]
+WARNING = ROLES["warning"][0]
+MUTED = ROLES["muted"][0]
+TRANSFER = BRAND
+
+# 异常分类色阶：四种色相区分不同异常类别，属于分类色而非语义色。
+KIND = {
+    "identity": "#2563EB",
+    "report": "#0891B2",
+    "archive": "#0D9488",
+    "fees": "#4F7CAC",
+}
+
+SOURCE = {"local": MUTED, "system": BRAND, "both": OK}
+
+
+def pair(role: str) -> tuple[str, str]:
+    """返回某个角色的 (浅色, 深色) hex。角色名写错会立即暴露，不静默回退。"""
+    return ROLES[role]
+
+
+def text_colors(role: str) -> tuple[QColor, QColor]:
+    """给 CaptionLabel/BodyLabel.setTextColor 用的 (浅色, 深色) 颜色对。"""
+    light, dark = ROLES[role]
+    return QColor(light), QColor(dark)
+
+
+def fg(role: str) -> QColor:
+    """当前主题下单个 QColor，给画笔、数字、表格前景用。"""
+    light, dark = ROLES[role]
+    return QColor(dark if isDarkTheme() else light)
+
+
+def solid(role: str) -> str:
+    """当前主题下的 hex 字符串，给自绘标签 tint 用。"""
+    light, dark = ROLES[role]
+    return dark if isDarkTheme() else light

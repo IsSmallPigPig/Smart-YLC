@@ -14,26 +14,36 @@ def _dry_run():
                           cwd=ROOT, capture_output=True, text=True, check=True).stdout
 
 
-def test_build_uses_nuitka_standalone():
+def test_build_uses_pyinstaller_onedir():
     out = _dry_run()
-    assert "-m nuitka" in out
-    assert "--standalone" in out
-    assert "--enable-plugin=pyside6" in out
-    assert "pyinstaller" not in out.lower()
+    assert "-m PyInstaller" in out
+    assert "--onedir" in out
+    assert "--windowed" in out
+    assert "nuitka" not in out.lower()
 
 
 def test_build_includes_assets_and_qfluentwidgets():
     out = _dry_run()
-    assert "--include-data-dir=app/assets=app/assets" in out
-    assert "--include-package-data=qfluentwidgets" in out
+    assert "--collect-all=qfluentwidgets" in out
+    assert "--add-data=app/assets" in out
     assert "main.py" in out.splitlines()[-1]
+
+
+def test_build_does_not_exclude_pymupdf():
+    # pymupdf 由 PyInstaller 的 hook 收集原生库；一旦再加 --nofollow/--exclude
+    # 就会退回 Nuitka 那套「排除后运行期缺模块」的老问题
+    out = _dry_run().lower()
+    assert "nofollow" not in out
+    assert "exclude-module" not in out
+    assert "pymupdf" not in out  # 不需要手写，交给 hook
 
 
 def test_build_targets_current_platform():
     out = _dry_run()
     if sys.platform == "win32":
-        assert "--windows-console-mode=disable" in out
-        assert "--windows-icon-from-ico=" in out
+        assert "--icon=" in out and "smart-ylc.ico" in out
+        assert "--version-file=" in out
     elif sys.platform == "darwin":
-        assert "--macos-create-app-bundle" in out
-        assert "--macos-signed-app-name=com.smallylc.smartyouth" in out
+        assert "--osx-bundle-identifier=com.smallylc.smartyouth" in out
+        assert "--hidden-import=UserNotifications" in out
+        assert "SmartYouth.icns" in out

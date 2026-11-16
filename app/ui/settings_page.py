@@ -55,7 +55,7 @@ from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, RuleError, describe_code
 from app.domain.transfer import is_graduated
 from app.services import notify_schedule, store
-from app.domain.account_health import HEALTH_COLOR, HEALTH_LABEL
+from app.domain.account_health import HEALTH_LABEL, HEALTH_ROLE
 
 # 表格里用的短标签：完整说明（含处理办法）放 tooltip
 HEALTH_SHORT = {"captcha": "需验证码", "cooldown": "登录冷却"}
@@ -305,21 +305,19 @@ class SettingsPage(FluentPage):
                                  icon=FIF.ADD,
                                  control=controls(self.add_open_btn)))
 
-        self.file_btn = DropDownPushButton(FIF.LIBRARY, "导入导出")
-        set_tip(self.file_btn, "导入账号或系统备份，也可以导出备份")
+        # 账号表格导入只管账号本身；系统备份（整份设置）单独放到「系统备份」卡片，
+        # 免得它挂在「账号文件」下面让人误以为只备份支部账号。
+        self.file_btn = DropDownPushButton(FIF.LIBRARY, "账号表格")
+        set_tip(self.file_btn, "导入账号表格或下载账号模板")
         self.file_menu = RoundMenu(parent=self.file_btn)
         act_sheet = Action(FIF.DOCUMENT, "从表格文件中导入")
         act_sheet.triggered.connect(self._import_accounts)
-        act_backup = Action(FIF.CLOUD_DOWNLOAD, "从系统备份中导入")
-        act_backup.triggered.connect(self._import_config_json)
         act_template = Action(FIF.DOWNLOAD, "下载账号模板")
         act_template.triggered.connect(self._download_account_template)
-        act_export = Action(FIF.SHARE, "导出系统备份")
-        act_export.triggered.connect(self._export_config_json)
-        for action in (act_sheet, act_backup, act_template, act_export):
+        for action in (act_sheet, act_template):
             self.file_menu.addAction(action)
         self.file_btn.setMenu(self.file_menu)
-        row(acc_card, SettingRow("账号文件", desc="表格导入或备份恢复",
+        row(acc_card, SettingRow("账号表格", desc="从 xlsx 导入或下载模板",
                                  icon=FIF.SAVE_AS,
                                  control=controls(self.file_btn)),
             last=True)
@@ -474,6 +472,24 @@ class SettingsPage(FluentPage):
                                 icon=FIF.POWER_BUTTON,
                                 control=controls(self.autostart_box, uniform=False),
                                 separator=False))
+
+        # ── 系统备份 ──
+        # 这里备份/恢复的是整份 config.json：账号、名单、工作区、通知、外观与编号规则
+        # 全在里面，换机时整份搬走。单独成卡就是为了不让人误以为只备份支部账号。
+        backup_card = group("系统备份", False,
+                            "导出或恢复全部软件设置，换机可整份搬走")
+        self.backup_export_btn = PushButton(FIF.SHARE, "导出备份")
+        set_tip(self.backup_export_btn, "把全部设置导出成一个 JSON 文件")
+        self.backup_export_btn.clicked.connect(self._export_config_json)
+        self.backup_import_btn = PushButton(FIF.CLOUD_DOWNLOAD, "恢复备份")
+        set_tip(self.backup_import_btn, "用备份文件替换当前全部设置")
+        self.backup_import_btn.clicked.connect(self._import_config_json)
+        row(backup_card, SettingRow(
+            "全部设置",
+            desc="账号、名单、工作区、通知、外观与编号规则一次带走",
+            icon=FIF.SAVE_AS,
+            control=controls(self.backup_import_btn, self.backup_export_btn)),
+            last=True)
 
         from app.ui.about_card import AboutCard
 
@@ -1129,9 +1145,7 @@ class SettingsPage(FluentPage):
         InfoBar.success("模板已保存", f"{path}，{n} 行示例", duration=5000, parent=self)
 
     def _export_config_json(self):
-        """导出当前系统配置为 JSON 文件（config.json 的完整快照，含账号密码）。"""
-        from datetime import datetime
-
+        """导出整份设置为 JSON（config.json 完整快照，含账号密码与全部设置）。"""
         from PySide6.QtWidgets import QFileDialog
 
         import json
@@ -1139,7 +1153,7 @@ class SettingsPage(FluentPage):
         from app.services.export_data import default_name as export_name
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出系统配置", export_name("系统配置", ".json"), "JSON (*.json)")
+            self, "导出系统备份", export_name("系统备份", ".json"), "JSON (*.json)")
         if not path:
             return
         cfg = store.load()
@@ -1151,18 +1165,19 @@ class SettingsPage(FluentPage):
             return
         n = len(cfg.get("accounts", []))
         InfoBar.success(
-            "配置已导出",
-            f"{path}（{n} 个账号等全部配置；文件含密码，请妥善保管）",
+            "备份已导出",
+            f"{path}（{n} 个账号，以及名单、工作区、通知、外观与编号规则等全部设置；"
+            f"文件含密码，请妥善保管）",
             duration=6000, parent=self)
 
     def _import_config_json(self):
-        """从导出的 JSON 恢复整份配置：先看清要覆盖什么，再替换并即时重载。"""
+        """从备份恢复整份设置：先看清要覆盖什么，再替换并即时重载。"""
         from PySide6.QtWidgets import QFileDialog
 
         import json
 
         path, _ = QFileDialog.getOpenFileName(
-            self, "导入系统配置", "", "JSON (*.json)")
+            self, "恢复系统备份", "", "JSON (*.json)")
         if not path:
             return
         try:
@@ -1172,18 +1187,20 @@ class SettingsPage(FluentPage):
             InfoBar.error("读取失败", str(e), duration=6000, parent=self)
             return
         if not isinstance(cfg, dict) or not isinstance(cfg.get("accounts"), list):
-            InfoBar.error("不是有效的配置文件",
-                          "这个 JSON 里没有 accounts 列表，不像是本程序导出的系统配置。",
-                          duration=6000, parent=self)
+            InfoBar.error("不是有效的备份文件",
+                          "这个 JSON 里没有 accounts 列表，不像是本程序导出的系统备份。"
+                          "请到「系统备份 → 导出备份」重新导出一份再试。",
+                          duration=8000, parent=self)
             return
 
         accounts = cfg.get("accounts") or []
         rosters = cfg.get("rosters") or {}
         dialogs.confirm(
-            self.window(), "导入系统配置",
-            f"将用这份文件替换当前配置：{len(accounts)} 个账号、{len(rosters)} 份名单，"
-            f"以及工作区、通知、外观与编号规则。\n当前配置会先另存一份备份。",
-            yes="导入", cancel="取消",
+            self.window(), "恢复系统备份",
+            f"将用这份备份替换当前全部设置：{len(accounts)} 个账号、{len(rosters)} 份名单，"
+            f"以及工作区、通知、明暗模式、窗口材质、首页头图与编号规则。\n"
+            f"当前设置会先另存一份备份。",
+            yes="恢复", cancel="取消",
             on_result=lambda ok: ok and self._do_import_config(cfg))
 
     def _do_import_config(self, cfg: dict):
@@ -1223,7 +1240,7 @@ class SettingsPage(FluentPage):
 
         n = len(cfg.get("accounts") or [])
         extra = f"；原配置备份在 {backup}" if backup else ""
-        InfoBar.success("配置已导入", f"{n} 个账号与名单、外观设置已生效{extra}",
+        InfoBar.success("备份已恢复", f"{n} 个账号，以及名单、工作区、通知与外观等全部设置已生效{extra}",
                         duration=8000, parent=self)
 
     def _apply_imported_look(self):
@@ -1375,7 +1392,7 @@ class SettingsPage(FluentPage):
             status_item = QTableWidgetItem(status_text)
             status_item.setFlags(self.READONLY_FLAGS)
             if graduated:
-                status_item.setForeground(QColor(P.WARNING))
+                status_item.setForeground(P.fg("warning"))
             self.table.setItem(i, 5, status_item)
             h = acc.get("health") or {}
             status, msg = h.get("status", "unknown"), h.get("message", "")
@@ -1383,7 +1400,7 @@ class SettingsPage(FluentPage):
             # 表格里只放短标签，长解释进 tooltip——否则这一列要么被截断要么把后面挤没
             health_item = QTableWidgetItem(HEALTH_SHORT.get(status, full))
             health_item.setFlags(self.READONLY_FLAGS)
-            health_item.setForeground(QColor(HEALTH_COLOR.get(status, "#9e9e9e")))
+            health_item.setForeground(P.fg(HEALTH_ROLE.get(status, "muted")))
             set_tip(health_item, full if status == "ok"
                                    else f"{full}\n点这一格用内嵌浏览器打开，手动登录一次即可恢复")
             self.table.setItem(i, 6, health_item)

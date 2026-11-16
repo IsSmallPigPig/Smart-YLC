@@ -21,17 +21,12 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import CardWidget, FluentIcon as FIF
-from qfluentwidgets import (
-    CaptionLabel,
-    IndeterminateProgressRing,
-    SubtitleLabel,
-    TitleLabel,
-    isDarkTheme,
-)
+from qfluentwidgets import SubtitleLabel, TitleLabel, isDarkTheme
 
 from app.ui.anim import fade_out
 from app.ui.charts import BarRowWidget, ProgressDonut
-from app.ui.page import FluentPage, banner_stops, note_label
+from app.ui.page import (BusyOverlay, FluentPage, banner_stops, note_label,
+                         page_bg_color)
 from app.ui.widgets import StatTile
 from app.ui import palette as P
 
@@ -52,17 +47,6 @@ KIND_CHARTS = (
     ("archive", "没有档案", P.KIND["archive"]),
     ("fees", "欠缴团费", P.KIND["fees"]),
 )
-
-
-def page_bg_color() -> QColor:
-    """关闭材质时窗口绘制用的底色（窗口底色与 StackedWidget 半透明白叠加后）。"""
-    base = QColor(32, 32, 32) if isDarkTheme() else QColor(240, 244, 249)
-    overlay = QColor(255, 255, 255, 8 if isDarkTheme() else 128)
-    return QColor(
-        base.red() + (overlay.red() - base.red()) * overlay.alpha() // 255,
-        base.green() + (overlay.green() - base.green()) * overlay.alpha() // 255,
-        base.blue() + (overlay.blue() - base.blue()) * overlay.alpha() // 255,
-    )
 
 
 class Banner(QWidget):
@@ -142,27 +126,14 @@ class Banner(QWidget):
         painter.drawImage(0, 0, layer)
 
 
-class LoadingOverlay(QWidget):
-    """首页加载过渡：概览快照在后台跑时，先用这个遮罩盖住尚未就绪的内容，
-    挡住快照延迟和布局未稳造成的错位；快照回来后再淡出露出内容。"""
+class LoadingOverlay(BusyOverlay):
+    """首页加载过渡：概览快照在后台跑时盖住尚未就绪的内容，快照回来后再淡出。"""
 
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        lay = QVBoxLayout(self)
+        super().__init__(parent, "正在加载概览…")
+        lay = self.layout()
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(14)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.ring = IndeterminateProgressRing(self)
-        self.ring.setFixedSize(40, 40)
-        lay.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.label = CaptionLabel("正在加载概览…")
-        lay.addWidget(self.label, 0, Qt.AlignmentFlag.AlignHCenter)
-
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.fillRect(self.rect(), page_bg_color())
-        super().paintEvent(e)
 
 
 class HomePage(FluentPage):

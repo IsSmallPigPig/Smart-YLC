@@ -27,7 +27,6 @@ from qfluentwidgets import (
     CardWidget,
     FluentIcon as FIF,
     IconWidget,
-    IndeterminateProgressRing,
     InfoBar,
     PrimaryPushButton,
     PushButton,
@@ -48,35 +47,10 @@ from app.services import store
 from app.services.workspace import (load_pending, load_workspace_dirs,
                                     remove_pending, save_workspace_dirs)
 from app.ui import palette as P
-from app.ui.page import (BatchedBuild, CollapsibleCard, FluentPage, PageBanner,
-                         PageHeader, note_label, section_title, set_tip)
+from app.ui.page import (BatchedBuild, BusyOverlay, CollapsibleCard, FluentPage,
+                         PageBanner, PageHeader, note_label, page_bg_color,
+                         section_title, set_tip)
 from app.ui.widgets import PillLabel, StatusList
-
-# 页面背景色（与首页 LoadingOverlay 同源），用于加载遮罩铺底
-from app.ui.home_page import page_bg_color
-
-
-class _BusyOverlay(QWidget):
-    """加载遮罩：覆盖内容区，居中一个圆环 + 文案，避免渲染过程中闪屏。"""
-
-    def __init__(self, parent, text: str = "正在加载…"):
-        super().__init__(parent)
-        lay = QVBoxLayout(self)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.setSpacing(12)
-        self.ring = IndeterminateProgressRing(self)
-        self.ring.setFixedSize(40, 40)
-        self.ring.start()
-        lay.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.label = note_label(text)
-        lay.addWidget(self.label, 0, Qt.AlignmentFlag.AlignHCenter)
-
-    def set_text(self, text: str):
-        self.label.setText(text)
-
-    def paintEvent(self, _e):
-        p = QPainter(self)
-        p.fillRect(self.rect(), page_bg_color())
 
 
 class _DropZone(QWidget):
@@ -435,7 +409,7 @@ class UploadPage(FluentPage):
         self._branch_rows: dict[str, list[tuple[StatusList, int]]] = {}
         # 支部卡片分批建：档案多时一次性建几十个卡片会卡住界面（200 份约 580ms）
         self._branch_builder = BatchedBuild(self, batch=2)
-        self._busy: _BusyOverlay | None = None  # 加载遮罩（渲染/检查期间盖住内容，避免闪屏）
+        self._busy: BusyOverlay | None = None  # 加载遮罩（渲染/检查期间盖住内容，避免闪屏）
         self._drop_overlay: _DropOverlay | None = None
         self._dirs: list[str] = []          # 来源目录（配置文件里的 workspaceDirs）
         self._scans: list[FolderScan] = []  # 每个来源目录的扫描结果
@@ -492,12 +466,12 @@ class UploadPage(FluentPage):
         summary_lay.setSpacing(0)
         self.stat_values: dict[str, BodyLabel] = {}
         stat_defs = (
-            ("total", "档案", P.BRAND),
-            ("ready", "可上传", P.OK),
-            ("error", "异常", P.DANGER),
-            ("branches", "支部", P.MUTED),
+            ("total", "档案", "brand"),
+            ("ready", "可上传", "success"),
+            ("error", "异常", "danger"),
+            ("branches", "支部", "muted"),
         )
-        for index, (key, label, color) in enumerate(stat_defs):
+        for index, (key, label, role) in enumerate(stat_defs):
             if index:
                 line = QWidget(self.summary_card)
                 line.setFixedWidth(1)
@@ -512,7 +486,8 @@ class UploadPage(FluentPage):
             f.setPixelSize(20)
             f.setWeight(QFont.Weight.DemiBold)
             num.setFont(f)
-            num.setTextColor(QColor(color), QColor(color))
+            c = P.fg(role)
+            num.setTextColor(c, c)
             block.addWidget(num, 0, Qt.AlignmentFlag.AlignHCenter)
             block.addWidget(note_label(label), 0, Qt.AlignmentFlag.AlignHCenter)
             summary_lay.addLayout(block, 1)
@@ -580,7 +555,7 @@ class UploadPage(FluentPage):
     def _show_busy(self, text: str = "正在加载…"):
         """检查/渲染期间盖住内容区，避免空白与闪屏。"""
         if self._busy is None:
-            self._busy = _BusyOverlay(self, text)
+            self._busy = BusyOverlay(self, text)
         self._busy.set_text(text)
         self._place_busy()
         self._busy.ring.start()

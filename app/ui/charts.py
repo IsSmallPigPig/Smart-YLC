@@ -8,6 +8,8 @@ from PySide6.QtWidgets import QWidget
 
 from qfluentwidgets import isDarkTheme, qconfig
 
+from app.ui import palette as P
+
 
 def _bind_theme(widget: QWidget) -> None:
     """跟随 fluent 明暗主题。不能用 palette().window() 判断——页面滚动容器
@@ -59,8 +61,8 @@ class BarRowWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         dark = isDarkTheme()
-        fg = QColor("#e5e7eb") if dark else QColor("#111827")
-        dim = QColor("#9ca3af") if dark else QColor("#4b5563")
+        fg = P.fg("fg")
+        dim = P.fg("fg2")
         track = QColor(255, 255, 255, 28) if dark else QColor(0, 0, 0, 18)
 
         label_w, value_w = 76, 40
@@ -126,9 +128,9 @@ class ProgressDonut(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         dark = isDarkTheme()
-        fg = QColor("#e5e7eb") if dark else QColor("#111827")
+        fg = P.fg("fg")
         track = QColor(255, 255, 255, 30) if dark else QColor(0, 0, 0, 15)
-        accent = QColor("#0078d4")
+        accent = P.fg("brand")
 
         rect = self.rect().adjusted(10, 10, -10, -10)
         pen = QPen(track, 10)
@@ -157,7 +159,7 @@ class ProgressDonut(QWidget):
         p.drawText(QRect(0, top, self.width(), fm_num.height()),
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, self._text)
         p.setFont(sub_font)
-        dim = QColor("#9ca3af") if dark else QColor("#4b5563")
+        dim = P.fg("fg2")
         p.setPen(QPen(dim, 1))
         p.drawText(QRect(0, top + fm_num.height() + gap, self.width(), fm_sub.height()),
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, self._sub)

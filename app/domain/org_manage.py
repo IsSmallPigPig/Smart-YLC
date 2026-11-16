@@ -151,6 +151,28 @@ def build_branches(
     return sorted(branches.values(), key=sort_key)
 
 
+# 支部健康状态：与卡片左侧色条、组织管理页筛选共用同一套互斥判定。
+# 只有欠缴没有其它异常 → fees（蓝）；有信息错误/未报到/未建档等异常 → abnormal（红）；
+# 都没有 → normal（绿）；没有系统记录可判 → none（灰，不参与状态筛选）。
+STATUS_LABEL = {"all": "全部支部", "normal": "正常", "abnormal": "异常", "fees": "欠缴"}
+STATUS_FILTERS = ("all", "normal", "abnormal", "fees")
+
+
+def branch_status(stats: dict) -> str:
+    """从 _branch_stats 的结果判一个互斥状态：none/abnormal/fees/normal。
+
+    异常优先于欠缴：一个支部若既有信息错误又欠缴，算异常（红），避免同一支部
+    在「异常」「欠缴」两个筛选里重复出现。欠缴只在没有其它异常时单列成蓝色。"""
+    if not stats.get("system"):
+        return "none"
+    by_kind = stats.get("by_kind") or {}
+    if any(by_kind.get(k) for k in ("identity", "report", "archive")):
+        return "abnormal"
+    if by_kind.get("fees"):
+        return "fees"
+    return "normal"
+
+
 def filter_members(branches: list[BranchNode], search: str = "", system_only: bool = False) -> list[BranchNode]:
     """按关键词（姓名/手机号子串）与「仅显示系统名单」过滤；空支部剔除，结构不变。"""
     kw = (search or "").strip().lower()

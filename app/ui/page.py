@@ -25,7 +25,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
 from app.ui.hidpi import hidpi_canvas, ui_dpr
-from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, ScrollArea, StrongBodyLabel, TransparentToolButton, isDarkTheme, qconfig
+from app.ui import palette as P
+from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, IndeterminateProgressRing, ScrollArea, StrongBodyLabel, TransparentToolButton, isDarkTheme, qconfig
 
 PAGE_MARGINS = (32, 24, 32, 24)
 
@@ -65,14 +66,26 @@ def banner_text_colors() -> tuple[QColor, QColor]:
     return QColor("#12212e"), QColor("#33495e")
 
 
+def page_bg_color() -> QColor:
+    """关闭材质时窗口绘制用的底色（窗口底色与 StackedWidget 半透明白叠加后）。
+
+    首页加载页、上传检查遮罩与各页加载遮罩共用这一份，避免新增页面时各猜一个底色。"""
+    base = QColor(32, 32, 32) if isDarkTheme() else QColor(240, 244, 249)
+    overlay = QColor(255, 255, 255, 8 if isDarkTheme() else 128)
+    return QColor(
+        base.red() + (overlay.red() - base.red()) * overlay.alpha() // 255,
+        base.green() + (overlay.green() - base.green()) * overlay.alpha() // 255,
+        base.blue() + (overlay.blue() - base.blue()) * overlay.alpha() // 255,
+    )
+
+
 def note_label(text: str) -> CaptionLabel:
     """说明文字：12px 灰色小字，比正文再弱一档，标题与备注分层。
 
-    深浅主题各用一档更暗的灰，避免与正文抢视线（比旧版 #9ca3af 更收敛）。"""
+    深浅主题各用一档中性灰（Fluent Neutral Foreground 2），避免与正文抢视线。"""
     lbl = CaptionLabel(text)
     lbl.setWordWrap(True)
-    # 深色下说明文字压在毛玻璃上，#7e8896 直接糊进背景；提到 #98a2b3 才读得清
-    lbl.setTextColor(QColor("#3f4751"), QColor("#98a2b3"))
+    lbl.setTextColor(*P.text_colors("fg2"))
     return lbl
 
 
@@ -625,6 +638,32 @@ def fit_table_columns(table: QTableView, stretch_last: bool = False,
         header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.Stretch)
     elif cols:
         header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.Interactive)
+
+
+class BusyOverlay(QWidget):
+    """内容区加载遮罩：居中圆环 + 文案，盖住正在重建的列表，避免中途露出半截内容。
+
+    默认只铺 banner 以下的内容区，头图与工具条保持可见；调用方用 `_place_busy` 之类的
+    方法给出几何。首页沿用同一个组件，但铺满整页，遮住尚未就绪的欢迎块与统计卡。
+    """
+
+    def __init__(self, parent=None, text: str = "正在加载…"):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.setSpacing(12)
+        self.ring = IndeterminateProgressRing(self)
+        self.ring.setFixedSize(40, 40)
+        self.ring.start()
+        lay.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.label = note_label(text)
+        lay.addWidget(self.label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+    def set_text(self, text: str):
+        self.label.setText(text)
+
+    def paintEvent(self, _e):
+        QPainter(self).fillRect(self.rect(), page_bg_color())
 
 
 class BatchedBuild:
