@@ -573,6 +573,29 @@ def test_theme_switch_fades_then_applies(app, isolated_store):
     assert page.scrollWidget.graphicsEffect() is None
 
 
+def test_settings_rows_keep_card_height(app, isolated_store):
+    """标题与说明贴紧 2px；卡片行高靠上下留白撑起，两者互不牵连。"""
+    from app.ui.page import CollapsibleCard, SettingRow
+    from app.ui.settings_page import SettingsPage
+
+    page = SettingsPage()
+    page.resize(1000, 1800)
+    page.show()
+    app.processEvents()
+    rows = [r for r in page.findChildren(SettingRow) if r.isVisible()]
+    assert rows
+    assert all(r.height() >= 58 for r in rows), [r.height() for r in rows]
+    assert all(r._text_lay.spacing() == 2 for r in rows)
+
+    # 卡片头部「外观设置」与其小字说明共用一组布局，间距同样是 2px。
+    cards = [c for c in page.findChildren(CollapsibleCard)
+             if c.title_label.text() in ("上传规则", "外观设置", "工作与通知")]
+    assert cards
+    assert all(c._head_lay.spacing() == 2 for c in cards)
+    assert all(c.desc_label.geometry().top() - c.title_label.geometry().bottom() <= 3
+               for c in cards)
+
+
 def test_settings_controls_share_one_width(app, isolated_store):
     """行内控件统一 126px：按钮 106、下拉 125、下拉框 76 各取宽会左右都对不齐。"""
     from app.ui.about_card import AboutCard

@@ -390,15 +390,12 @@ def sub_title(text: str) -> StrongBodyLabel:
     return theme_font(StrongBodyLabel(text), 15, int(QFont.Weight.DemiBold))
 
 
-def _row_line_color() -> QColor:
-    """卡片内分割线：明暗模式各取一档极淡的对比色。"""
-    return QColor(255, 255, 255, 20) if isDarkTheme() else QColor(0, 0, 0, 22)
-
-
 class CardRow(QWidget):
-    """卡片内一块内容的基类，自己画底部分割线。
+    """卡片内一块内容的基类。行与行之间靠留白分开，不再画分割线。
 
-    separator=False 用在卡片最后一块，避免结尾多一条线；主题切换时重绘。"""
+    separator 参数保留给既有调用点：它不再控制画线，只作为「这一块是末尾」的
+    语义标记，避免为了去掉一条线去改几十处构造调用。
+    """
 
     def __init__(self, separator: bool = True, parent=None):
         super().__init__(parent)
@@ -406,15 +403,6 @@ class CardRow(QWidget):
 
     def set_separator(self, value: bool):
         self._separator = value
-        self.update()
-
-    def paintEvent(self, e):
-        super().paintEvent(e)
-        if not self._separator:
-            return
-        painter = QPainter(self)
-        painter.setPen(_row_line_color())
-        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
 
 
 # 控件宽度：取「带图标的四字下拉按钮」的实测宽度（125px）+1，行内所有按钮、下拉框、
@@ -435,8 +423,9 @@ class SettingRow(CardRow):
                  separator: bool = True, parent=None):
         super().__init__(separator, parent)
         lay = QHBoxLayout(self)
-        # 行间贴紧：上下各 1px，加上底部分割线，相邻两行只隔 2px
-        lay.setContentsMargins(0, 1, 0, 1)
+        # 卡片高度靠行的上下留白撑起（参考样式约 65px/行），标题与说明之间
+        # 仍保持 2px 的紧行距——那是文字行距，和这张外边距是两回事。
+        lay.setContentsMargins(0, 12, 0, 12)
         lay.setSpacing(14)
         if icon is not None:
             ic = IconWidget(icon)
@@ -492,7 +481,7 @@ class CollapsibleCard(CardWidget):
     """折叠卡片：标题行 + 细线条 chevron 箭头（展开朝上 / 收起朝下，无按钮底色）。
 
     用法：content = CollapsibleCard("标题", expanded=True)；往
-    content.body_lay 里加 SettingRow / FullRow 即可，行间分割线由行自己画。
+    content.body_lay 里加 SettingRow / FullRow 即可，行间靠留白分开。
     tags 是标题右侧的胶囊标签 [(文字, 色调)]，份数、学段这类属性放这里，
     不再用「·」拼进标题。
 
@@ -508,7 +497,12 @@ class CollapsibleCard(CardWidget):
         self._expanded = bool(expanded)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 12, 20, 12)
-        outer.setSpacing(8)
+        # 标题 + 头部小字单独成组：它们之间的行距收到 2px；下面 body 与这一组的
+        # 距离仍走 outer 的 8px。以前两行都挂在 outer 上共用一个 8px，标题和说明
+        # 因此隔得太开——要收的正是这里，不是卡片内设置行的高度。
+        self._head_lay = QVBoxLayout()
+        self._head_lay.setContentsMargins(0, 0, 0, 0)
+        self._head_lay.setSpacing(2)
         header = QHBoxLayout()
         header.setSpacing(8)
         self.title_label = section_title(title)
@@ -520,11 +514,12 @@ class CollapsibleCard(CardWidget):
         set_tip(self.toggle_btn, "展开或收起")
         self.toggle_btn.clicked.connect(self.toggle)
         header.addWidget(self.toggle_btn)
-        outer.addLayout(header)
+        self._head_lay.addLayout(header)
 
         self.desc_label = note_label("")
         self.desc_label.setVisible(False)
-        outer.addWidget(self.desc_label)
+        self._head_lay.addWidget(self.desc_label)
+        outer.addLayout(self._head_lay)
 
         self.set_tags(tags or [])
         self.set_desc(desc)
@@ -587,7 +582,7 @@ class CollapsibleCard(CardWidget):
         if not animating:
             self.body.setVisible(self._expanded)
             self.body.setMaximumHeight(16777215)
-        # 分割线颜色按主题取，主题切换时由卡片统一重绘各行
+        # 主题切换后让各行按新主题重绘（已无分割线，仅刷新绘制缓存）
         for i in range(self.body_lay.count()):
             w = self.body_lay.itemAt(i).widget()
             if w is not None:
