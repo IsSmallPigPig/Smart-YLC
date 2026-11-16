@@ -43,9 +43,11 @@ from app.domain.messages import (
     guess_member_name,
 )
 from app.domain.account_health import excluded_summary, split_accounts
+from app.ui import palette as P
 from app.services import login_gate, store
 from app.services.api import SiteClient
 from app.ui.page import (
+    BusyOverlay,
     FluentPage,
     set_tip,
     PageBanner,
@@ -198,6 +200,8 @@ class MessagesPage(FluentPage):
         self._render_token = 0  # 翻页/筛选变化时丢弃上一轮未完成的续渲染
         self._loader: MessageLoadWorker | None = None
         self._silent = False  # 自动拉取时不弹成功提示
+        self._busy: BusyOverlay | None = None  # 首次加载遮罩，列表建完才收
+        self._initial_loaded = False
 
         lay = self.vBoxLayout
         # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐
@@ -294,11 +298,44 @@ class MessagesPage(FluentPage):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._place_banner()
+        self._place_busy()
 
     def _place_banner(self):
         """头图几何：铺满页面宽度、贴顶，跟随窗口宽度变化。"""
         if getattr(self, "header", None) is not None:
             self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
+
+    def _place_busy(self):
+        if self._busy is None:
+            return
+        top = PageBanner.HEIGHT
+        self._busy.setGeometry(0, top, self.viewport().width(),
+                               max(0, self.viewport().height() - top))
+        self._busy.raise_()
+
+    def _show_busy(self, text: str = "正在加载系统消息…"):
+        if self._busy is None:
+            self._busy = BusyOverlay(self, text)
+        self._busy.set_text(text)
+        self._place_busy()
+        self._busy.ring.start()
+        self._busy.show()
+        self._busy.raise_()
+
+    def _hide_busy(self):
+        if self._busy is None:
+            return
+        self._busy.ring.stop()
+        self._busy.hide()
+
+    def _finish_initial_load(self):
+        """首份数据已渲染。空缓存还要等自动拉取结束，避免先露出空态再冒出消息。"""
+        if self.worker is not None and self.worker.isRunning():
+            if self._busy is not None:
+                self._busy.set_text("正在拉取系统消息…")
+            return
+        self._initial_loaded = True
+        self._hide_busy()
 
     def _sync_notices(self):
         """清单变化：面板按 key 增量刷新（不清空重建，避免闪烁）。
@@ -317,6 +354,10 @@ class MessagesPage(FluentPage):
     def showEvent(self, e):
         super().showEvent(e)
         self._place_banner()
+        self._place_busy()
+        # 首帧用加载页盖住尚未组装的列表；之后再切回来不重复铺，免得整页闪一下
+        if not self._initial_loaded:
+            self._show_busy()
         self._load_cache()
         self.auto_fetch()
 
@@ -332,11 +373,17 @@ class MessagesPage(FluentPage):
         self._loader.start()
 
     def _on_cache_failed(self, message: str):
+        self._hide_busy()
+        if not self.list_lay.count():
+            self.list_lay.addWidget(note_label("消息加载失败"))
         InfoBar.error("消息缓存读取失败", message, duration=8000, parent=self)
 
     def _on_cache_loaded(self, payload: dict):
         """缓存没变就跳过；变了才重组视图并重置到第一页。"""
+        first_load = not self._initial_loaded
         if payload["digest"] == getattr(self, "_last_digest", None) and self._views:
+            if first_load:
+                self._finish_initial_load()
             return
         self._last_digest = payload["digest"]
         self._read_marks_cache = payload["read"]
@@ -366,9 +413,11 @@ class MessagesPage(FluentPage):
         # 卡片一批批重长出来，看着就是闪。内容摘要一样就只更新计数，不动卡片。
         digest = self._content_digest(views)
         if digest == getattr(self, "_content_digest_last", None) and self.list_lay.count():
+            if first_load:
+                self._finish_initial_load()
             return
         self._content_digest_last = digest
-        self._rebuild()
+        self._rebuild(on_done=self._finish_initial_load if first_load else None)
 
     @staticmethod
     def _content_digest(views: list) -> str:
@@ -425,7 +474,7 @@ class MessagesPage(FluentPage):
         self._rebuild()
         InfoBar.success("已全部标为已读", f"共 {len(unread)} 条", duration=3000, parent=self)
 
-    def _rebuild(self):
+    def _rebuild(self, on_done=None):
         """按页签、已读与搜索词重新筛选，回到第一页并分批建卡。"""
         self._read_marks_cache = None
         kind = self.kind_seg.currentRouteKey() or KINDS[0]
@@ -462,8 +511,10 @@ class MessagesPage(FluentPage):
                     "这类消息都还没读过。" if read_mode == "read" else "没有消息。")
             self.list_lay.addWidget(note_label(hint))
             self._sync_pager()
+            if on_done is not None:
+                on_done()
             return
-        self._render_page()
+        self._render_page(on_done)
 
     def _clear_list(self):
         self._render_token += 1  # 作废上一轮可能还挂着的续渲染
@@ -476,16 +527,16 @@ class MessagesPage(FluentPage):
                 widget.hide()
                 widget.deleteLater()
 
-    def _render_page(self):
+    def _render_page(self, on_done=None):
         """只建当前页的 20 张卡，并分两批塞进布局，单批不超过 10 张。"""
         self._clear_list()
         start = self._page * PAGE_SIZE
         self._queue = self._filtered[start:start + PAGE_SIZE]
         self._queue_index = 0
         token = self._render_token
-        self._drain(token)
+        self._drain(token, on_done)
 
-    def _drain(self, token: int):
+    def _drain(self, token: int, on_done=None):
         if token != self._render_token:
             return
         batch = self._queue[self._queue_index:self._queue_index + RENDER_BATCH]
@@ -494,9 +545,11 @@ class MessagesPage(FluentPage):
                 self._message_card(view, unread=self._is_unread(view)))
         self._queue_index += len(batch)
         if self._queue_index < len(self._queue):
-            QTimer.singleShot(0, lambda: self._drain(token))
+            QTimer.singleShot(0, lambda: self._drain(token, on_done))
             return
         self._sync_pager()
+        if on_done is not None:
+            on_done()
 
     def _sync_pager(self):
         """翻页控件在列表底下，页数用「第 2 / 5 页」这样的简写。"""
@@ -564,7 +617,7 @@ class MessagesPage(FluentPage):
         def _tint_title(t=title, dim=not unread):
             """已读卡片的标题压暗；主题换了要重设一次，颜色是按主题取的。"""
             if dim:
-                t.setTextColor(QColor("#6b7280"), QColor("#9ca3af"))
+                t.setTextColor(*P.text_colors("fg3"))
 
         _tint_title()
 

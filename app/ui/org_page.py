@@ -37,9 +37,9 @@ from app.ui.charts import BarRowWidget, ProgressDonut
 from app.ui import palette as P
 from app.ui.widgets import PillLabel
 from app.domain.check_templates import default_identity_template, default_report_template
-from app.ui.page import (CallbackWorker, FluentPage, PageBanner, PageHeader,
-                         note_label, set_tip,
-                         section_title, theme_font)
+from app.ui.page import (BusyOverlay, CallbackWorker, FluentPage, PageBanner,
+                         PageHeader, note_label, set_tip, section_title,
+                         theme_font)
 
 STATUS_LABEL = {
     "ok": "正常",
@@ -151,6 +151,7 @@ class OrgPage(FluentPage):
         self._snapshot = None  # 刷新前的展示快照（整轮失败时回滚）
         self._first_result = True
         self._ok_accounts = 0
+        self._busy: BusyOverlay | None = None  # 手动统计期间盖住逐条增长的错误卡片
         QTimer.singleShot(0, self._restore_persisted)  # 重启后恢复上次的组织状况
 
         lay = self.vBoxLayout
@@ -220,15 +221,40 @@ class OrgPage(FluentPage):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._place_banner()
+        self._place_busy()
 
     def _place_banner(self):
         """头图几何：铺满页面宽度、贴顶，跟随窗口宽度变化。"""
         if getattr(self, "header", None) is not None:
             self.header.setGeometry(0, 0, self.scrollWidget.width(), PageBanner.HEIGHT)
 
+    def _place_busy(self):
+        if self._busy is None:
+            return
+        top = PageBanner.HEIGHT
+        self._busy.setGeometry(0, top, self.viewport().width(),
+                               max(0, self.viewport().height() - top))
+        self._busy.raise_()
+
+    def _show_busy(self, text: str = "正在统计组织状况…"):
+        if self._busy is None:
+            self._busy = BusyOverlay(self, text)
+        self._busy.set_text(text)
+        self._place_busy()
+        self._busy.ring.start()
+        self._busy.show()
+        self._busy.raise_()
+
+    def _hide_busy(self):
+        if self._busy is None:
+            return
+        self._busy.ring.stop()
+        self._busy.hide()
+
     def showEvent(self, e):
         super().showEvent(e)
         self._place_banner()
+        self._place_busy()
         # 打开页面时图表做一次入场动画：条形与圆环从零长到当前值（与支部详情一致）
         max_n = max(self._total, 1)
         for kind, bar in self.bars.items():
@@ -275,6 +301,9 @@ class OrgPage(FluentPage):
         self.worker.all_done.connect(self._on_run_done)
         if not silent:
             self._show_progress(len(accounts))
+            # 结果逐账号抵达，异常卡片一张张插进列表会把页面高度撑得不停变；
+            # 盖住内容区，等整轮落地再一次性露出最终布局。
+            self._show_busy()
         self.worker.start()
 
     def _show_progress(self, count: int):
@@ -323,6 +352,8 @@ class OrgPage(FluentPage):
                 self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                                   r.problems, r.branch, r.kinds)
             self.error_title.setText(f"异常团员 {len(rows)}")
+        # 卡片落地后下一帧再收遮罩：让布局先把最终高度算完，避免露出中间态
+        QTimer.singleShot(0, self._hide_busy)
 
     def refresh_offline(self):
         """从成员缓存（memberCache）离线重算三项统计，无网络请求。
@@ -557,14 +588,14 @@ class OrgPage(FluentPage):
                 head.addWidget(chip)
         head.addSpacing(12)
         branch_lbl = CaptionLabel(branch or "")
-        branch_lbl.setTextColor(QColor("#4b5563"), QColor("#9ca3af"))
+        branch_lbl.setTextColor(*P.text_colors("fg2"))
         head.addWidget(branch_lbl)
         v.addLayout(head)
 
         body = BodyLabel(problem or "")
         body.setWordWrap(True)
         if kinds is None:  # 账号级失败
-            body.setTextColor(QColor(P.DANGER), QColor("#f87171"))
+            body.setTextColor(*P.text_colors("danger"))
         v.addWidget(body)
 
         self.error_lay.addWidget(card)

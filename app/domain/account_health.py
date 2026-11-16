@@ -22,15 +22,17 @@ HEALTH_LABEL = {
     "unknown": "未检测",
 }
 
-HEALTH_COLOR = {
-    "ok": "#16a34a",
-    "failed": "#dc2626",
-    "captcha": "#b45309",
-    "cooldown": "#9e9e9e",
-    "passwordChange": "#b45309",
-    "needMemberName": "#b45309",
-    "network": "#9e9e9e",
-    "unknown": "#9e9e9e",
+# 健康状态 → 语义色角色名。颜色值交给 UI 层的 palette 按明暗主题解析，
+# 领域层不持有具体色值，避免同一个状态在两种主题下写成两套 hex。
+HEALTH_ROLE = {
+    "ok": "success",
+    "failed": "danger",
+    "captcha": "warning",
+    "cooldown": "muted",
+    "passwordChange": "warning",
+    "needMemberName": "warning",
+    "network": "muted",
+    "unknown": "muted",
 }
 
 USABLE_STATUSES = {"ok", "unknown", ""}

@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QSequentialAnimationGroup,
+    QTimer,
     QVariantAnimation,
 )
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QWidget
@@ -142,6 +143,24 @@ def switch_with_fade(old: QWidget, new: QWidget, duration: int = 240) -> QAbstra
     return group
 
 
+def _content_height(widget: QWidget) -> int:
+    """取内容区不受当前最大高度约束时的完整高度。
+
+    动画期间 maximumHeight 被压到中间值，QVBoxLayout 会把子控件一起挤矮；
+    此时直接读 widget.sizeHint() 会拿到被挤过的高度，连续展开/收起就会越缩越短。
+    先临时放开高度上限并让布局重算，量完再恢复，避免把动画中间态当成目标尺寸。
+    """
+    old_max = widget.maximumHeight()
+    widget.setMaximumHeight(QWIDGETSIZE_MAX)
+    lay = widget.layout()
+    if lay is not None:
+        lay.invalidate()
+        lay.activate()
+    height = widget.sizeHint().height()
+    widget.setMaximumHeight(old_max)
+    return height
+
+
 def animate_expand(widget: QWidget, show: bool, duration: int = 210, on_done=None):
     """高度展开/收起，同时淡入淡出；收起完成后隐藏 widget。"""
     prev = getattr(widget, "_expand_ani", None)
@@ -149,13 +168,17 @@ def animate_expand(widget: QWidget, show: bool, duration: int = 210, on_done=Non
         prev.stop()
 
     eff = _opacity_effect(widget)
-    target = widget.sizeHint().height() if show else 0
+    target = _content_height(widget) if show else 0
     start = widget.height() if widget.isVisible() else 0
 
+    opacity_start = 0.0
     if show:
         widget.setVisible(True)
         eff.setOpacity(0.0)
         widget.setMaximumHeight(start)
+    else:
+        # 上一次展开动画可能停在半透明状态；收起从当前可见度开始，不再突然闪亮
+        opacity_start = eff.opacity()
 
     height = QPropertyAnimation(widget, b"maximumHeight", widget)
     height.setDuration(duration)
@@ -165,7 +188,7 @@ def animate_expand(widget: QWidget, show: bool, duration: int = 210, on_done=Non
 
     opa = QPropertyAnimation(eff, b"opacity", widget)
     opa.setDuration(duration)
-    opa.setStartValue(0.0 if show else 1.0)
+    opa.setStartValue(opacity_start)
     opa.setEndValue(1.0 if show else 0.0)
     opa.setEasingCurve(QEasingCurve.Type.OutCubic)
 
@@ -174,11 +197,35 @@ def animate_expand(widget: QWidget, show: bool, duration: int = 210, on_done=Non
     group.addAnimation(opa)
 
     def _done():
-        widget.setMaximumHeight(QWIDGETSIZE_MAX)
-        widget.setGraphicsEffect(None)
-        if not show:
+        if show:
+            # 高度上限放开后强制布局按完整尺寸重排：动画期间被挤矮的子控件
+            # 必须回到 sizeHint，否则下一次展开会把缩水后的高度当成起点。
+            widget.setMaximumHeight(QWIDGETSIZE_MAX)
+            lay = widget.layout()
+            if lay is not None:
+                lay.invalidate()
+                lay.activate()
+        else:
+            # 先隐藏再放开高度上限，别让父布局在 visible=True 的瞬间按完整
+            # 高度把卡片撑大，留下收起后仍比原来高十几像素的空白。
             widget.setVisible(False)
+            widget.setMaximumHeight(QWIDGETSIZE_MAX)
+        widget.setGraphicsEffect(None)
         widget._expand_ani = None
+        # maximumHeight 动画只通知直接父布局；卡片外层（页面 ScrollArea 的布局）
+        # 仍拿着动画中途的旧尺寸提示，连续点击后就会把卡片压在半高、子控件也被挤矮。
+        # 必须等本轮事件循环处理完动画的最后一个 resize，再从内容区往上逐级重排。
+        def _relayout():
+            node = widget.parentWidget()
+            while node is not None:
+                node.updateGeometry()
+                lay = node.layout()
+                if lay is not None:
+                    lay.invalidate()
+                    lay.activate()
+                node = node.parentWidget()
+
+        QTimer.singleShot(0, _relayout)
         if on_done:
             on_done()
 

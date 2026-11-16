@@ -132,7 +132,7 @@ class PillLabel(QWidget):
 
 def muted(text: str) -> CaptionLabel:
     lbl = CaptionLabel(text)
-    lbl.setTextColor(QColor("#3f4751"), QColor("#7e8896"))
+    lbl.setTextColor(*P.text_colors("fg2"))
     return lbl
 
 

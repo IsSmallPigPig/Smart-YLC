@@ -77,13 +77,20 @@ def test_settings_page_builds(app, isolated_store):
     assert page.roster_row.desc_label.text() == "尚未导入"
     assert page.sec_row.desc_label.text() == "尚未导入"
     assert page.rule_row.desc_label.text() == "当前 3 条规则"
-    assert page.file_btn.text() == "导入导出"
+    # 账号卡片只管账号表格；系统备份单独成卡，不再混在「账号文件」里
+    assert page.file_btn.text() == "账号表格"
     assert [a.text() for a in page.file_menu.actions()] == [
-        "从表格文件中导入", "从系统备份中导入", "下载账号模板", "导出系统备份"]
+        "从表格文件中导入", "下载账号模板"]
+    assert page.backup_export_btn.text() == "导出备份"
+    assert page.backup_import_btn.text() == "恢复备份"
     assert page.roster_more_btn.text() == "名单管理"
     assert page.sec_more_btn.text() == "支书管理"
     cards = page.findChildren(CollapsibleCard)
     assert cards and all(card.desc_label.text() for card in cards)
+    backup = next(c for c in cards if c.title_label.text() == "系统备份")
+    assert "全部" in backup.desc_label.text()
+    # 备份是账号卡之外的一张独立卡
+    assert backup is not page.acc_card
 
 
 def test_load_config_keeps_workspace_and_rosters(app, isolated_store):
@@ -217,6 +224,44 @@ def test_import_config_replaces_and_reloads(app, isolated_store, tmp_path):
 
     folder = os.path.dirname(store.CONFIG_FILE)
     assert any("before-import" in n for n in os.listdir(folder))
+
+
+def test_system_backup_covers_every_setting(app, isolated_store, tmp_path, monkeypatch):
+    """系统备份必须是全部软件设置的快照，不能只导出支部账号。"""
+    import json
+
+    from PySide6.QtWidgets import QFileDialog
+
+    from app.services import store
+    from app.ui.settings_page import SettingsPage
+
+    full = {
+        "accounts": [{"userName": "a", "remark": "支部", "password": "p"}],
+        "rosters": {"2026秋": "/tmp/r.xlsx"},
+        "themeMode": "dark",
+        "translucentMaterial": "acrylic",
+        "headerImage": "/tmp/banner.png",
+        "notifyMode": "interval",
+        "notifyTime": "09:30",
+        "notifyInterval": 6,
+        "workspaceDir": "/tmp/ws",
+        "workspaceDirs": ["/tmp/ws"],
+        "expectedPages": 4,
+        "orgRule": {"version": 1},
+    }
+    store.save(full)
+    page = SettingsPage()
+
+    out = str(tmp_path / "backup.json")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a, **k: (out, ""))
+    page._export_config_json()
+
+    with open(out, encoding="utf-8") as f:
+        dumped = json.load(f)
+    # 每个设置键都原样进备份；accounts 不再是唯一的备份对象
+    for key, value in full.items():
+        assert dumped.get(key) == value, f"备份漏掉了 {key}"
 
 
 def test_autostart_does_not_require_accounts(app, isolated_store, monkeypatch):
@@ -388,6 +433,46 @@ def test_messages_same_digest_skips_rebuild(app, isolated_store):
     assert page.list_lay.count() == before
 
 
+def test_messages_first_show_uses_loading_page(app, isolated_store, monkeypatch):
+    """系统消息首次显示先铺加载页，列表分批建完再收；失败路径也不能卡在加载态。"""
+    from PySide6.QtGui import QShowEvent
+
+    from app.ui.messages_page import MessagesPage
+    from app.ui.page import PageBanner
+
+    page = MessagesPage(FakeWindow())
+    page.resize(800, 600)
+    monkeypatch.setattr(page, "_load_cache", lambda: None)
+    monkeypatch.setattr(page, "auto_fetch", lambda: None)
+
+    page.showEvent(QShowEvent())
+    busy = page._busy
+    assert busy is not None and not busy.isHidden()
+    assert busy.geometry().y() == PageBanner.HEIGHT  # 只盖头图下面的内容区
+
+    page._on_cache_loaded(_payload(3))
+    _pump(app, 80)
+    assert page._initial_loaded is True
+    assert busy.isHidden()
+
+    page._show_busy()
+    page._on_cache_failed("缓存读不了")
+    assert busy.isHidden()
+
+
+def test_messages_reopen_does_not_repeat_loading_page(app, isolated_store, monkeypatch):
+    from PySide6.QtGui import QShowEvent
+
+    from app.ui.messages_page import MessagesPage
+
+    page = MessagesPage(FakeWindow())
+    page._initial_loaded = True
+    monkeypatch.setattr(page, "_load_cache", lambda: None)
+    monkeypatch.setattr(page, "auto_fetch", lambda: None)
+    page.showEvent(QShowEvent())
+    assert page._busy is None or page._busy.isHidden()
+
+
 def test_message_load_worker_emits_payload(app, isolated_store):
     from app.ui.messages_page import MessageLoadWorker
 
@@ -397,6 +482,67 @@ def test_message_load_worker_emits_payload(app, isolated_store):
     worker.run()  # 直接在测试线程里跑一次，不需要真开线程
     assert set(captured) == {"digest", "cache", "read", "memberCache"}
     assert captured["cache"] == {}
+
+
+def test_repeated_expand_restores_layout(app, isolated_store):
+    """快速连点展开箭头后，卡片和子控件必须回到原来的高度。
+
+    动画把 body 的 maximumHeight 压到中间值时，QVBoxLayout 会顺手把子控件挤矮。
+    旧实现结束时只恢复 maximumHeight，外层布局仍拿着动画中途的尺寸提示，
+    结果卡片越点越矮、下面的卡片跟着上移。这里用真实设置页那种不等高的行来锁住。
+    """
+    from PySide6.QtCore import QSize
+    from PySide6.QtWidgets import QVBoxLayout
+
+    from app.ui.anim import animate_expand
+
+    class SizedRow(QWidget):
+        def __init__(self, height: int):
+            super().__init__()
+            self._h = height
+
+        def sizeHint(self):
+            return QSize(200, self._h)
+
+    card = QWidget()
+    outer = QVBoxLayout(card)
+    outer.setContentsMargins(20, 12, 20, 12)
+    outer.setSpacing(8)
+    head = QWidget()
+    head.setFixedHeight(49)
+    outer.addWidget(head)
+
+    body = QWidget()
+    body_lay = QVBoxLayout(body)
+    body_lay.setContentsMargins(0, 0, 0, 0)
+    body_lay.setSpacing(0)
+    for h in (63, 63, 257, 80, 63):
+        body_lay.addWidget(SizedRow(h))
+    outer.addWidget(body)
+    body.hide()
+    host = QWidget()
+    host_lay = QVBoxLayout(host)
+    host_lay.setContentsMargins(0, 0, 0, 0)
+    host_lay.addWidget(card)
+    host_lay.addStretch(1)
+    host.resize(500, 300)
+    host.show()
+    app.processEvents()
+    base_height = card.height()
+    base_row_heights = [body_lay.itemAt(i).widget().sizeHint().height()
+                        for i in range(body_lay.count())]
+    assert base_height == 73
+
+    for show in (True, False) * 4:
+        animate_expand(body, show, duration=40)
+        app.processEvents()
+    _pump(app, 160)
+
+    assert body.isHidden()
+    assert card.height() == base_height
+    assert [body_lay.itemAt(i).widget().height() for i in range(body_lay.count())] == [0] * 5
+    for i, h in enumerate(base_row_heights):
+        assert body_lay.itemAt(i).widget().sizeHint().height() == h
 
 
 def test_cross_fade_applies_work_and_cleans_effect(app, isolated_store):
@@ -658,6 +804,78 @@ def test_banner_light_theme_is_pale_with_dark_text(app, isolated_store):
     setTheme(Theme.DARK)                                 # 切主题后字要跟着换回白色
     assert banner_stops() != BANNER_STOPS_LIGHT
     assert banner.title_label._darkColor.lightness() > 200
+
+
+def test_fluent_semantic_roles_have_light_and_dark_values(app):
+    """语义色按 Fluent 2 给两套值；异常/警告/成功/信息取色随主题切换。"""
+    from qfluentwidgets import Theme, setTheme
+
+    from app.ui import palette as P
+
+    assert P.pair("danger") == ("#C42B1C", "#FF99A4")
+    assert P.pair("warning") == ("#9D5D00", "#FCE100")
+    assert P.pair("success") == ("#0F7B0F", "#6CCB5F")
+    assert P.pair("info") == ("#0078D4", "#4CC2FF")
+    # 深色档比浅色档亮（深色底上才读得清）
+    for role in ("danger", "warning", "success", "info", "brand", "fees", "fg2"):
+        from PySide6.QtGui import QColor
+        light, dark = (QColor(v) for v in P.pair(role))
+        assert dark.lightness() > light.lightness(), role
+
+    try:
+        setTheme(Theme.LIGHT)
+        assert P.fg("danger").name() == "#c42b1c"
+        assert P.solid("danger") == "#C42B1C"
+        light_pair = P.text_colors("danger")
+        assert light_pair[0].name() == "#c42b1c" and light_pair[1].name() == "#ff99a4"
+
+        setTheme(Theme.DARK)
+        assert P.fg("danger").name() == "#ff99a4"
+        assert P.solid("danger") == "#FF99A4"
+    finally:
+        setTheme(Theme.DARK)
+
+
+def test_health_roles_resolve_and_no_hardcoded_status_hex(app, isolated_store):
+    """健康状态只存角色名；页面里不再写死旧的状态 hex。"""
+    from pathlib import Path
+
+    from app.domain.account_health import HEALTH_ROLE
+    from app.ui import palette as P
+
+    assert HEALTH_ROLE["ok"] == "success"
+    assert HEALTH_ROLE["failed"] == "danger"
+    assert HEALTH_ROLE["captcha"] == "warning"
+    assert HEALTH_ROLE["unknown"] == "muted"
+    assert all(role in P.ROLES for role in HEALTH_ROLE.values())
+
+    root = Path(__file__).resolve().parent.parent / "app" / "ui"
+    old = ("#dc2626", "#16a34a", "#b45309", "#f87171", "#ff99a4",
+           "#c42b1c", "#8ab4ff", "#b9bcc4")
+    offenders = []
+    for path in root.glob("*.py"):
+        if path.name == "palette.py":      # 色值就定义在这里
+            continue
+        low = path.read_text(encoding="utf-8").lower()
+        for hexv in old:
+            if hexv in low:
+                offenders.append(f"{path.name}:{hexv}")
+    assert offenders == []
+
+
+def test_notice_error_title_uses_palette_danger(app, isolated_store):
+    """公告面板的错误标题按主题取语义色，而不是写死的红。"""
+    from qfluentwidgets import Theme, setTheme
+
+    from app.ui.notice_panel import _title_color
+
+    try:
+        setTheme(Theme.LIGHT)
+        assert _title_color().name() == "#c42b1c"
+        setTheme(Theme.DARK)
+        assert _title_color().name() == "#ff99a4"
+    finally:
+        setTheme(Theme.DARK)
 
 
 def test_upload_add_dirs_dedupes_nested(app, isolated_store, tmp_path):
@@ -1170,6 +1388,131 @@ def test_org_manage_clear_hides_old_cards(app, isolated_store):
     assert old.isHidden()
 
 
+def test_branch_status_is_exclusive_and_fees_priority(app, isolated_store):
+    """状态判定互斥：无系统数据→none，有其它异常→异常（压过欠缴），
+    纯欠缴→欠缴，都没有→正常。异常里的 kind 用 report_kind 细分后的键。"""
+    from app.domain.org_manage import branch_status
+
+    def stats(system, identity=0, report=0, archive=0, fees=0):
+        return {"system": system,
+                "by_kind": {"identity": identity, "report": report,
+                            "archive": archive, "fees": fees}}
+
+    assert branch_status(stats(0)) == "none"
+    assert branch_status(stats(10)) == "normal"
+    assert branch_status(stats(10, fees=3)) == "fees"
+    assert branch_status(stats(10, identity=1)) == "abnormal"
+    assert branch_status(stats(10, report=2)) == "abnormal"
+    assert branch_status(stats(10, archive=1)) == "abnormal"
+    # 异常优先于欠缴：同时有时只算异常，不会在两个筛选里重复出现
+    assert branch_status(stats(10, identity=1, fees=3)) == "abnormal"
+
+
+def test_org_manage_status_filter_rebuilds_matching_branches(app, isolated_store):
+    """状态下拉按互斥分类筛支部，卡片色条与筛选同源。"""
+    from app.domain.org_manage import BranchNode, MemberView
+    from app.ui.org_manage_page import OrgManagePage
+
+    page = OrgManagePage(FakeWindow())
+    def branch(code, label):
+        return BranchNode(code=code, label=label,
+                          members=[MemberView("团员", "13800000000")])
+    nodes = [
+        branch("a", "正常支部"),
+        branch("b", "欠缴支部"),
+        branch("c", "异常支部"),
+        branch("d", "又异常又欠缴"),
+    ]
+    page._branches = nodes
+    def stats(identity=0, fees=0):
+        return {"total": 5, "system": 5, "abnormal": identity + fees,
+                "by_kind": {"identity": identity, "report": 0, "archive": 0, "fees": fees},
+                "unpaid_amount": 0.0}
+    page._stats_cache = {
+        "a": stats(),
+        "b": stats(fees=2),
+        "c": stats(identity=1),
+        "d": stats(identity=1, fees=4),
+    }
+    assert [page.status_combo.itemText(i) for i in range(page.status_combo.count())] == [
+        "全部支部", "正常", "异常", "欠缴"]
+
+    expected = {"all": 4, "normal": 1, "abnormal": 2, "fees": 1}
+    for key, n in expected.items():
+        page.status_combo.setCurrentIndex(page.status_combo.findData(key))
+        page._rebuild()
+        import time
+        end = time.monotonic() + 2
+        while page.feed_lay.count() < n and time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.01)
+        app.processEvents()
+        assert page.feed_lay.count() == n, (key, page.feed_lay.count(), n)
+
+    # 详情态收起筛选控件
+    page._set_toolbar(True)
+    assert page.status_combo.isHidden()
+    page._set_toolbar(False)
+    assert not page.status_combo.isHidden()
+
+
+def test_org_manage_first_show_uses_loading_page(app, isolated_store, monkeypatch):
+    """组织管理首次显示先铺加载页，支部卡片分批建完才收，失败也会撤掉。"""
+    import time
+
+    from PySide6.QtGui import QShowEvent
+
+    from app.domain.org_manage import BranchNode
+    from app.ui.org_manage_page import OrgManagePage
+    from app.ui.page import PageBanner
+
+    page = OrgManagePage(FakeWindow())
+    page.resize(800, 600)
+    monkeypatch.setattr(page, "refresh", lambda: None)
+
+    page.showEvent(QShowEvent())
+    busy = page._busy
+    assert busy is not None and not busy.isHidden()
+    assert busy.geometry().y() == PageBanner.HEIGHT
+
+    page._apply_refresh(([], {}))
+    assert busy.isHidden()
+
+    page._branches = [BranchNode(code="x", label="示例支部")]
+    page._refreshed_at = time.monotonic()
+    page.showEvent(QShowEvent())  # 已有树：再切回来不重复铺加载页
+    assert busy.isHidden()
+
+
+def test_org_manage_loading_page_hides_on_failure(app, isolated_store, monkeypatch):
+    from PySide6.QtCore import QObject, QTimer, Signal
+    from PySide6.QtGui import QShowEvent
+
+    from app.ui import page as page_mod
+    from app.ui.org_manage_page import OrgManagePage
+
+    class FailingWorker(QObject):
+        ok = Signal(object)
+        fail = Signal(str)
+
+        def __init__(self, _fn, parent=None):
+            super().__init__(parent)
+            QTimer.singleShot(0, lambda: self.fail.emit("后台刷新失败"))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(page_mod, "CallbackWorker", FailingWorker)
+    page = OrgManagePage(FakeWindow())
+    page.resize(800, 600)
+    page.showEvent(QShowEvent())
+    busy = page._busy
+    assert busy is not None and not busy.isHidden()
+
+    _pump(app, 40)
+    assert busy.isHidden()
+
+
 def test_org_page_has_no_save_button_and_runs_hourly(app, isolated_store):
     from app.ui.org_page import OrgPage
 
@@ -1177,6 +1520,28 @@ def test_org_page_has_no_save_button_and_runs_hourly(app, isolated_store):
     assert not hasattr(page, "export_btn")
     assert page._auto_timer.interval() == 60 * 60 * 1000
     assert page._auto_timer.isActive()
+
+
+def test_org_page_statistics_cover_layout_changes(app, isolated_store):
+    """手动统计时逐条插入异常卡片，页面高度会被撑得一跳一跳；加载页盖到收尾。"""
+    from app.ui.org_page import OrgPage
+    from app.ui.page import PageBanner
+
+    page = OrgPage(FakeWindow())
+    page.resize(800, 600)
+    page.show()
+    page._snapshot = (0, 0, {}, 0, "", [])
+    page._show_busy()
+    busy = page._busy
+    assert busy is not None and not busy.isHidden()
+    assert busy.geometry().y() == PageBanner.HEIGHT
+
+    page._ok_accounts = 1
+    for i in range(6):
+        page._append_card(f"团员{i}", "13800000000", [], f"问题 {i}", "示例支部", "identity")
+    page._on_run_done()
+    _pump(app, 40)
+    assert busy.isHidden()
 
 
 def test_member_card_click_emits(app, isolated_store):

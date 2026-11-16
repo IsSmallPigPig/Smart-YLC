@@ -23,7 +23,7 @@ from app.ui.hidpi import hidpi_canvas
 def icons_dir() -> Path:
     """图标目录：源码里是 app/assets/icons，打包后在可执行文件旁边。
 
-    资源根目录由 brand.assets_dir() 统一判断（PyInstaller / Nuitka / 源码三种落点），
+    资源根目录由 brand.assets_dir() 统一判断（PyInstaller / 源码落点），
     这里只管拼 icons 这一层。"""
     from app.ui.brand import assets_dir
 

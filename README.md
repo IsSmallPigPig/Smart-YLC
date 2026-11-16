@@ -40,7 +40,7 @@
 
 ### 安装包
 
-到 [Releases][release-url] 下载对应平台的安装包：macOS 用 dmg，Windows 用 `setup.exe`（每用户安装，不需要管理员权限，不弹 UAC）。首次启动在「系统配置」里填入团支部账号，或导入账号模板 xlsx。换机时用「系统配置 → 账号文件 → 导入导出」整份搬走：导出的是 config.json 快照，导入会替换当前配置（先自动备份旧的一份），账号、名单、工作区、通知与外观一起生效。
+到 [Releases][release-url] 下载对应平台的安装包：macOS 用 dmg，Windows 用 `setup.exe`（每用户安装，不需要管理员权限，不弹 UAC）。首次启动在「系统配置」里填入团支部账号，或导入账号模板 xlsx。换机时用「系统配置 → 系统备份 → 导出备份」把全部设置整份搬走：导出的是 config.json 快照，含账号、名单、工作区、通知、明暗模式、窗口材质、首页头图与编号规则；「恢复备份」会替换当前全部设置（先把旧配置另存一份）。只搬账号时用「支部账号 → 账号表格」。
 
 ### 从源码运行
 
@@ -55,24 +55,24 @@ python3 -m app.main --tray   # 托盘后台：定时检查 + 系统通知
 ### 打包
 
 ```bash
-pip install nuitka ordered-set zstandard
+pip install pyinstaller
 python3 scripts/build.py          # 只打当前平台
-python3 scripts/build.py --dry-run  # 只看命令，不编译
+python3 scripts/build.py --dry-run  # 只看命令，不打包
 ```
 
-脚本把 Python 编译成 C 再构建（standalone 目录），只收真正用到的模块。产物固定：
+脚本用 PyInstaller 的 onedir 模式打包（运行时铺在安装目录，冷启动只加载 DLL）。产物固定：
 
 - Windows：`dist/SmartYouth/智慧团委.exe`
 - macOS：`dist/智慧团委.app`（前提是先按 workflow 里那一步生成 `build/SmartYouth.icns`）
 
 > [!TIP]
-> 打包后图标的三种落点（源码、PyInstaller、Nuitka）由 `brand.assets_dir()` / `icons_dir()` 统一判断，新增图片仍只需放进 `app/assets/`。
+> 打包后图标的两种落点（源码、PyInstaller 的 `_MEIPASS/assets`）由 `brand.assets_dir()` / `icons_dir()` 统一判断，新增图片仍只需放进 `app/assets/`。
 
 ### Windows 安装包与代码签名
 
-Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 Nuitka 的 standalone 产物打成正式安装程序：脚本是 `installer.iss`，构建时由 workflow 调用 `ISCC.exe` 编译。
+Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 PyInstaller 的 onedir 产物打成正式安装程序：脚本是 `installer.iss`，构建时由 workflow 调用 `ISCC.exe` 编译。
 
-- **不用单文件**：Nuitka 的 `--standalone` 把运行时铺在安装目录里，启动直接加载 DLL；单文件要先解压到临时目录，冷启动明显慢。
+- **不用单文件**：PyInstaller 的 `--onedir` 把运行时铺在安装目录里，启动直接加载 DLL；`--onefile` 要先解压到临时目录，冷启动明显慢。
 - **每用户安装**：装到 `%LOCALAPPDATA%\Programs\智慧团委`，不需要管理员权限、不弹 UAC，因此不会出现「未知发布者」的提权提示。
 - **可选的证书信任**：自签名的包里，安装向导最后一步有一个不勾选的「信任本次安装包的签名证书」。勾上会单独请求一次管理员授权，把证书装进「受信任的根证书颁发机构」，之后运行不再提示未知发布者；取消授权或跳过这一项都不影响应用使用。
 - **SmartScreen**：双击下载来的安装包时，Windows 仍可能提示「已保护你的电脑」——这是对「下载来的 exe」的通行评判，与安装本身无关，点「更多信息 → 仍要运行」即可。
@@ -105,7 +105,7 @@ Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 Nuitka 的 st
 
 ## 响应速度
 
-启动画面先上屏，再导入 qfluentwidgets、构造窗口与页面；画面与主窗口同尺寸同底色，接棒时看不到接缝。Nuitka 的 standalone 产物只收用到的模块，省掉冻结归档的遍历开销。
+启动画面先上屏，再导入 qfluentwidgets、构造窗口与页面；画面与主窗口同尺寸同底色，接棒时看不到接缝。Python 模块在启动时由 PyInstaller 的冻结导入器加载；PyMuPDF 这类带原生库的依赖由专用 hook 原样收集，不进入编译阶段。
 
 消息多、页面控件多时最容易卡住的两处，都按「不在界面线程做重活」处理：
 
