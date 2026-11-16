@@ -113,10 +113,10 @@ def test_export_dialog_builds(app, isolated_store):
     host.resize(900, 600)
     dialog = ExportDialog("branch", host)
     assert len(dialog._contents()) == 5
-    dialog.mode.setCurrentItem("single")
-    assert dialog.mode.currentRouteKey() == "single"
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("single"))
+    assert dialog.mode == "single"
     assert dialog.scope == "branch"
-    dialog.scope_seg.setCurrentItem("merged")
+    dialog.scope_combo.setCurrentIndex(dialog.scope_combo.findData("merged"))
     assert dialog.scope == "merged"  # 一个入口里换范围，不再两个按钮
 
 
@@ -970,6 +970,27 @@ def test_reveal_branch_opens_matching_detail(app, isolated_store):
     page.reveal_branch("不存在的支部", on_missing=lambda: missing.append(1))
     assert page._detail_code == ""
     assert len(missing) == 1
+
+
+def test_org_manage_clear_hides_old_cards(app, isolated_store):
+    """切页重建前旧卡片必须先隐藏：deleteLater 要等事件循环，叠在新卡片上会糊成两层。"""
+    from app.ui.org_manage_page import OrgManagePage
+
+    page = OrgManagePage(FakeWindow())
+    old = QWidget()
+    page.feed_lay.addWidget(old)
+    old.show()
+    page._clear(page.feed_lay)
+    assert old.isHidden()
+
+
+def test_org_page_has_no_save_button_and_runs_hourly(app, isolated_store):
+    from app.ui.org_page import OrgPage
+
+    page = OrgPage(FakeWindow())
+    assert not hasattr(page, "export_btn")
+    assert page._auto_timer.interval() == 60 * 60 * 1000
+    assert page._auto_timer.isActive()
 
 
 def test_member_card_click_emits(app, isolated_store):

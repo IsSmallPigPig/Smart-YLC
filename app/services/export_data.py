@@ -15,16 +15,14 @@
   split   每个选项一张子表
   single  全部内容合进一张表，多一列「类别」
 
-范围：
-  branch  每个支部一个 xlsx，打包成一个 zip
-  merged  所有支部写进一个 xlsx
+范围（始终只落一个 xlsx）：
+  branch  每个支部分开；split 时每支部每内容一张子表，single 时每支部一张子表
+  merged  所有支部合在一起；split 时每内容一张子表，single 时全部合成一张
 """
 
 from __future__ import annotations
 
-import os
 import re
-import zipfile
 from dataclasses import dataclass, field
 
 from app.domain.check_rules import (
@@ -40,7 +38,7 @@ from app.domain.org_stats import report_kind
 def default_name(title: str, ext: str, *options: str) -> str:
     """导出文件的默认名：功能 + 选项 + 生成时间。
 
-    例如「导出数据-分班-每项一表-团员信息-20261115-0205.zip」，
+    例如「导出数据-分班-每项一表-团员信息-20261115-0205.xlsx」，
     存下来的文件自己就能说明是什么、怎么导的、什么时候导的。"""
     from datetime import datetime
 
@@ -256,15 +254,10 @@ def build_sheets(data: BranchData, contents, mode: str = "split"):
 # ------------------------------------------------------------------ 写盘
 
 _ILLEGAL_SHEET = re.compile(r"[\\/*?:\[\]]")
-_ILLEGAL_NAME = re.compile(r"[\\/:*?\"<>|]")
 
 
 def _safe_sheet(title: str) -> str:
     return _ILLEGAL_SHEET.sub("", title)[:31] or "数据"
-
-
-def _safe_name(name: str) -> str:
-    return _ILLEGAL_NAME.sub("_", name).strip()[:80]
 
 
 def save_workbook(path: str, sheets: dict) -> int:
@@ -298,28 +291,40 @@ def save_workbook(path: str, sheets: dict) -> int:
     return total
 
 
-def save_branch_zip(path: str, dataset: dict[str, BranchData],
-                    contents, mode: str) -> int:
-    """每个支部一个 xlsx，打包成 zip，返回支部数。"""
-    import tempfile
+def _unique_sheet(title: str, used: set[str]) -> str:
+    """Excel 工作表名最长 31 字符；同名时加序号，不静默覆盖。"""
+    base = _safe_sheet(title)
+    name, n = base, 1
+    while name in used:
+        n += 1
+        suffix = f"({n})"
+        name = base[:31 - len(suffix)] + suffix
+    used.add(name)
+    return name
 
-    with tempfile.TemporaryDirectory(prefix="gd-export-") as tmp:
-        entries = []
-        used: set[str] = set()
-        for branch, data in dataset.items():
-            base = _safe_name(branch) or "未命名支部"
-            name, n = base, 1
-            while name in used:  # 两个支部同名时加序号，不覆盖
-                n += 1
-                name = f"{base}({n})"
-            used.add(name)
-            xlsx = os.path.join(tmp, f"{name}.xlsx")
-            save_workbook(xlsx, build_sheets(data, contents, mode))
-            entries.append((xlsx, f"{name}.xlsx"))
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for src, arc in entries:
-                zf.write(src, arc)
-    return len(entries)
+
+def build_export_sheets(dataset: dict[str, BranchData], contents,
+                        mode: str = "split", scope: str = "merged") -> dict:
+    """把支部数据排成一个工作簿的子表。
+
+    merged + split  每项内容一张子表（支部列在同一张表里）
+    merged + single 全部内容合成一张，多一列「类别」
+    branch + split  每支部每项内容一张子表
+    branch + single 每支部一张子表，多一列「类别」
+    """
+    if scope != "branch":
+        return build_sheets(merge_dataset(dataset), contents, mode)
+
+    sheets: dict = {}
+    used: set[str] = set()
+    for branch, data in dataset.items():
+        if mode == "single":
+            part = build_sheets(data, contents, "single")
+            sheets[_unique_sheet(branch, used)] = part[SINGLE_SHEET]
+            continue
+        for title, sheet in build_sheets(data, contents, "split").items():
+            sheets[_unique_sheet(f"{branch}-{title}", used)] = sheet
+    return sheets
 
 
 def run_export(cfg: dict, contents, mode: str = "split", scope: str = "merged",
@@ -334,9 +339,5 @@ def run_export(cfg: dict, contents, mode: str = "split", scope: str = "merged",
     if not dataset:
         raise ValueError("还没有成员缓存，请先在系统配置同步数据")
     rows = sum(data.count(keys) for data in dataset.values())
-    if scope == "branch":
-        files = save_branch_zip(target, dataset, keys, mode)
-        return {"files": files, "rows": rows, "branches": files}
-    merged = merge_dataset(dataset)
-    save_workbook(target, build_sheets(merged, keys, mode))
+    save_workbook(target, build_export_sheets(dataset, keys, mode, scope))
     return {"files": 1, "rows": rows, "branches": len(dataset)}
