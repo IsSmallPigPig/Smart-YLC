@@ -60,6 +60,8 @@
 
 > Windows 7 / x86（32 位）不支持：Qt 6 与 PySide6 6.x 没有 32 位 Windows 轮子，Windows 运行时下限也是 10。
 
+> 窗口透明材质分两档：**Acrylic** 需 Windows 10 1803（build 17134）及以上，实时模糊窗口后面的内容；**Mica** 需 Windows 11，取桌面壁纸的色调。Win10 上选 Mica 会按 Acrylic 呈现，设置页那一行会写明当前机器的实际效果。
+
 ## 快速开始
 
 ### 安装包
