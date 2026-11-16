@@ -1637,3 +1637,97 @@ def test_single_instance_notifies_existing_window(app, monkeypatch):
             break
     assert got == ["show"]
     first.close()
+
+
+def test_tint_roles_have_light_and_dark_backgrounds(app):
+    """提示卡片底色按 Fluent 2 明暗各一套，异常用黄、硬失败才用红。"""
+    from qfluentwidgets import Theme, setTheme
+
+    from app.ui import palette as P
+
+    assert P.pair("warning") == ("#9D5D00", "#FCE100")
+    assert P.TINT["warning"] == ("#FFF4CE", "#463414")
+    assert P.TINT["danger"] == ("#FDE7E9", "#442324")
+    try:
+        setTheme(Theme.LIGHT)
+        assert P.tint("warning").name() == "#fff4ce"
+        assert P.tint("warning").alpha() == P.TINT_ALPHA[0]
+        setTheme(Theme.DARK)
+        assert P.tint("warning").name() == "#463414"
+        assert P.tint("warning").alpha() == P.TINT_ALPHA[1]
+        assert P.tint("warning", 99).alpha() == 99
+    finally:
+        setTheme(Theme.DARK)
+
+
+def test_branch_card_abnormal_uses_warning_background(app, isolated_store):
+    """支部卡片异常态用黄底，角色由 branch_status 与筛选共用。"""
+    from app.domain.org_manage import BranchNode, MemberView
+    from app.ui.org_manage_page import BranchCard, OrgManagePage
+
+    card = BranchCard("warning")
+    assert card.role == "warning"
+
+    page = OrgManagePage(FakeWindow())
+    node = BranchNode(code="x", label="异常支部",
+                      members=[MemberView("团员", "13800000001")])
+    page._stats_cache = {"x": {
+        "total": 1, "system": 1, "abnormal": 1,
+        "by_kind": {"identity": 0, "report": 1, "archive": 0, "fees": 0},
+        "unpaid_amount": 0.0,
+    }}
+    widget = page._feed_card(node)
+    try:
+        assert isinstance(widget, BranchCard)
+        assert widget.role == "warning"
+    finally:
+        widget.deleteLater()
+
+
+def test_tables_bind_fluent_context_menus(app, isolated_store):
+    """三张表都挂上 Fluent 右键菜单，且菜单不是系统原生 QMenu。"""
+    from PySide6.QtCore import Qt
+    from qfluentwidgets import RoundMenu
+
+    from app.ui.settings_page import SettingsPage
+
+    page = SettingsPage()
+    for table in (page.table, page.roster_table, page.sec_table):
+        assert table.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+        assert table.customContextMenuRequested is not None
+    # 绑定的辅助函数产生的菜单必须是 RoundMenu
+    from app.ui.page import bind_table_context_menu
+    from PySide6.QtWidgets import QTableWidget
+
+    probe = QTableWidget(1, 1)
+    menus = []
+    original = RoundMenu.exec
+
+    def fake_exec(self, *args, **kwargs):
+        menus.append(self)
+        return None
+
+    RoundMenu.exec = fake_exec
+    try:
+        from PySide6.QtCore import QPoint
+        from qfluentwidgets import Action, FluentIcon as FIF
+        bind_table_context_menu(
+            probe, lambda row: [Action(FIF.COPY, "复制")])
+        probe.customContextMenuRequested.emit(QPoint(0, 0))
+        assert len(menus) == 1
+        assert isinstance(menus[0], RoundMenu)
+    finally:
+        RoundMenu.exec = original
+        probe.deleteLater()
+        page.deleteLater()
+
+
+def test_design_doc_records_tinted_prompt_style():
+    """DESIGN.md 写明提示卡片用背景色、异常用黄、表格用 Fluent 右键菜单。"""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    text = (root / "DESIGN.md").read_text(encoding="utf-8")
+    assert "提示用背景色，不用细色条" in text
+    assert "异常是「需要关注」，底色用黄" in text
+    assert "右键菜单用 Fluent 控件" in text

@@ -56,6 +56,29 @@ KIND = {
 
 SOURCE = {"local": MUTED, "system": BRAND, "both": OK}
 
+# 提示卡片的背景色（Fluent 2 tint）：深浅各一套，浅色是很淡的彩色纸，深色是饱和暗底。
+# 背景负责传达「需关注到什么程度」，文字仍用 fg/text_colors 的语义色——
+# 「异常团员」是错误，但底色用 warning 黄提示需要关注，而不是 danger 红制造警报。
+TINT: dict[str, tuple[str, str]] = {
+    "warning": ("#FFF4CE", "#463414"),
+    "danger": ("#FDE7E9", "#442324"),
+    "success": ("#DFF6DD", "#12351A"),
+    "info": ("#DEECF9", "#10304B"),
+    "fees": ("#E9F0F8", "#1A3045"),
+    "muted": ("#F1F1F1", "#2C2C2C"),
+}
+TINT_ALPHA = (200, 170)  # (浅色, 深色)：透出 mica，又不盖掉文字
+
+
+def tint(role: str, alpha: int | None = None) -> QColor:
+    """当前主题下提示卡片的背景色。role 写错会立刻暴露，不静默回退。"""
+    light, dark = TINT[role]
+    c = QColor(dark if isDarkTheme() else light)
+    if alpha is None:
+        alpha = TINT_ALPHA[1] if isDarkTheme() else TINT_ALPHA[0]
+    c.setAlpha(alpha)
+    return c
+
 
 def pair(role: str) -> tuple[str, str]:
     """返回某个角色的 (浅色, 深色) hex。角色名写错会立即暴露，不静默回退。"""

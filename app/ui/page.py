@@ -26,7 +26,10 @@ from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout,
 
 from app.ui.hidpi import hidpi_canvas, ui_dpr
 from app.ui import palette as P
-from qfluentwidgets import CaptionLabel, CardWidget, FluentIcon as FIF, IconWidget, IndeterminateProgressRing, ScrollArea, StrongBodyLabel, TransparentToolButton, isDarkTheme, qconfig
+from qfluentwidgets import (Action, CaptionLabel, CardWidget, FluentIcon as FIF,
+                            IconWidget, IndeterminateProgressRing, RoundMenu,
+                            ScrollArea, StrongBodyLabel, TransparentToolButton,
+                            isDarkTheme, qconfig)
 
 PAGE_MARGINS = (32, 24, 32, 24)
 
@@ -64,6 +67,22 @@ def banner_text_colors() -> tuple[QColor, QColor]:
     if isDarkTheme():
         return QColor(255, 255, 255), QColor(255, 255, 255, 222)
     return QColor("#12212e"), QColor("#33495e")
+
+
+def paint_tinted_card(widget, painter: QPainter, role: str, radius: int = 10,
+                      alpha: int | None = None, hover: float = 0.0) -> None:
+    """在卡片自绘层铺一层语义色底：状态用整块背景色传达，不再靠细色条。
+
+    调用方先 ``super().paintEvent(e)`` 让 CardWidget 画好底与边框，再调这个函数。
+    ``hover`` 只提升不透明度（0→1），不改变色相，避免 hover 时整张卡跳色。
+    """
+    painter.setPen(Qt.PenStyle.NoPen)
+    brush = P.tint(role, alpha)
+    if hover:
+        brush.setAlpha(min(255, int(brush.alpha() + 45 * hover)))
+    painter.setBrush(brush)
+    painter.drawRoundedRect(QRectF(widget.rect().adjusted(0, 0, -1, -1)),
+                            radius, radius)
 
 
 def page_bg_color() -> QColor:
@@ -604,6 +623,36 @@ class CollapsibleCard(CardWidget):
 
     def _sync_chevron(self, *_):
         self.toggle_btn.setIcon(chevron_icon(self._expanded))
+
+
+def bind_table_context_menu(table, build_actions, select_row=None) -> None:
+    """给表格挂 qfluentwidgets 的 RoundMenu 右键菜单，不用原生 QMenu。
+
+    ``build_actions(row)`` 返回 ``Action`` 列表，列表里放 ``None`` 表示分节线；
+    右键点到数据行时传入行号，点到空白处传 -1。``select_row(row)`` 可选：
+    先把右键行设为当前行，让「删除选中」这类复用 currentRow() 的回调作用于它。
+    """
+    from PySide6.QtCore import Qt as _Qt
+
+    table.setContextMenuPolicy(_Qt.ContextMenuPolicy.CustomContextMenu)
+
+    def show(pos):
+        index = table.indexAt(pos)
+        row = index.row() if index.isValid() else -1
+        if select_row is not None and row >= 0:
+            select_row(row)
+        actions = build_actions(row)
+        if not actions:
+            return
+        menu = RoundMenu(parent=table)
+        for action in actions:
+            if action is None:
+                menu.addSeparator()
+            else:
+                menu.addAction(action)
+        menu.exec(table.viewport().mapToGlobal(pos))
+
+    table.customContextMenuRequested.connect(show)  # type: ignore[attr-defined]
 
 
 def fit_table_columns(table: QTableView, stretch_last: bool = False,
