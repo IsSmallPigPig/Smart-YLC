@@ -2,6 +2,20 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.5.4
+
+### 修复
+- **访问支部标题栏与系统按钮对齐**：标题栏高度改成系统红绿灯中线（从窗口顶部往下 21px）
+  的两倍，标签行在里面垂直居中；加号、后退 / 前进 / 刷新 / 重新登录与三个圆点现在共用
+  同一条水平中线。上一版把标题栏压到 32px，反而让图标整体高了 5px。
+- **拖动窗口偶发失灵**：拖窗改回在按下时调用 `startSystemMove()`。macOS 的原生拖拽只认
+  mouseDown，等鼠标移动 4px 再从 mouseMove 调，AppKit 会记一条
+  `Window move completed without beginning`，这一次拖拽就作废——这正是偶发拖不动的来源。
+  上一版为此加的 4px 阈值是本末倒置，单击本来就不会进入拖拽。
+- **不要被日志里的 IMK 报错误导**：`error messaging the mach port for IMKCFRunLoopWakeUpReliable`
+  是 macOS 输入法框架的噪声，应用启动、退出时都会出现；实测刷新链各步（首页统计 63ms、
+  组织管理重建 99ms、站内信缓存 19ms、配置读写 25ms）都在 100ms 以内，没有拖住主线程。
+
 ## v1.5.3
 
 ### 新增

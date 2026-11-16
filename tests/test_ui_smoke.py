@@ -303,13 +303,15 @@ def test_upload_branch_cards_use_tags(app, isolated_store):
 )
 def test_browser_window_shell_builds(app, isolated_store):
     """账号网页窗口外壳：标签条接管标题栏，没有标签时停在欢迎页。"""
-    from app.ui.browser_page import BrowserWindow
+    from app.ui.browser_page import TAB_HEIGHT, BrowserWindow
 
     win = BrowserWindow()
     assert win.tab_count() == 0
-    # 标题栏按系统默认 32px 排，标签与导航按钮才不会比窗口按钮低半截
-    assert win.titleBar.height() == 32
-    assert win.tab_row.height() == 32
+    # 标题栏按系统按钮的中线定高，标签行在它里面居中：三者中心同一条水平线
+    assert win.tab_row.height() == TAB_HEIGHT
+    assert win.titleBar.height() >= TAB_HEIGHT
+    assert abs(win.tab_row.geometry().center().y()
+               - win.titleBar.height() // 2) <= 1
     assert not win.back_btn.isEnabled()
     assert win.empty.isVisible()  # 没有标签时只有欢迎页
     # 继承来的空 stackedWidget 会停在窗口左上角画一块不透明底，必须藏起来
@@ -408,6 +410,19 @@ def test_cross_fade_applies_work_and_cleans_effect(app, isolated_store):
     _pump(app, 120)
     assert calls == [1]
     assert widget.graphicsEffect() is None  # 结束后不残留合成层
+
+
+def test_browser_tab_row_drags_on_press(app):
+    """拖窗必须在按下时交给系统。
+
+    macOS 的 performWindowDragWithEvent 只认 mouseDown；等鼠标移动再从
+    mouseMove 调，AppKit 报「Window move completed without beginning」，
+    而且这一下经常真的拖不动。
+    """
+    from app.ui.browser_page import ChromeRow
+
+    assert "mousePressEvent" in ChromeRow.__dict__
+    assert "mouseMoveEvent" not in ChromeRow.__dict__
 
 
 def test_upload_search_filters_rows(app, isolated_store):
