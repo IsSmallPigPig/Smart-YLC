@@ -25,35 +25,49 @@ class CheckWorker(QThread):
 
 
 class DownloadWorker(QThread):
-    """下载更新包。ghproxy 加速失败时明确报告原因并自动回退直连。"""
+    """下载更新包：从指定网关开始，失败自动换下一个，最后一个是直连。
+
+    start_gateway 传网关 key（None = 用设置里选的默认）。跳过与起点重复的项，
+    保证每个网关最多试一次；换网关时发 fallback 信号说明上一个为什么不行。
+    """
 
     progress = Signal(int)
     fallback = Signal(str)
     done = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, info: updater.UpdateInfo, use_proxy: bool, parent=None):
+    def __init__(self, info: updater.UpdateInfo, start_gateway: str | None = None,
+                 use_proxy: bool | None = None, parent=None):
         super().__init__(parent)
         self.info = info
-        self.use_proxy = use_proxy
+        if use_proxy is not None:  # 兼容旧调用：True=默认站，False=直连
+            start_gateway = updater.DEFAULT_GATEWAY if use_proxy else "direct"
+        self.start_gateway = start_gateway or updater.DEFAULT_GATEWAY
+
+    def _chain(self) -> list[dict]:
+        gws = list(updater.GATEWAYS)
+        try:
+            i = [g["key"] for g in gws].index(self.start_gateway)
+        except ValueError:
+            return gws
+        return gws[i:] + gws[:i]
 
     def run(self):
-        try:
-            path = updater.download(self.info, self.use_proxy, progress=self.progress.emit)
-        except updater.UpdateError as e:
-            if not self.use_proxy:
-                self.failed.emit(str(e))
-                return
-            self.fallback.emit(str(e))
+        errors = []
+        for idx, gw in enumerate(self._chain()):
             try:
-                path = updater.download(self.info, False, progress=self.progress.emit)
-            except updater.UpdateError as e2:
-                self.failed.emit(str(e2))
+                path = updater.download(self.info, gw, progress=self.progress.emit)
+            except updater.UpdateError as e:
+                errors.append(str(e))
+                if idx + 1 < len(self._chain()):
+                    self.fallback.emit(str(e))
+                continue
+            except Exception as e:
+                self.failed.emit(f"下载异常：{e}")
                 return
-        except Exception as e:
-            self.failed.emit(f"下载异常：{e}")
+            self.done.emit(path)
             return
-        self.done.emit(path)
+        self.failed.emit("；".join(errors[-2:]) or "下载失败")
 
 
 # ---------------------------------------------------------------- 配置
@@ -66,12 +80,15 @@ def set_auto_check(enabled: bool):
     store.update(lambda cfg: cfg.__setitem__("autoCheckUpdate", bool(enabled)))
 
 
-def proxy_mode() -> str:
-    mode = store.load().get("updateProxy") or updater.DEFAULT_PROXY
-    return mode if mode in ("ghproxy", "direct") else updater.DEFAULT_PROXY
+def gateway_mode() -> str:
+    """当前选择的下载网关 key；非法或旧值回退到默认站。"""
+    mode = store.load().get("updateProxy") or updater.DEFAULT_GATEWAY
+    if mode == "ghproxy":       # 旧版本存过 "ghproxy"，映射到 gh-proxy
+        return updater.DEFAULT_GATEWAY
+    return mode if updater.gateway_by_key(mode) else updater.DEFAULT_GATEWAY
 
 
-def set_proxy_mode(mode: str):
+def set_gateway_mode(mode: str):
     store.update(lambda cfg: cfg.__setitem__("updateProxy", mode))
 
 
@@ -147,7 +164,7 @@ def check_on_startup(delay_ms: int = 2500, parent=None):
             return
         record("update", info.version)
 
-        downloader = DownloadWorker(info, proxy_mode() == "ghproxy")
+        downloader = DownloadWorker(info, gateway_mode())
         _WORKERS.append(downloader)
         downloader.finished.connect(
             lambda: _WORKERS.remove(downloader) if downloader in _WORKERS else None)

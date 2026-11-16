@@ -3,7 +3,8 @@
 数据来源固定为 GitHub 仓库 IsSmallPigPig/Smart-YLC：
   * 有 Release 时读 /releases/latest，取 tag、说明和安装包
   * 没有 Release 时读 main 分支的 app/__init__.py 版本号，下载源码压缩包
-下载可经 ghproxy.com 加速；加速失败会明确报出原因，由调用方决定是否回退直连。
+下载可经公开加速网关（GATEWAYS，逐个回退）；失败会明确报出原因，
+由调用方决定是否换下一个网关。老 ghproxy.com 域名已停服，不再收录。
 本模块不含 Qt 依赖，网络失败一律抛 UpdateError，不静默返回空结果。
 """
 
@@ -28,7 +29,6 @@ REPO_URL = "https://github.com/IsSmallPigPig/Smart-YLC.git"
 REPO_PAGE = "https://github.com/" + REPO
 AUTHOR_URL = "https://github.com/IsSmallPigPig"
 ISSUES_URL = REPO_PAGE + "/issues"
-GH_PROXY = "https://ghproxy.com/"
 BRANCH = "main"
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 VERSION_RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/app/__init__.py"
@@ -38,8 +38,32 @@ TIMEOUT = 8
 USER_AGENT = f"Smart-YLC/{__version__} (+{REPO_PAGE})"
 
 DEFAULT_AUTO_CHECK = True
-DEFAULT_PROXY = "ghproxy"
-PROXY_LABELS = ("ghproxy.com 加速", "直连 GitHub")
+
+# 下载网关：公开加速站按前缀拼接原始 GitHub 链接，直连前缀为空。
+# 顺序即回退优先级——前一个失败自动试下一个，最后一个必须是直连兜底。
+# ghproxy.com 域名 2025 年起已停服，收录反而拖累速度，故用 gh-proxy.com /
+# ghproxy.net 这些当前实测可通的站（2026-11 实测：gh-proxy.com 最快且支持 Range）。
+GATEWAYS = (
+    {"key": "gh-proxy", "label": "gh-proxy.com 加速", "prefix": "https://gh-proxy.com/"},
+    {"key": "ghproxy.net", "label": "ghproxy.net 加速", "prefix": "https://ghproxy.net/"},
+    {"key": "direct", "label": "直连 GitHub", "prefix": ""},
+)
+DEFAULT_GATEWAY = "gh-proxy"
+
+
+def gateway_by_key(key: str) -> dict | None:
+    for g in GATEWAYS:
+        if g["key"] == key:
+            return g
+    return None
+
+
+def gateway_keys() -> tuple[str, ...]:
+    return tuple(g["key"] for g in GATEWAYS)
+
+
+def gateway_labels() -> tuple[str, ...]:
+    return tuple(g["label"] for g in GATEWAYS)
 
 
 class UpdateError(Exception):
@@ -65,11 +89,18 @@ def is_newer(remote: str, local: str = __version__) -> bool:
     return parse_version(remote) > parse_version(local)
 
 
-def proxy_url(url: str, use_proxy: bool = True) -> str:
-    """ghproxy.com 用法：把完整 GitHub / raw 链接跟在代理根路径后面。"""
-    if not use_proxy:
-        return url
-    return GH_PROXY + url
+def proxy_url(url: str, gateway: dict | str | bool = True) -> str:
+    """把原始 GitHub 链接拼到网关前缀后面；直连（空前缀/False）原样返回。
+
+    gateway 可以传网关 dict、key 字符串，或兼容旧调用的 True/False。"""
+    if isinstance(gateway, dict):
+        prefix = gateway.get("prefix", "")
+    elif isinstance(gateway, str):
+        g = gateway_by_key(gateway)
+        prefix = (g or GATEWAYS[-1])["prefix"]
+    else:
+        prefix = GATEWAYS[0]["prefix"] if gateway else ""
+    return prefix + url if prefix else url
 
 
 MACOS_KEYCHAINS = (
@@ -245,13 +276,17 @@ def check_update() -> UpdateInfo | None:
     return info if is_newer(info.version) else None
 
 
-def download(info: UpdateInfo, use_proxy: bool = True, progress=None, cancel=None) -> str:
+def download(info: UpdateInfo, gateway: dict | str | bool = True, progress=None, cancel=None) -> str:
     """下载更新包到 ~/.gd12355-helper/updates/，返回本地路径。
 
+    gateway 决定走哪个加速站（dict/key，或兼容旧调用的 True/False）。
     progress(0..100) 逐块回调；cancel() 返回 True 时中止并删除临时文件。
     临时文件 .part + os.replace 原子落地，中途失败不会留下半个包。
     """
-    url = proxy_url(info.download_url, use_proxy)
+    gw = gateway if isinstance(gateway, dict) else (
+        gateway_by_key(gateway) if isinstance(gateway, str)
+        else (GATEWAYS[0] if gateway else GATEWAYS[-1]))
+    url = proxy_url(info.download_url, gw)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     folder = Path(UPDATE_DIR)
     folder.mkdir(parents=True, exist_ok=True)
@@ -278,7 +313,8 @@ def download(info: UpdateInfo, use_proxy: bool = True, progress=None, cancel=Non
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
         tmp.unlink(missing_ok=True)
         reason = getattr(e, "reason", None) or getattr(e, "code", None) or str(e)
-        raise UpdateError(f"{'加速下载' if use_proxy else '直连下载'}失败：{reason}（{url}）") from e
+        via = gw["label"] if gw["prefix"] else "直连"
+        raise UpdateError(f"{via}下载失败：{reason}（{url}）") from e
     except UpdateError:
         tmp.unlink(missing_ok=True)
         raise

@@ -609,6 +609,32 @@ def test_branch_picker_lists_only_normal_accounts(app):
     assert pick_branch(accounts[:1], None, lambda user: None) is None
 
 
+def test_gateway_picker_lists_all_download_channels(app, monkeypatch):
+    """更新下载弹窗：每个网关一行、各带一个下载按钮，点选记为该通道且防重入。"""
+    from PySide6.QtWidgets import QPushButton, QWidget
+
+    from app.services import updater
+    from app.ui.gateway_picker import GatewayPickerDialog
+
+    host = QWidget()
+    host.resize(600, 400)
+    dlg = GatewayPickerDialog(host, "9.9.9")
+    assert dlg.chosen is None
+    # 每个网关一个「下载」按钮（弹窗自带取消/确认按钮，按文案数）
+    btns = [b for b in dlg.widget.findChildren(QPushButton) if b.text() == "下载"]
+    assert len(btns) == len(updater.GATEWAYS)
+    # 关窗动画在 offscreen 会崩，accept 换成空操作，只验证选通道这条契约
+    monkeypatch.setattr(dlg, "accept", lambda *a: None)
+    gw = updater.GATEWAYS[1]
+    dlg._on_pick(gw)
+    assert dlg.chosen["key"] == gw["key"]
+    assert dlg._closing is True
+    # 已选定后再点别的通道不改变结果
+    dlg._on_pick(updater.GATEWAYS[0])
+    assert dlg.chosen["key"] == gw["key"]
+    dlg.deleteLater()
+
+
 def test_notice_rows_are_compact(app):
     """公告行单行排：折行会把行高翻倍，看着就是「行距太宽」。"""
     from app.services.notices import Notice
