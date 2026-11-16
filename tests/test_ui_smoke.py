@@ -66,14 +66,24 @@ class FakeWindow(QWidget):
 
 
 def test_settings_page_builds(app, isolated_store):
+    from app.ui.page import CollapsibleCard
     from app.ui.settings_page import SettingsPage
 
     page = SettingsPage()
     assert page.notify_mode.count() == 3
     assert page.notify_row.desc_label is not None
-    # 未选目录时不写说明：这一行的 desc 只承载已选路径，空的就隐藏
-    assert page.workspace_row.desc_label.text() == ""
-    assert not page.workspace_row.desc_label.isVisible()
+    # 动态信息没有内容时也要有四个字的默认占位
+    assert page.workspace_row.desc_label.text() == "尚未选择"
+    assert page.roster_row.desc_label.text() == "尚未导入"
+    assert page.sec_row.desc_label.text() == "尚未导入"
+    assert page.rule_row.desc_label.text() == "当前 3 条规则"
+    assert page.file_btn.text() == "导入导出"
+    assert [a.text() for a in page.file_menu.actions()] == [
+        "从表格文件中导入", "从系统备份中导入", "下载账号模板", "导出系统备份"]
+    assert page.roster_more_btn.text() == "名单管理"
+    assert page.sec_more_btn.text() == "支书管理"
+    cards = page.findChildren(CollapsibleCard)
+    assert cards and all(card.desc_label.text() for card in cards)
 
 
 def test_load_config_keeps_workspace_and_rosters(app, isolated_store):

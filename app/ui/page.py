@@ -400,9 +400,9 @@ class CardRow(QWidget):
         painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
 
 
-# 右侧控件列的上限宽度：约等于一个六字按钮。控件按内容取宽、右边缘对齐，
-# 放不下的次要项收进「设置」图标弹窗，而不是把这一列撑成一条宽跑道。
-CONTROL_MAX_WIDTH = 190
+# 右侧控件列的上限宽度：放下两个带图标的四字控件（106 + 8 + 125 下拉按钮），
+# 控件按内容取宽、右边缘对齐；放不下的次要项收进行尾下拉或齿轮弹窗。
+CONTROL_MAX_WIDTH = 244
 CONTROL_WIDTH = CONTROL_MAX_WIDTH  # 兼容旧调用点
 
 

@@ -70,6 +70,14 @@ def build_command() -> list[str]:
             "--copyright=GPL-3.0",
         ]
     elif sys.platform == "darwin":
+        # 原生通知走 PyObjC 的 UserNotifications；这些模块在函数内按需导入，
+        # Nuitka 静态分析看不到，显式带上，避免发布版点通知没反应。
+        cmd += [
+            "--include-package=objc",
+            "--include-package=Foundation",
+            "--include-package=AppKit",
+            "--include-package=UserNotifications",
+        ]
         icns = ROOT / "build" / f"{APP_NAME}.icns"
         cmd += [
             "--macos-create-app-bundle",

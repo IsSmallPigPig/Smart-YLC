@@ -1,8 +1,9 @@
-"""系统通知：Windows 走托盘气泡，macOS 用 osascript。
+"""系统通知：Windows 走托盘气泡，macOS 优先走系统原生通知。
 
 托盘气泡支持点击（`messageClicked`），传了 `on_click` 就在气泡被点时执行一次。
-macOS 的 osascript 通知点击会打开「脚本编辑器」——通知归属发通知的进程，改不了，
-也拿不到点击回调，所以带点击需求的后台提醒不走这里，改用 `app.ui.bg_toast`。
+macOS 打包成 .app 后用 UNUserNotificationCenter 发通知，点击回调能回到应用，
+再切到对应页面；源码运行时没有 bundle id，回落到 osascript，点击仍会打开
+「脚本编辑器」，所以带点击需求的提醒由 `bg_toast` 改用应用内浮窗。
 
 Windows 的 toast 必须挂在托盘图标上，而主界面模式本身可能还没建托盘，所以这里
 按需借一个：没有现成托盘就临时建一个（只建一次）。没有这层回落时，Windows 上的
@@ -67,9 +68,16 @@ def _fallback_tray():
 def send(title: str, body: str, tray=None, on_click=None) -> bool:
     """发送系统通知。tray 可选传 QSystemTrayIcon；不传时非 macOS 按需借一个。
 
-    on_click: 气泡被点时执行一次的回调。macOS 的 osascript 通知无法绑定，
-    传了回调就直接返回 False，由调用方换成应用内浮窗。"""
+    on_click: 通知被点时执行一次的回调。macOS 打包版由原生通知 delegate 触发；
+    源码运行没有 bundle id 时返回 False，由调用方换成应用内浮窗。"""
     if platform.system() == "Darwin":
+        try:
+            from app.services import macos_notify
+
+            if macos_notify.send(title, body, on_click=on_click):
+                return True
+        except Exception:
+            pass
         if on_click is not None:
             return False
         try:
