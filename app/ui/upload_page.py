@@ -649,7 +649,7 @@ class UploadPage(FluentPage):
         # 设置页只有「一个目录」的输入框，这里跟着同步，两处不打架
         settings = getattr(self.window_ref, "settings_page", None)
         if settings is not None and hasattr(settings, "_setup_watcher"):
-            settings.ws_edit.setText(self._dirs[0] if self._dirs else "")
+            settings.workspace_dir = self._dirs[0] if self._dirs else ""
             settings._setup_watcher(self._dirs)
         if skipped:
             InfoBar.info("已跳过重复目录", f"新增 {len(added)} 个，跳过 {skipped} 个",

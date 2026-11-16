@@ -213,7 +213,7 @@ def test_import_config_replaces_and_reloads(app, isolated_store, tmp_path):
     assert [a["userName"] for a in page.accounts] == ["new1"]
     assert page.theme_combo.currentIndex() == 2          # dark
     assert page.material_combo.currentText() == "Acrylic"
-    assert page.ws_edit.text() == "/tmp/ws-new"
+    assert page.workspace_dir == "/tmp/ws-new"
 
     folder = os.path.dirname(store.CONFIG_FILE)
     assert any("before-import" in n for n in os.listdir(folder))
@@ -959,7 +959,7 @@ def test_notify_dialog_fresh_per_open_and_writeback(app, isolated_store):
 
     page = SettingsPage()
     # isolated_store 默认 notifyInterval=4
-    assert page.notify_interval.currentData() == 4
+    assert page._notify_interval_hours == 4
 
     captured = []
     orig = page._config_dialog
@@ -969,22 +969,53 @@ def test_notify_dialog_fresh_per_open_and_writeback(app, isolated_store):
     dlg = captured[-1]
     combo = dlg.findChild(ComboBox)
     assert combo is not None
-    assert combo is not page.notify_interval  # 弹窗里是全新控件，不是页面持久控件
+    assert not combo.isWindow()  # 弹窗里的控件不能是独立顶层窗口
 
     idx = combo.findData(2)
     combo.setCurrentIndex(idx)
     dlg.accept()
     QApplication.processEvents()  # 让 deleteLater / 回调落地
     # 值已写回持久属性并落盘
-    assert page.notify_interval.currentData() == 2
+    assert page._notify_interval_hours == 2
 
     # 再次打开：又是一批全新控件，且读到的仍是上次写回的 2 小时
     page._open_notify_dialog()
     dlg2 = captured[-1]
     combo2 = dlg2.findChild(ComboBox)
-    assert combo2 is not None and combo2 is not page.notify_interval
-    assert page.notify_interval.currentData() == 2
+    assert combo2 is not None and not combo2.isWindow()
+    assert page._notify_interval_hours == 2
     dlg2.reject()
+
+
+def test_settings_has_no_orphan_top_level_widgets(app, isolated_store):
+    """设置页不能留下无父控件：Qt 会把它们当独立窗口，一 setVisible 就弹出来。
+
+    回归：notify_time_edit（默认 08:00 的输入框）与 notify_interval（每 N 小时
+    下拉框）曾既没进布局，又被按通知模式 setVisible——「每天」弹出前者，
+    「按间隔」弹出后者；ws_edit（工作目录框）也是隐藏的游离窗口。现在三者
+    都只是普通值属性。"""
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from app.ui.settings_page import SettingsPage
+
+    before = set(app.allWidgets())
+    page = SettingsPage()
+    page.show()
+    app.processEvents()
+    created = lambda: [w for w in app.allWidgets() if w not in before]
+    orphans = lambda: [w for w in created()
+                       if w.isWindow() and w.parentWidget() is None
+                       and w is not page and not isinstance(w, QMenu)]
+
+    assert orphans() == [], f"设置页留下无父控件: {orphans()}"
+
+    for mode in ("daily", "interval", "off"):
+        idx = page.notify_mode.findData(mode)
+        if idx < 0:
+            continue
+        page.notify_mode.setCurrentIndex(idx)
+        app.processEvents()
+        assert orphans() == [], f"{mode} 模式留下无父控件: {orphans()}"
 
 
 def test_open_web_uses_browser_window(app, isolated_store):
