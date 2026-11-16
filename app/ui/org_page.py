@@ -20,7 +20,6 @@ from qfluentwidgets import (
     InfoBar,
     PrimaryPushButton,
     StrongBodyLabel,
-    ToolButton,
     CaptionLabel,
 )
 
@@ -167,14 +166,12 @@ class OrgPage(FluentPage):
 
         self.start_btn = PrimaryPushButton(FIF.SYNC, "开始统计")
         self.start_btn.clicked.connect(self._start)
-        self.export_btn = ToolButton(FIF.SAVE)
-        self.export_btn.setFixedSize(32, 32)
-        set_tip(self.export_btn, "导出异常团员名单")
-        self.export_btn.setEnabled(False)
-        self.export_btn.clicked.connect(self._export)
-        # 功能按钮统一落在 banner 右下角（不居中）
-        self.header.add_control(self.export_btn)
+        # 统计每小时在后台跑一次；按钮只保留手动立即统计
         self.header.add_control(self.start_btn)
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(60 * 60 * 1000)
+        self._auto_timer.timeout.connect(self._auto_start)
+        self._auto_timer.start()
 
         card = CardWidget()
         card_lay = QVBoxLayout(card)
@@ -239,18 +236,29 @@ class OrgPage(FluentPage):
         self.transfer_bar.set_value_animated(self._transfer_applied, max_n)
         self.donut.set_value_animated(self._uploaded, self._total)
 
-    def _start(self):
+    def _auto_start(self):
+        """每小时后台统计一次：不弹进度条，也不因账号为空打扰用户。"""
+        if self.worker is not None and self.worker.isRunning():
+            return
+        self._start(silent=True)
+
+    def _start(self, silent: bool = False):
+        if self.worker is not None and self.worker.isRunning():
+            return
         usable, excluded = split_accounts(self.window_ref.settings_page.accounts)
         accounts = usable
         if not accounts:
+            if silent:
+                return
             hint = f"{len(excluded)} 个账号均被标记为异常" if excluded else "先在系统配置添加团支部账号"
             InfoBar.warning("没有可统计的账号", hint, duration=6000, parent=self)
             return
-        if excluded:
+        if excluded and not silent:
             InfoBar.warning("跳过异常账号",
                 f"{excluded_summary(excluded)}，本轮不参与统计；测活恢复正常后自动纳入",
                 duration=6000, parent=self)
-        self.start_btn.setEnabled(False)
+        if not silent:
+            self.start_btn.setEnabled(False)
         # 保留现有展示：归零累加器但不重绘，新账号结果陆续抵达时逐个替换；
         # 整轮一无所获（全失败/全跳过）时回滚快照，组织状况数据不丢
         self._snapshot = (
@@ -265,7 +273,8 @@ class OrgPage(FluentPage):
         self.worker = OrgWorker(accounts)
         self.worker.account_done.connect(self._on_account)
         self.worker.all_done.connect(self._on_run_done)
-        self._show_progress(len(accounts))
+        if not silent:
+            self._show_progress(len(accounts))
         self.worker.start()
 
     def _show_progress(self, count: int):
@@ -386,8 +395,6 @@ class OrgPage(FluentPage):
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch, r.kinds)
         self.error_title.setText(f"异常团员 {len(error_rows)}")
-        if error_rows:
-            self.export_btn.setEnabled(True)
 
     def _on_account(self, user, branch, total, uploaded, abnormal, by_kind, status, message, transfer, rows):
         self._progress_done += 1
@@ -419,8 +426,6 @@ class OrgPage(FluentPage):
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch, r.kinds)
         self.error_title.setText(f"异常团员 {len(self._error_rows)}")
-        if self._error_rows:
-            self.export_btn.setEnabled(True)
         if status == "ok":
             self._persist_account(user, branch, total, uploaded, dict(by_kind or {}), transfer, rows)
 
@@ -511,8 +516,6 @@ class OrgPage(FluentPage):
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch, r.kinds)
         self.error_title.setText(f"异常团员 {len(agg['rows'])}")
-        if agg["rows"]:
-            self.export_btn.setEnabled(True)
         # 缓存里是 ISO 时间串，直接显示会带 T 和秒；截图/阅读都不好看
         updated = agg["updated"]
         stamp = f"，更新于 {updated.replace('T', ' ')[:16]}" if updated else ""
@@ -584,37 +587,3 @@ class OrgPage(FluentPage):
             on_missing=lambda: InfoBar.warning(
                 "没有找到支部", f"组织管理里没有「{branch}」这个支部",
                 duration=4000, parent=self)))
-
-    def _export(self):
-        if not self._error_rows:
-            InfoBar.warning("没有可导出的名单", "先开始统计，有异常团员才能导出", duration=3000, parent=self)
-            return
-        from PySide6.QtWidgets import QFileDialog
-
-        from app.services.export_data import default_name
-
-        path, _ = QFileDialog.getSaveFileName(
-            self, "导出异常团员名单",
-            default_name("异常团员名单", ".xlsx", f"{len(self._error_rows)}人"),
-            "Excel (*.xlsx)")
-        if not path:
-            return
-        from app.services.excel import save_error_rows
-
-        rows = list(self._error_rows)
-        self.export_btn.setEnabled(False)
-
-        def _ok(n: int):
-            self.export_btn.setEnabled(True)
-            self._workers = [w for w in getattr(self, "_workers", []) if w is not worker]
-            InfoBar.success("已导出", f"已导出 {n} 名异常团员到 {path}", duration=5000, parent=self)
-
-        def _fail(msg: str):
-            self.export_btn.setEnabled(True)
-            InfoBar.error("导出失败", msg, duration=5000, parent=self)
-
-        worker = CallbackWorker(lambda: save_error_rows(path, rows), self)
-        worker.ok.connect(_ok)
-        worker.fail.connect(_fail)
-        self._workers = getattr(self, "_workers", []) + [worker]
-        worker.start()

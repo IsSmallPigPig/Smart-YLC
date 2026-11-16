@@ -383,7 +383,9 @@ class OrgManagePage(FluentPage):
         import time
 
         now = time.monotonic()
-        if not self._branches or now - getattr(self, "_refreshed_at", 0) > 2:
+        # 已经有树就别每次切页都重算：30 秒同步会自己刷新，切页只负责显示。
+        # 原来 2 秒就过期，切回来必然清空重建，卡片一批批长出来，看着就是闪。
+        if not self._branches or now - getattr(self, "_refreshed_at", 0) > 300:
             self.refresh()
             self._refreshed_at = now
             if not self._branches:
@@ -535,7 +537,22 @@ class OrgManagePage(FluentPage):
             "both": sum(1 for b in self._branches for m in b.members if m.source == "both"),
         }
         self._refreshed_at = time.monotonic()
+        # 数据没变就不重建：30 秒同步回来一次、备注没改时也清空重建，
+        # 卡片会一批批重长出来。详情态不跳过，成员数字可能变了。
+        digest = self._feed_digest_of(self._branches, stats)
+        if digest == getattr(self, "_feed_digest", None) and not self._detail_code:
+            return
+        self._feed_digest = digest
         self._rebuild()
+
+    @staticmethod
+    def _feed_digest_of(branches, stats) -> tuple:
+        """只比影响支部列表显示的字段，避免把整份成员列表做成字符串。"""
+        return tuple(
+            (b.code, b.label, len(b.members),
+             tuple(sorted((stats.get(b.code) or {}).get("by_kind", {}).items())))
+            for b in branches
+        )
 
     def _branch_stats(self, b: BranchNode) -> dict:
         """支部统计：从成员缓存的系统记录离线计算，无网络请求。
@@ -575,10 +592,14 @@ class OrgManagePage(FluentPage):
         }
 
     def _clear(self, layout):
+        """先隐藏再排队销毁：deleteLater 要等事件循环，旧卡片会和新卡片叠在一起，
+        切页时看起来就是两层文字重影、整片发糊。"""
         while layout.count():
             item = layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.deleteLater()
 
     def _rebuild(self):
         self._feed_builder.cancel()

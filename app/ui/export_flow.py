@@ -19,7 +19,7 @@ _WORKERS: list[CallbackWorker] = []
 
 
 def start_export(parent, scope: str = "branch") -> ExportDialog:
-    """打开导出弹窗；范围（分班 zip / 合并 xlsx）在弹窗里选。"""
+    """打开导出弹窗；范围与呈现方式都在弹窗里选，最终始终落一个 xlsx。"""
     dialog = ExportDialog(scope, parent.window() if parent is not None else None)
     dialog.chosen.connect(
         lambda contents, mode, chosen_scope: QTimer.singleShot(
@@ -34,13 +34,13 @@ def _save(parent, scope: str, contents: list[str], mode: str):
     scope_text = "分班导出" if scope == "branch" else "合并导出"
     mode_text = "每项一表" if mode == "split" else "合成一表"
     picked = "+".join(CONTENT_LABELS.get(c, c) for c in contents)
-    if scope == "branch":
-        default, filt = default_name("导出数据", ".zip", scope_text, mode_text, picked), "Zip (*.zip)"
-    else:
-        default, filt = default_name("导出数据", ".xlsx", scope_text, mode_text, picked), "Excel (*.xlsx)"
+    default = default_name("导出数据", ".xlsx", scope_text, mode_text, picked)
+    filt = "Excel (*.xlsx)"
     path, _ = QFileDialog.getSaveFileName(parent, "选择保存位置", default, filt)
     if not path:
         return
+    if not path.lower().endswith(".xlsx"):
+        path += ".xlsx"
 
     from app.services import export_data, store
 

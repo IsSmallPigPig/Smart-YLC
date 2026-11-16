@@ -1,9 +1,8 @@
-"""导出数据：支部归类、五类明细、两种呈现、单表与 zip 落盘。"""
+"""导出数据：支部归类、五类明细、两种呈现，始终落一个 xlsx。"""
 
 from __future__ import annotations
 
 import os
-import zipfile
 
 import pytest
 
@@ -107,14 +106,29 @@ def test_merged_export_writes_one_workbook(tmp_path):
     assert ws.cell(2, 1).value == "普通高中高三七班"
 
 
-def test_branch_export_writes_zip_with_one_xlsx_per_branch(tmp_path):
-    target = str(tmp_path / "分班.zip")
+def test_branch_split_writes_one_workbook_with_sheets(tmp_path):
+    """分班 + 每项一表：仍是一个 xlsx，每个支部的每项内容各一张子表。"""
+    target = str(tmp_path / "分班.xlsx")
     result = export_data.run_export(
         cfg(), ["members"], "split", "branch", target)
-    assert result["files"] == 2 and result["branches"] == 2
-    with zipfile.ZipFile(target) as zf:
-        names = sorted(zf.namelist())
-    assert names == ["初中部初三七班.xlsx", "普通高中高三七班.xlsx"]
+    assert result == {"files": 1, "rows": 4, "branches": 2}
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(target)
+    assert wb.sheetnames == ["普通高中高三七班-团员信息", "初中部初三七班-团员信息"]
+    assert wb["普通高中高三七班-团员信息"].max_row == 4
+
+
+def test_branch_single_writes_one_sheet_per_branch(tmp_path):
+    target = str(tmp_path / "分班单表.xlsx")
+    export_data.run_export(cfg(), ["members", "fee"], "single", "branch", target)
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(target)
+    assert wb.sheetnames == ["普通高中高三七班", "初中部初三七班"]
+    assert wb["普通高中高三七班"].cell(1, 2).value == "类别"
 
 
 def test_empty_selection_and_missing_cache_raise():
@@ -154,10 +168,11 @@ def test_illegal_branch_name_is_sanitized(tmp_path):
         "memberCache": {},
         "orgStatsCache": {},
     }
-    target = str(tmp_path / "分班.zip")
+    target = str(tmp_path / "分班.xlsx")
     export_data.run_export(cfg_, ["members"], "split", "branch", target)
-    with zipfile.ZipFile(target) as zf:
-        assert zf.namelist() == ["高三_七班_一.xlsx"]
+    from openpyxl import load_workbook
+
+    assert load_workbook(target).sheetnames == ["高三七班一-团员信息"]
 
 
 def test_workbook_without_rows_still_has_a_sheet(tmp_path):
