@@ -11,9 +11,15 @@ from PySide6.QtWidgets import QDialog
 
 from qfluentwidgets import CaptionLabel, SubtitleLabel
 
-from app.domain.account_health import HEALTH_LABEL, account_status
+from app.domain.account_health import account_status
 from app.ui.combo import ComboBox
 from app.ui.dialogs import FluentPanelDialog
+
+
+def normal_accounts(accounts: list[dict]) -> list[dict]:
+    """只留状态正常的账号。「未检测」不算正常：这个弹窗是打开网页的入口，
+    列表要尽量干净，异常账号先到系统配置处理。"""
+    return [a for a in accounts if a.get("userName") and account_status(a) == "ok"]
 
 
 class BranchPickerDialog(FluentPanelDialog):
@@ -36,16 +42,16 @@ class BranchPickerDialog(FluentPanelDialog):
         if note:
             self.viewLayout.addWidget(CaptionLabel(note, self.widget))
 
+        usable = normal_accounts(accounts)
+        hidden = len([a for a in accounts if a.get("userName")]) - len(usable)
+        if hidden:
+            self.viewLayout.addWidget(CaptionLabel(
+                f"仅显示状态正常的支部，已隐藏 {hidden} 个异常账号", self.widget))
+
         self.combo = ComboBox(self.widget)
-        for acc in accounts:
-            user = str(acc.get("userName") or "")
-            if not user:
-                continue
+        for acc in usable:
+            user = str(acc["userName"])
             label = str(acc.get("remark") or user)
-            # 状态异常的账号也列出来：网页端还能手动登录恢复，标在后面别让人选错
-            status = account_status(acc)
-            if status and status not in ("ok", "unknown"):
-                label += f"（{HEALTH_LABEL.get(status, '状态异常').split('（')[0]}）"
             self.combo.addItem(f"{label}（{user}）", userData=user)
         index = self.combo.findData(current)
         if index >= 0:
@@ -65,8 +71,8 @@ class BranchPickerDialog(FluentPanelDialog):
 def pick_branch(accounts: list[dict], parent: QObject | None,
                 on_pick, current: str = "", note: str = ""
                 ) -> BranchPickerDialog | None:
-    """非模态弹出；选中后回调 on_pick(账号名)。没有账号时返回 None。"""
-    usable = [a for a in accounts if a.get("userName")]
+    """非模态弹出；选中后回调 on_pick(账号名)。没有状态正常的账号时返回 None。"""
+    usable = normal_accounts(accounts)
     if not usable:
         return None
     dlg = BranchPickerDialog(usable, parent, current, note)

@@ -91,13 +91,13 @@ def _pill(text: str, color: str) -> BodyLabel:
 
 
 class BranchCard(CardWidget):
-    """支部卡片：整块底色按支部状态着色，右侧箭头随 hover 渐变。
+    """支部卡片：只有异常支部铺 warning 底色，右侧箭头随 hover 渐变。
 
-    状态用背景而不是左侧细色条传达：异常是「需要关注」而非硬错误，底色取
-    warning 黄，与顶部黄色提示条同一种语言；欠缴蓝、正常绿、无记录灰。
+    正常与纯欠缴的支部保持卡片原样——底色留给真正需要处理的问题，
+    满屏都是彩色底反而看不出哪张卡片要管。
     """
 
-    def __init__(self, role: str, parent=None):
+    def __init__(self, role: str | None, parent=None):
         super().__init__(parent)
         self.role = role
         self._hover = 0.0
@@ -125,7 +125,8 @@ class BranchCard(CardWidget):
         super().paintEvent(e)
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        paint_tinted_card(self, p, self.role, radius=8, hover=self._hover)
+        if self.role:
+            paint_tinted_card(self, p, self.role, radius=8, hover=self._hover)
         x = self.width() - 26 + 5 * self._hover
         p.setOpacity(0.55 + 0.45 * self._hover)
         p.drawPixmap(int(x), int((self.height() - 14) / 2), self._arrow)
@@ -694,14 +695,9 @@ class OrgManagePage(FluentPage):
 
     def _feed_card(self, b: BranchNode) -> QWidget:
         st = self._branch_stats(b)
-        # 卡片底色与筛选共用一套互斥判定：异常优先于欠缴，纯欠缴才是蓝色。
-        # 异常用 warning 黄而不是 danger 红——它是「需要关注」，不是硬错误。
-        role = {
-            "none": "muted",
-            "abnormal": "warning",
-            "fees": "fees",
-            "normal": "success",
-        }[branch_status(st)]
+        # 与筛选共用一套互斥判定：只有异常支部铺底色；正常、纯欠缴、无记录
+        # 都保持卡片原样。异常是「需要关注」，用 warning 黄而不是 danger 红。
+        role = "warning" if branch_status(st) == "abnormal" else None
 
         card = BranchCard(role)
         card.setCursor(Qt.CursorShape.PointingHandCursor)

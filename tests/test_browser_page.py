@@ -62,8 +62,10 @@ def test_branch_picker_lists_accounts(monkeypatch, tmp_path):
 
     host = QWidget()
     host.resize(800, 600)
-    accounts = [{"userName": "ssfz2400", "remark": "普通高中高一7班"},
-                {"userName": "ssfz2401", "remark": "普通高中高一8班"}]
+    accounts = [
+        {"userName": "ssfz2400", "remark": "普通高中高一7班", "health": {"status": "ok"}},
+        {"userName": "ssfz2401", "remark": "普通高中高一8班", "health": {"status": "ok"}},
+    ]
     dlg = BranchPickerDialog(accounts, host, current="ssfz2401")
     assert dlg.combo.count() == 2
     assert dlg.combo.currentData() == "ssfz2401"  # 默认选中调用方给的账号
