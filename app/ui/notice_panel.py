@@ -27,7 +27,7 @@ from qfluentwidgets import (
 
 from app.services.notices import LEVEL_ISSUE, Notice
 from app.ui import palette as P
-from app.ui.page import chevron_icon, note_label, set_tip, theme_font
+from app.ui.page import chevron_icon, note_label, paint_tinted_card, set_tip, theme_font
 
 HEADER_H = 48
 RADIUS = 10
@@ -258,12 +258,20 @@ class NoticePanel(QWidget):
     # ---------- 外观 ----------
 
     def paintEvent(self, _e):
-        """整块卡片：圆角 + 半透明底 + 细边框，行与行之间只靠分隔线区隔。"""
+        """整块卡片：圆角 + 半透明底 + 细边框，行与行之间只靠分隔线区隔。
+
+        已知问题用 warning 黄底整块着色：与支部卡片、顶部提示条同一种语言，
+        读的人不用先认出红色文字才知道这里有事。标题仍保留语义色文字。
+        """
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect().adjusted(0, 0, -1, -1)
         p.setPen(QPen(_card_border(), 1))
         p.setBrush(_card_bg())
+        p.drawRoundedRect(r, RADIUS, RADIUS)
+        paint_tinted_card(self, p, "warning", radius=RADIUS, alpha=22)
+        p.setPen(QPen(_card_border(), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(r, RADIUS, RADIUS)
 
         # 标题行与问题列表之间也有一条分隔线

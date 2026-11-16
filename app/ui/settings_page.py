@@ -17,6 +17,7 @@ from PySide6.QtCore import QThread, QTimer, Signal, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -47,8 +48,8 @@ from app.ui.browser_page import MAX_TABS as MAX_WEB_TABS
 from app.ui.combo import ComboBox
 from app.ui.page import (CONTROL_MAX_WIDTH, CONTROL_WIDTH, CallbackWorker, CollapsibleCard, FluentPage,
                           set_tip,
-                          FullRow, PageBanner, PageHeader, SettingRow, fit_table_columns,
-                          note_label)
+                          FullRow, PageBanner, PageHeader, SettingRow, bind_table_context_menu,
+                          fit_table_columns, note_label)
 from app.ui.rule_dialog import RuleDialog
 from app.ui import palette as P
 from app.domain.naming import Roster
@@ -288,6 +289,7 @@ class SettingsPage(FluentPage):
         # 健康状态异常时点这一格直接进内嵌浏览器手动登录；双击整行打开该账号
         self.table.cellClicked.connect(self._on_cell_clicked)
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self._bind_account_table_menu()
         table_block = FullRow()
         tools = QHBoxLayout()
         tools.addWidget(self.del_checked_btn)
@@ -350,6 +352,7 @@ class SettingsPage(FluentPage):
         header = self.roster_table.horizontalHeader()
         header.setSectionResizeMode(2, header.ResizeMode.Stretch)
         self.roster_table.setColumnWidth(2, 320)
+        self._bind_roster_table_menu()
         roster_block = FullRow()
         roster_block.lay.addWidget(self.roster_table)
         row(ros_card, roster_block)
@@ -376,6 +379,7 @@ class SettingsPage(FluentPage):
         self.sec_table.setBorderRadius(10)  # 与卡片、窗口圆角同心
         self.sec_table.setHorizontalHeaderLabels(["支部", "团支书", "手机号码"])
         self.sec_table.setEditTriggers(self.sec_table.EditTrigger.NoEditTriggers)
+        self._bind_secretary_table_menu()
         sec_block = FullRow()
         sec_block.lay.addWidget(self.sec_table)
         row(ros_card, sec_block, last=True)
@@ -1287,7 +1291,80 @@ class SettingsPage(FluentPage):
         self._after_accounts_changed()
         InfoBar.success("已删除", f"移除 {len(users)} 个账号", duration=3000, parent=self)
 
-    # ---------- 账号选择 ----------
+    # ---------- 表格右键菜单（Fluent RoundMenu） ----------
+
+    def _bind_account_table_menu(self):
+        """账号表右键：打开网页 / 测活 / 复制账号 / 删除，全部作用于右键行。
+
+        勾选存在时按勾选批量处理，和表头那排按钮口径一致；右键行只负责
+        决定「打开网页」和「复制账号」的目标，不偷偷改动勾选状态。
+        """
+
+        def actions(row: int):
+            def open_web():
+                user = self._user_at_row(row)
+                if user:
+                    self.open_web_for(user)
+
+            def copy_user():
+                user = self._user_at_row(row)
+                if user:
+                    QApplication.clipboard().setText(user)
+                    InfoBar.success("已复制账号", user, duration=2500, parent=self)
+
+            refresh = Action(FIF.HEART, "测活选中账号" if self._checked_rows() else "测活此账号")
+            refresh.triggered.connect(
+                lambda: self.start_health_check(force=True, users=self._menu_users(row)))
+            delete = Action(FIF.DELETE, "删除勾选账号" if self._checked_rows() else "删除此账号")
+            delete.triggered.connect(lambda: self._remove_accounts(self._menu_rows(row)))
+            return [
+                Action(FIF.GLOBE, "打开网页", triggered=open_web),
+                Action(FIF.COPY, "复制账号", triggered=copy_user),
+                None,
+                refresh,
+                delete,
+            ]
+
+        def select(row: int):
+            self.table.setCurrentCell(row, min(1, self.table.columnCount() - 1))
+
+        bind_table_context_menu(self.table, actions, select_row=select)
+
+    def _menu_users(self, row: int) -> list[str]:
+        rows = self._checked_rows() or ([row] if row >= 0 else [])
+        return [self._user_at_row(i) for i in rows if self._user_at_row(i)]
+
+    def _menu_rows(self, row: int) -> list[int]:
+        return self._checked_rows() or ([row] if row >= 0 else [])
+
+    def _bind_roster_table_menu(self):
+        def actions(row: int):
+            if row < 0:
+                return [Action(FIF.DOWNLOAD, "下载名单模板",
+                               triggered=self._download_template)]
+            return [
+                Action(FIF.DOWNLOAD, "下载名单模板", triggered=self._download_template),
+                Action(FIF.DELETE, "删除此名单", triggered=self._delete_selected_roster),
+            ]
+
+        bind_table_context_menu(
+            self.roster_table, actions,
+            select_row=lambda row: self.roster_table.setCurrentCell(row, 0))
+
+    def _bind_secretary_table_menu(self):
+        def actions(row: int):
+            if row < 0:
+                return [Action(FIF.DOWNLOAD, "下载支书模板",
+                               triggered=self._download_secretary_template)]
+            return [
+                Action(FIF.DOWNLOAD, "下载支书模板",
+                       triggered=self._download_secretary_template),
+                Action(FIF.DELETE, "删除此支书", triggered=self._delete_selected_secretaries),
+            ]
+
+        bind_table_context_menu(
+            self.sec_table, actions,
+            select_row=lambda row: self.sec_table.setCurrentCell(row, 0))
 
     def _checked_rows(self) -> list[int]:
         return [i for i in range(self.table.rowCount())

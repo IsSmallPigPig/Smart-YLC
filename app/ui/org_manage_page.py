@@ -60,8 +60,8 @@ from app.domain.check_templates import default_identity_template, default_report
 from app.ui.export_flow import start_export
 from app.ui.page import (BatchedBuild, BusyOverlay, CardRow, FluentPage,
                          PageBanner, PageHeader, banner_text_colors,
-                         chevron_icon, note_label, set_tip, section_title,
-                         theme_font)
+                         chevron_icon, note_label, paint_tinted_card, set_tip,
+                         section_title, theme_font)
 
 SOURCE_COLOR = P.SOURCE
 KIND_COLOR = P.KIND
@@ -91,11 +91,15 @@ def _pill(text: str, color: str) -> BodyLabel:
 
 
 class BranchCard(CardWidget):
-    """支部卡片：左侧状态色条与右侧箭头随 hover 渐变。"""
+    """支部卡片：整块底色按支部状态着色，右侧箭头随 hover 渐变。
 
-    def __init__(self, accent: str, parent=None):
+    状态用背景而不是左侧细色条传达：异常是「需要关注」而非硬错误，底色取
+    warning 黄，与顶部黄色提示条同一种语言；欠缴蓝、正常绿、无记录灰。
+    """
+
+    def __init__(self, role: str, parent=None):
         super().__init__(parent)
-        self.accent = QColor(accent)
+        self.role = role
         self._hover = 0.0
         self.setClickEnabled(True)
         self.setBorderRadius(8)
@@ -121,12 +125,7 @@ class BranchCard(CardWidget):
         super().paintEvent(e)
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        c = QColor(self.accent)
-        c.setAlpha(int(110 + 145 * self._hover))
-        p.setBrush(c)
-        p.drawRoundedRect(QRectF(0, 12, 3 + self._hover,
-                                 max(self.height() - 24, 8)), 1.5, 1.5)
+        paint_tinted_card(self, p, self.role, radius=8, hover=self._hover)
         x = self.width() - 26 + 5 * self._hover
         p.setOpacity(0.55 + 0.45 * self._hover)
         p.drawPixmap(int(x), int((self.height() - 14) / 2), self._arrow)
@@ -695,16 +694,16 @@ class OrgManagePage(FluentPage):
 
     def _feed_card(self, b: BranchNode) -> QWidget:
         st = self._branch_stats(b)
-        # 色条与筛选共用一套互斥判定：异常优先于欠缴，纯欠缴才是蓝色。
-        # 旧写法先判 st["abnormal"]，而欠缴也在 abnormal 里，欠缴蓝色从不可达。
-        accent = {
+        # 卡片底色与筛选共用一套互斥判定：异常优先于欠缴，纯欠缴才是蓝色。
+        # 异常用 warning 黄而不是 danger 红——它是「需要关注」，不是硬错误。
+        role = {
             "none": "muted",
-            "abnormal": "danger",
+            "abnormal": "warning",
             "fees": "fees",
             "normal": "success",
         }[branch_status(st)]
 
-        card = BranchCard(P.fg(accent))
+        card = BranchCard(role)
         card.setCursor(Qt.CursorShape.PointingHandCursor)
         h = QHBoxLayout(card)
         h.setContentsMargins(24, 14, 18, 14)
@@ -726,7 +725,7 @@ class OrgManagePage(FluentPage):
 
         h.addLayout(self._metric(str(st["total"]), "团员"), 0)
         h.addLayout(self._metric(str(st["abnormal"]), "异常",
-                                 "danger" if st["abnormal"] else "muted"), 0)
+                                 "warning" if st["abnormal"] else "muted"), 0)
         h.addLayout(self._metric(str(st["by_kind"]["fees"]), "欠缴",
                                  "fees" if st["by_kind"]["fees"] else "muted"), 0)
         h.addSpacing(24)  # 给自绘箭头留出位置
@@ -839,7 +838,7 @@ class OrgManagePage(FluentPage):
         blocks = []
         for i, (num, label, role) in enumerate((
             (st["total"], "团员总数", "brand"),
-            (st["abnormal"], "异常团员", "danger"),
+            (st["abnormal"], "异常团员", "warning"),
             (st["by_kind"]["fees"], "欠缴团费", "fees"),
         )):
             if i:

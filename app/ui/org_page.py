@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QFont, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -38,8 +38,8 @@ from app.ui import palette as P
 from app.ui.widgets import PillLabel
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.page import (BusyOverlay, CallbackWorker, FluentPage, PageBanner,
-                         PageHeader, note_label, set_tip, section_title,
-                         theme_font)
+                         PageHeader, note_label, paint_tinted_card, set_tip,
+                         section_title, theme_font)
 
 STATUS_LABEL = {
     "ok": "正常",
@@ -119,14 +119,36 @@ class OrgWorker(QThread):
         self.all_done.emit()
 
 
+class TintedCard(CardWidget):
+    """通用提示卡：整块 warning 黄底，账号级失败等没有跳转目标的错误用。"""
+
+    def __init__(self, role: str = "warning", parent=None):
+        super().__init__(parent)
+        self.role = role
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        paint_tinted_card(self, p, self.role, radius=8)
+        p.end()
+
+
 class MemberCard(CardWidget):
-    """异常团员卡片：点一下跳到组织管理里这个团员所在的支部。"""
+    """异常团员卡片：warning 黄底 + 点一下跳到组织管理里所在支部。"""
 
     clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        paint_tinted_card(self, p, "warning", radius=8)
+        p.end()
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -565,7 +587,7 @@ class OrgPage(FluentPage):
         """一张异常团员卡片：左侧姓名+手机号，右侧支部；下方类别与问题。"""
         # kinds 为 None 是账号级失败，没有可跳转的支部，保持普通卡片
         if kinds is None or not branch:
-            card = CardWidget()
+            card = TintedCard("danger" if kinds is None else "warning")
         else:
             card = MemberCard()
             set_tip(card, f"点击查看「{branch}」的团员名单")
