@@ -1,4 +1,4 @@
-"""导出数据：支部归类、五类明细、两种呈现，始终落一个 xlsx。"""
+"""导出数据：按班级归类、五类明细、分班与合并两种排法，始终落一个 xlsx。"""
 
 from __future__ import annotations
 
@@ -32,14 +32,16 @@ def cfg():
                     member("1", "张三", "13800000001", org_name="高三七班"),
                     member("2", "李四", "13800000002", real_name_status="未通过",
                            income="", report_data_status="审核未通过",
-                           ebook_status="未上传", unpaid_total=12.0, unpaid_months=2),
+                           ebook_status="未上传", unpaid_total=12.0, unpaid_months=2,
+                           org_name="高三七班"),
                     member("3", "王五", "13800000003",
-                           report_data_status="电子志愿书待上传", ebook_status="未上传"),
+                           report_data_status="电子志愿书待上传", ebook_status="未上传",
+                           org_name="高三七班"),
                 ],
             },
             "ssfz2407": {
                 "branch": "初中部初三七班",
-                "members": [member("4", "赵六", "13800000004")],
+                "members": [member("4", "赵六", "13800000004", org_name="初三七班")],
             },
         },
         "orgStatsCache": {
@@ -56,10 +58,11 @@ def cfg():
     }
 
 
-def test_dataset_groups_by_branch_and_splits_kinds():
+def test_dataset_groups_by_class_and_splits_kinds():
     data = export_data.load_dataset(cfg())
-    assert list(data) == ["普通高中高三七班", "初中部初三七班"]
-    a = data["普通高中高三七班"]
+    # 分表依据是团员自己的所属组织（班级），不是账号备注
+    assert list(data) == ["高三七班", "初三七班"]
+    a = data["高三七班"]
     assert len(a.rows["members"]) == 3
     assert [r["姓名"] for r in a.rows["identity"]] == ["李四"]
     assert [r["姓名"] for r in a.rows["archive"]] == ["王五"]
@@ -67,18 +70,19 @@ def test_dataset_groups_by_branch_and_splits_kinds():
     assert a.rows["fee"][0]["欠缴金额"] == 12.0
     assert a.rows["fee"][0]["欠缴月数"] == 2
     assert [r["姓名"] for r in a.rows["transfer"]] == ["张三", "李四"]
-    assert data["初中部初三七班"].rows["identity"] == []
+    assert data["初三七班"].rows["identity"] == []
+    assert a.rows["members"][0]["班级"] == "高三七班"
 
 
 def test_split_mode_makes_one_sheet_per_content():
-    data = export_data.load_dataset(cfg())["普通高中高三七班"]
+    data = export_data.load_dataset(cfg())["高三七班"]
     sheets = export_data.build_sheets(data, ["members", "fee"], "split")
     assert list(sheets) == ["团员信息", "未缴名单"]
     assert sheets["团员信息"][0] == export_data.HEADERS["members"]
 
 
 def test_single_mode_merges_everything_with_category_column():
-    data = export_data.load_dataset(cfg())["普通高中高三七班"]
+    data = export_data.load_dataset(cfg())["高三七班"]
     sheets = export_data.build_sheets(
         data, ["members", "fee", "identity"], "single")
     assert list(sheets) == [export_data.SINGLE_SHEET]
@@ -88,6 +92,23 @@ def test_single_mode_merges_everything_with_category_column():
     assert len(rows) == 3 + 1 + 1
     fee_row = next(r for r in rows if r["类别"] == "未缴费团员名单")
     assert "12.0 元" in fee_row["说明"] and "2 个月" in fee_row["说明"]
+
+
+def test_class_sheet_merges_every_kind_into_one_table():
+    """分班导出：一个班一张表，四类异常按人合并，只靠「异常」列区分。"""
+    data = export_data.load_dataset(cfg())["高三七班"]
+    headers, rows = export_data.build_class_sheet(
+        data, ["members", "fee", "identity", "archive", "transfer"])
+    assert headers == export_data.CLASS_HEADERS
+    by_name = {r["姓名"]: r for r in rows}
+    assert set(by_name) == {"张三", "李四", "王五"}     # 一人一行，不按类别重复
+    assert "欠缴团费 12.0 元（2 个月）" in by_name["李四"]["异常"]
+    assert "信息错误" in by_name["李四"]["异常"]
+    assert "没有档案" in by_name["王五"]["异常"]
+    assert "转接申请" in by_name["张三"]["异常"]
+    # 团员信息只提供字段，不算异常
+    assert by_name["张三"]["异常"].count("；") <= 1
+    assert by_name["李四"]["手机号码"] == "13800000002"
 
 
 def test_merged_export_writes_one_workbook(tmp_path):
@@ -102,33 +123,38 @@ def test_merged_export_writes_one_workbook(tmp_path):
     assert wb.sheetnames == ["团员信息", "错误名单"]
     ws = wb["错误名单"]
     assert ws.max_row == 2  # 表头 + 李四
-    assert ws.cell(1, 1).value == "支部"
-    assert ws.cell(2, 1).value == "普通高中高三七班"
+    assert ws.cell(1, 1).value == "班级"
+    assert ws.cell(2, 1).value == "高三七班"
 
 
-def test_branch_split_writes_one_workbook_with_sheets(tmp_path):
-    """分班 + 每项一表：仍是一个 xlsx，每个支部的每项内容各一张子表。"""
+def test_branch_export_writes_one_sheet_per_class(tmp_path):
+    """分班导出：一个班一张表，勾的几类内容都并进同一张表。"""
     target = str(tmp_path / "分班.xlsx")
     result = export_data.run_export(
-        cfg(), ["members"], "split", "branch", target)
-    assert result == {"files": 1, "rows": 4, "branches": 2}
+        cfg(), ["members", "fee", "identity"], "split", "branch", target)
+    assert result == {"files": 1, "rows": 3 + 1 + 1 + 1, "branches": 2}
 
     from openpyxl import load_workbook
 
     wb = load_workbook(target)
-    assert wb.sheetnames == ["普通高中高三七班-团员信息", "初中部初三七班-团员信息"]
-    assert wb["普通高中高三七班-团员信息"].max_row == 4
+    assert wb.sheetnames == ["高三七班", "初三七班"]
+    ws = wb["高三七班"]
+    assert [c.value for c in ws[1]] == export_data.CLASS_HEADERS
+    assert ws.max_row == 4          # 表头 + 三个人
+    assert "异常" == ws.cell(1, 9).value
 
 
-def test_branch_single_writes_one_sheet_per_branch(tmp_path):
-    target = str(tmp_path / "分班单表.xlsx")
-    export_data.run_export(cfg(), ["members", "fee"], "single", "branch", target)
-
+def test_branch_export_ignores_presentation_mode(tmp_path):
+    """呈现方式对分班导出不起作用：两种排法写出同一份结构。"""
     from openpyxl import load_workbook
 
-    wb = load_workbook(target)
-    assert wb.sheetnames == ["普通高中高三七班", "初中部初三七班"]
-    assert wb["普通高中高三七班"].cell(1, 2).value == "类别"
+    one = str(tmp_path / "a.xlsx")
+    two = str(tmp_path / "b.xlsx")
+    export_data.run_export(cfg(), ["members", "fee"], "split", "branch", one)
+    export_data.run_export(cfg(), ["members", "fee"], "single", "branch", two)
+    a, b = load_workbook(one), load_workbook(two)
+    assert a.sheetnames == b.sheetnames == ["高三七班", "初三七班"]
+    assert [c.value for c in a["高三七班"][1]] == [c.value for c in b["高三七班"][1]]
 
 
 def test_empty_selection_and_missing_cache_raise():
@@ -165,14 +191,15 @@ def test_stats_error_rows_used_when_member_cache_missing(tmp_path):
 def test_illegal_branch_name_is_sanitized(tmp_path):
     cfg_ = {
         "accounts": [{"userName": "ssfz1", "remark": '高三/七班:一'}],
-        "memberCache": {},
+        "memberCache": {"ssfz1": {"branch": '高三/七班:一', "members": [
+            member("1", "张三", "13800000001")]}},
         "orgStatsCache": {},
     }
     target = str(tmp_path / "分班.xlsx")
     export_data.run_export(cfg_, ["members"], "split", "branch", target)
     from openpyxl import load_workbook
 
-    assert load_workbook(target).sheetnames == ["高三七班一-团员信息"]
+    assert load_workbook(target).sheetnames == ["高三七班一"]
 
 
 def test_workbook_without_rows_still_has_a_sheet(tmp_path):
@@ -214,7 +241,7 @@ def test_control_chars_in_sheet_name_do_not_break_export(tmp_path):
     export_data.run_export(cfg_, ["members"], "split", "branch", target)
     from openpyxl import load_workbook
 
-    assert load_workbook(target).sheetnames == ["高三(七)班-团员信息"]
+    assert load_workbook(target).sheetnames == ["高三(七)班"]
 
 
 def test_clean_helper_only_touches_strings():

@@ -2,6 +2,7 @@
 
 范围与呈现方式都改成下拉框，并排放在内容清单下方——三段式选择比两个
 分段控件更省横向空间，也不会让「每项一表」看起来像另一个导出入口。
+分班导出时一个班一张表、各类异常都在这张表里，呈现方式没有可选项，置灰。
 非模态打开（与项目其它弹窗一致），点「开始导出」后发出 chosen(contents, mode, scope)，
 由调用方接文件保存对话框并在后台写盘。
 """
@@ -69,6 +70,7 @@ class ExportDialog(FluentPanelDialog):
         self.mode_combo = ComboBox(pickers)
         self.mode_combo.addItem("每项一表", userData="split")
         self.mode_combo.addItem("合成一表", userData="single")
+        self.scope_combo.currentIndexChanged.connect(self._sync_scope)
         pick_lay.addWidget(_field("导出范围", self.scope_combo, pickers), 1)
         pick_lay.addWidget(_field("呈现方式", self.mode_combo, pickers), 1)
         self.viewLayout.addWidget(pickers)
@@ -76,6 +78,7 @@ class ExportDialog(FluentPanelDialog):
         self.yesButton.setText("开始导出")
         self.cancelButton.setText("取消")
         self.finished.connect(self.deleteLater)
+        self._sync_scope()
         self._sync_state()
 
     @property
@@ -88,6 +91,14 @@ class ExportDialog(FluentPanelDialog):
 
     def _contents(self) -> list[str]:
         return [key for key in CONTENT_KEYS if self.boxes[key].isChecked()]
+
+    def _sync_scope(self, *_):
+        """分班导出固定「一班一表、异常合并在表内」，呈现方式在这里没有意义。"""
+        branch = self.scope == "branch"
+        self.mode_combo.setEnabled(not branch)
+        self.mode_combo.setToolTip(
+            "分班导出时一个班一张表，团员信息与各类异常都在表里，靠「异常」列区分"
+            if branch else "")
 
     def _sync_state(self, *_):
         self.yesButton.setEnabled(bool(self._contents()))

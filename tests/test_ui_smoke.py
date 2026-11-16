@@ -130,11 +130,13 @@ def test_export_dialog_builds(app, isolated_store):
     host.resize(900, 600)
     dialog = ExportDialog("branch", host)
     assert len(dialog._contents()) == 5
-    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("single"))
-    assert dialog.mode == "single"
-    assert dialog.scope == "branch"
+    # 分班导出：一个班一张表，呈现方式没得选
+    assert not dialog.mode_combo.isEnabled()
     dialog.scope_combo.setCurrentIndex(dialog.scope_combo.findData("merged"))
     assert dialog.scope == "merged"  # 一个入口里换范围，不再两个按钮
+    assert dialog.mode_combo.isEnabled()
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("single"))
+    assert dialog.mode == "single"
 
 
 def test_home_reopen_keeps_page_instead_of_covering_it(app, isolated_store):
@@ -348,19 +350,24 @@ def test_upload_branch_cards_use_tags(app, isolated_store):
 )
 def test_browser_window_shell_builds(app, isolated_store):
     """账号网页窗口外壳：标签条接管标题栏，没有标签时停在欢迎页。"""
-    from app.ui.browser_page import TAB_HEIGHT, BrowserWindow
+    from app.ui.browser_page import (TAB_HEIGHT, TAB_TOP, TITLE_BAR_HEIGHT,
+                                     BrowserWindow)
 
     win = BrowserWindow()
     assert win.tab_count() == 0
-    # 标题栏按系统按钮的中线定高，标签行在它里面居中：三者中心同一条水平线
-    assert win.tab_row.height() == TAB_HEIGHT
-    assert win.titleBar.height() >= TAB_HEIGHT
-    assert abs(win.tab_row.geometry().center().y()
-               - win.titleBar.height() // 2) <= 1
+    # 标签行上沿让出 TAB_TOP，行内 32px 的按钮中线才落在系统按钮那条线上；
+    # 标题栏再比标签行高一截，页面不会贴在标签条下面
+    assert win.tab_row.height() == TAB_HEIGHT + TAB_TOP
+    assert win.titleBar.height() == TITLE_BAR_HEIGHT
+    assert win.titleBar.height() > win.tab_row.height()
+    plus = win.new_tab_btn.mapTo(win, win.new_tab_btn.rect().center()).y()
+    assert plus == TAB_TOP + TAB_HEIGHT // 2
     assert not win.back_btn.isEnabled()
     assert win.empty.isVisible()  # 没有标签时只有欢迎页
-    # 继承来的空 stackedWidget 会停在窗口左上角画一块不透明底，必须藏起来
+    # 继承来的空 stackedWidget 会停在窗口左上角画一块不透明底，必须连同原生
+    # 视图一起收起来：光 hide() 不够，窗口重新显示后它还会冒出来
     assert win.stackedWidget.isHidden()
+    assert win.stackedWidget.width() == 0 and win.stackedWidget.height() == 0
     # 窗口里不再单独占一行状态：状态只挂在标签提示上
     assert not hasattr(win, "status")
     win.prompt()
