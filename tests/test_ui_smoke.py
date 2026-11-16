@@ -412,6 +412,52 @@ def test_cross_fade_applies_work_and_cleans_effect(app, isolated_store):
     assert widget.graphicsEffect() is None  # 结束后不残留合成层
 
 
+def test_health_summary_merges_reasons(app, isolated_store):
+    """一轮测活结束只给一条汇总，按原因归并，不再逐个账号弹消息条。"""
+    from app.ui import settings_page as sp
+
+    page = sp.SettingsPage()
+    page.accounts = [
+        {"userName": f"u{i}", "remark": f"高三{i}班",
+         "health": {"status": status, "message": ""}}
+        for i, status in enumerate(("failed", "captcha", "ok", "network"))
+    ]
+    page._health_checked = [a["userName"] for a in page.accounts]
+
+    shown = []
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(sp.InfoBar, "warning",
+                        lambda title, content, **k: shown.append((title, content)))
+    monkeypatch.setattr(sp.InfoBar, "success",
+                        lambda title, content, **k: shown.append((title, content)))
+    try:
+        page._report_health()
+    finally:
+        monkeypatch.undo()
+
+    assert len(shown) == 1
+    title, content = shown[0]
+    assert title == "3 个账号异常"
+    assert "密码错误 1" in content and "需验证码 1" in content and "网络错误 1" in content
+
+
+def test_branch_picker_marks_abnormal_accounts(app):
+    """异常账号也列出来，标在名字后面：加号不能因为全异常就不弹选择框。"""
+    from PySide6.QtWidgets import QWidget
+
+    from app.ui.branch_picker import BranchPickerDialog
+
+    host = QWidget()
+    host.resize(600, 400)
+    dlg = BranchPickerDialog([
+        {"userName": "a", "remark": "高三一班", "health": {"status": "captcha"}},
+        {"userName": "b", "remark": "高二二班", "health": {"status": "ok"}},
+    ], host, note="1 个账号状态异常")
+    assert dlg.combo.count() == 2
+    assert "需验证码" in dlg.combo.itemText(0)
+    assert "需验证码" not in dlg.combo.itemText(1)
+
+
 def test_browser_tab_row_drags_on_press(app):
     """拖窗必须在按下时交给系统。
 

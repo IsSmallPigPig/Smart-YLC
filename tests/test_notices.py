@@ -9,6 +9,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from types import SimpleNamespace
+
 from app.services.notices import Notice, NoticeCenter
 
 
@@ -69,12 +71,19 @@ def test_panel_reuses_rows_and_empties_cleanly(app):
 class _BarStub:
     """只提供 _flush_bars 用到的东西：待发清单 + 记录实际弹出的条目。"""
 
-    def __init__(self, pending):
+    def __init__(self, pending, accounts=None):
         self._pending_bars = list(pending)
         self.shown = []
+        self.settings_page = SimpleNamespace(accounts=list(accounts or []))
 
     def _show_notice_bar(self, notice):
         self.shown.append(notice)
+
+    def _show_account_notice(self, notices):
+        # 合并规则用真实实现，桩只负责记录弹出来的条目
+        from app.ui.main_window import MainWindow
+
+        MainWindow._show_account_notice(self, notices)
 
 
 def test_same_batch_account_issues_merge_into_one_bar(app):
@@ -85,13 +94,14 @@ def test_same_batch_account_issues_merge_into_one_bar(app):
                       action=f"accounts:{i}", action_text="去设置", tone="error",
                       brief=f"初中部初三{i}班 账号异常")
                for i in (2, 3, 4)]
-    stub = _BarStub(pending)
+    accounts = [{"userName": str(i), "health": {"status": "captcha"}} for i in (2, 3, 4)]
+    stub = _BarStub(pending, accounts)
     MainWindow._flush_bars(stub)
 
     assert len(stub.shown) == 1                  # 13 个账号同时异常也只弹一条
     bar = stub.shown[0]
-    assert bar.detail == "3 个账号异常"           # 只报个数，不列原因
-    assert bar.brief == "" and bar.title == ""
+    assert bar.detail == "3 个账号异常：需验证码 3"   # 一条里按原因归并
+    assert bar.brief == bar.detail and bar.title == ""
     assert bar.action == "accounts:2"            # 点「去设置」定位到第一个异常账号
 
 
