@@ -32,7 +32,8 @@ def _save(parent, scope: str, contents: list[str], mode: str):
     from app.services.export_data import CONTENT_LABELS, default_name
 
     scope_text = "分班导出" if scope == "branch" else "合并导出"
-    mode_text = "每项一表" if mode == "split" else "合成一表"
+    # 分班导出没有「呈现方式」这回事：一个班一张表，异常就并在这张表里
+    mode_text = "" if scope == "branch" else ("每项一表" if mode == "split" else "合成一表")
     picked = "+".join(CONTENT_LABELS.get(c, c) for c in contents)
     default = default_name("导出数据", ".xlsx", scope_text, mode_text, picked)
     filt = "Excel (*.xlsx)"
@@ -54,7 +55,7 @@ def _save(parent, scope: str, contents: list[str], mode: str):
         InfoBar.success(
             "导出完成",
             f"{result['rows']} 行数据，{result['files']} 个文件"
-            f"（{result['branches']} 个支部）\n{path}",
+            f"（{result['branches']} 个班级）\n{path}",
             duration=8000, parent=parent)
 
     def _fail(message: str):

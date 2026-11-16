@@ -98,11 +98,15 @@ def test_dismiss_splash_is_idempotent():
         def __init__(self):
             self.home_page = types.SimpleNamespace(_startup_loading=True)
             self.splash = types.SimpleNamespace(finish=lambda: calls.append(1))
+            self.warmed = calls
+
+        def warm_web_engine(self):
+            self.warmed.append("warm")
 
     stub = Stub()
     MainWindow._dismiss_splash(stub)
     MainWindow._dismiss_splash(stub)
-    assert calls == [1]
+    assert calls[0] == 1                  # 闪屏只收一次
     assert stub._splash_done is True
     assert stub.home_page._startup_loading is False
 

@@ -68,6 +68,19 @@ if sys.platform == "darwin" and not os.environ.get("QT_QPA_PLATFORM", "").starts
     MacFramelessWindowBase._initFrameless = _init_frameless_translucent
 
 
+def _pump():
+    """构造页面期间把这一拍交还事件循环。
+
+    启动画面是独立窗口，主线程闷头建六个页面时它就冻在那儿；每建完一页让一拍，
+    转圈能继续动，系统也不会把这个刚起来的进程标成「未响应」。
+    只放行绘制与定时器，不吃用户输入、不碰套接字。"""
+    from PySide6.QtCore import QEventLoop
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+                               | QEventLoop.ProcessEventsFlag.ExcludeSocketNotifiers)
+
+
 class MainWindow(MSFluentWindow):
     _translucent_window = True
 
@@ -98,12 +111,17 @@ class MainWindow(MSFluentWindow):
         self.setStyleSheet("MainWindow{background: transparent}")
 
         # 通知中心：问题清单的唯一持有者，公告面板与浮层提示都读它
+        # 六页逐个构造，每建完一页让一拍：合计一秒多，闷头建完画面就是定住的
         self.notice_center = NoticeCenter(self)
         self.settings_page = SettingsPage()
+        _pump()
         self.home_page = HomePage(self)
+        _pump()
         self.upload_page = UploadPage(self)
+        _pump()
         self.org_page = OrgPage(self)
         self.org_manage_page = OrgManagePage(self)
+        _pump()
         self.messages_page = MessagesPage(self)
         self.browser_window: BrowserWindow | None = None
         self.settings_page.window_ref = self  # 毛玻璃开关与团支书导入后的页面刷新
@@ -117,8 +135,9 @@ class MainWindow(MSFluentWindow):
 
         bg_toast.set_default_action(self._restore_from_tray)
         self.notice_center.new_issue.connect(self._on_new_issue)
-        # 启动即把已有账号异常收进通知清单（面板可见，但不弹窗——闪屏期间不打扰）
-        self.settings_page.refresh_notices()
+        # 启动即把已有账号异常收进通知清单（面板可见，但不弹窗——闪屏期间不打扰）。
+        # 这一趟要过一遍全部账号，放到首帧之后做，别压着启动画面。
+        QTimer.singleShot(300, self.settings_page.refresh_notices)
 
         self.addSubInterface(self.home_page, FIF.HOME, "工具首页")
         self.addSubInterface(self.upload_page, FIF.CLOUD, "上传档案")
@@ -174,7 +193,9 @@ class MainWindow(MSFluentWindow):
         self._sync_timer.setInterval(30 * 1000)
         self._sync_timer.timeout.connect(self._tick_sync)
         self._sync_timer.start()
-        QTimer.singleShot(15 * 1000, self._tick_sync)
+        # 首轮同步等启动画面收完：23 个账号的取数线程一起起来，赶在启动那一拍上
+        # 会把 CPU 顶满，画面看着更卡。
+        QTimer.singleShot(20 * 1000, self._tick_sync)
 
         # 新问题先攒 250ms 再弹：一轮检查里十几个账号同时异常时合并成一条，
         # 否则右上角会一次堆满十几条消息条
@@ -204,6 +225,24 @@ class MainWindow(MSFluentWindow):
         self._splash_done = True
         self.home_page._startup_loading = False
         self.splash.finish()
+        # 界面已经露面，趁空闲把内嵌浏览器的引擎拉起来：第一次建默认 profile 要
+        # 几百毫秒，以前这笔开销落在「打开账号网页」那一拍上，窗口就定住一下。
+        QTimer.singleShot(3000, self.warm_web_engine)
+
+    def warm_web_engine(self):
+        """预热 Chromium（只建默认 profile，不碰各账号的存储分区）。
+
+        幂等：Qt 里默认 profile 只建一次，之后再调就是瞬间返回。"""
+        if getattr(self, "_engine_warm", False):
+            return
+        self._engine_warm = True
+        try:
+            from PySide6.QtWebEngineCore import QWebEngineProfile
+
+            QWebEngineProfile.defaultProfile()
+        except Exception:
+            # 引擎起不来不该影响主界面：真要打开网页时还会再试一次
+            self._engine_warm = False
 
     def _is_foreground(self) -> bool:
         """前台 = 窗口可见且没最小化；仅托盘驻留时算后台。"""

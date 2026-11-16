@@ -43,6 +43,7 @@ def enable_acrylic(window, material: str = "acrylic") -> bool:
         disable_acrylic(window)
 
     import Cocoa
+    from PySide6.QtCore import Qt
     from qframelesswindow.mac.window_effect import QMacCocoaViewContainer
 
     ns_window, content = _content_view(window)
@@ -61,6 +62,14 @@ def enable_acrylic(window, material: str = "acrylic") -> bool:
     view.setBlendingMode_(Cocoa.NSVisualEffectBlendingModeBehindWindow)
 
     container = QMacCocoaViewContainer(0, window)
+    # 这个容器只是个挂载点，本身不该画出任何东西。Qt 会给没定过尺寸的原生子控件
+    # 一个 100×30 的默认几何，它就压在窗口左上角——那块区域不透背景、还挡住混合层，
+    # 看起来就是左上角一块不透明的死色。收成 0×0 并关掉背景绘制。
+    container.setFixedSize(0, 0)
+    container.move(-4, -4)
+    container.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+    container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+    container.hide()
     content.addSubview_positioned_relativeTo_(view, Cocoa.NSWindowBelow, container)
 
     window._acrylic_view = view

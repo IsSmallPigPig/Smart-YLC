@@ -77,7 +77,7 @@ def run() -> int:
             return 2
         return install_and_notify(sys.argv[index + 1])
 
-    from PySide6.QtCore import QEventLoop, Qt
+    from PySide6.QtCore import QEventLoop, QTimer, Qt
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication
 
@@ -109,10 +109,19 @@ def run() -> int:
                                | QEventLoop.ProcessEventsFlag.ExcludeSocketNotifiers)
     boot.start()
 
+    def _pump():
+        """把这一拍交还事件循环。
+
+        启动画面是独立窗口，主线程一直闷头构造时它就冻在那儿（转圈停住、
+        系统还可能标「未响应」）。每个重步骤之间让一拍，画面就能继续动。"""
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+                                   | QEventLoop.ProcessEventsFlag.ExcludeSocketNotifiers)
+
     try:
         from app.setup import setup_app
 
         setup_app()
+        _pump()
 
         from app.ui.brand import app_icon
 
@@ -131,15 +140,16 @@ def run() -> int:
         w.show()
         # 主窗口自己的启动界面（整窗不透明遮罩）与这张卡同尺寸同底色，交出首帧后
         # 换手看不到接缝；统计快照回来时由 MainWindow 负责淡出那一层。
-        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        _pump()
         boot.finish()
     except BaseException:
         boot.close()
         raise
 
+    # 更新检查要联网、建窗口，等界面真的立起来再问，别跟启动抢那几百毫秒
     from app.services.update_check import check_on_startup
 
-    check_on_startup(parent=w)
+    QTimer.singleShot(1200, lambda: check_on_startup(parent=w))
     return app.exec()
 
 
