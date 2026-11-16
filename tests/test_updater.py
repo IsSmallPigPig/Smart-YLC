@@ -475,3 +475,134 @@ def test_launch_installer_hands_package_to_system(tmp_path, monkeypatch):
     zip_path = tmp_path / "smart-ylc-main.zip"
     zip_path.write_bytes(b"x")
     assert updater.launch_installer(str(zip_path)) == "reveal"
+
+
+# ---------------------------------------------------------------- 静默安装
+
+class _Signal:
+    """假信号：测试里同步触发，不等 Qt 事件循环。"""
+
+    def __init__(self):
+        self._slots = []
+
+    def connect(self, slot):
+        self._slots.append(slot)
+
+    def emit(self, *args):
+        for slot in list(self._slots):
+            slot(*args)
+
+
+def _fake_sys(platform: str, executable: str = "/usr/bin/python3", **flags):
+    attrs = {"platform": platform, "executable": executable,
+             "frozen": False, "__compiled__": False}
+    attrs.update(flags)
+    return type("S", (), attrs)()
+
+
+def test_installer_command_uses_silent_flags(tmp_path, monkeypatch):
+    from app.services import silent_update
+
+    exe = tmp_path / "setup.exe"
+    exe.write_bytes(b"x")
+    monkeypatch.setattr(silent_update, "sys", _fake_sys("win32"))
+    cmd = silent_update.installer_command(str(exe))
+    assert cmd[0] == str(exe)
+    assert "/VERYSILENT" in cmd and "/NORESTART" in cmd
+    assert "/SUPPRESSMSGBOXES" in cmd and "/CLOSEAPPLICATIONS" in cmd
+
+    msi = tmp_path / "setup.msi"
+    msi.write_bytes(b"x")
+    assert silent_update.installer_command(str(msi))[:2] == ["msiexec", "/i"]
+    assert "/qn" in silent_update.installer_command(str(msi))
+
+
+def test_helper_command_reenters_same_entrypoint(monkeypatch):
+    from app.services import silent_update
+
+    monkeypatch.setattr(silent_update, "sys", _fake_sys("darwin"))
+    assert silent_update.helper_command("/tmp/a.dmg") == [
+        "/usr/bin/python3", "-m", "app.main", silent_update.FLAG, "/tmp/a.dmg"]
+    monkeypatch.setattr(silent_update, "sys", _fake_sys(
+        "darwin", executable="/opt/SmartYouth.app/Contents/MacOS/SmartYouth", frozen=True))
+    assert silent_update.helper_command("/tmp/a.dmg") == [
+        "/opt/SmartYouth.app/Contents/MacOS/SmartYouth",
+        silent_update.FLAG, "/tmp/a.dmg"]
+
+
+def test_start_launches_detached_helper(tmp_path, monkeypatch):
+    from app.services import silent_update
+
+    pkg = tmp_path / "setup.exe"
+    pkg.write_bytes(b"x")
+    spawned = {}
+    monkeypatch.setattr(silent_update.subprocess, "Popen",
+                        lambda cmd, **kwargs: spawned.update(cmd=cmd, kwargs=kwargs))
+    assert silent_update.start(str(pkg)) is True
+    assert silent_update.FLAG in spawned["cmd"]
+    assert str(pkg) in spawned["cmd"]
+    assert spawned["kwargs"]["stdout"] is subprocess.DEVNULL
+    assert "start_new_session" in spawned["kwargs"] or "creationflags" in spawned["kwargs"]
+
+
+def test_install_and_notify_restart_hint(monkeypatch):
+    from app.services import silent_update
+
+    notices = []
+    monkeypatch.setattr(silent_update, "install", lambda path: None)
+    monkeypatch.setattr(silent_update, "_notify", lambda title, body: notices.append((title, body)))
+    assert silent_update.install_and_notify("/tmp/setup.exe") == 0
+    assert notices and "重启" in notices[0][1]
+
+
+def test_install_failure_notifies_manual_step(monkeypatch):
+    from app.services import silent_update
+
+    notices = []
+
+    def _boom(path):
+        raise silent_update.SilentInstallError("安装程序退出码 1")
+
+    monkeypatch.setattr(silent_update, "install", _boom)
+    monkeypatch.setattr(silent_update, "_notify", lambda title, body: notices.append((title, body)))
+    assert silent_update.install_and_notify("/tmp/setup.exe") == 1
+    assert notices[0][0] == "更新未完成"
+    assert "手动安装" in notices[0][1]
+
+
+def test_startup_check_downloads_and_installs_silently(tmp_path, monkeypatch):
+    """后台发现新版本后直接下载并拉起静默安装，不弹版本提示。"""
+    from PySide6.QtCore import QCoreApplication, QTimer
+
+    from app.services import silent_update
+
+    QCoreApplication.instance() or QCoreApplication([])
+    monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
+
+    class FakeCheckWorker:
+        def __init__(self):
+            self.found, self.failed, self.finished = _Signal(), _Signal(), _Signal()
+
+        def start(self):
+            self.found.emit(info(version="9.9.9"))
+            self.finished.emit()
+
+    class FakeDownloadWorker:
+        def __init__(self, info, use_proxy):
+            self.done, self.failed, self.fallback, self.finished = (
+                _Signal(), _Signal(), _Signal(), _Signal())
+
+        def start(self):
+            self.done.emit("/tmp/SmartYouth-setup.exe")
+            self.finished.emit()
+
+    started = []
+    monkeypatch.setattr(update_check, "CheckWorker", FakeCheckWorker)
+    monkeypatch.setattr(update_check, "DownloadWorker", FakeDownloadWorker)
+    monkeypatch.setattr(silent_update, "start", lambda path: started.append(path) or True)
+    monkeypatch.setattr(QTimer, "singleShot", lambda ms, callback, *a, **k: callback(*a, **k))
+
+    update_check.check_on_startup(delay_ms=0)
+
+    assert started == ["/tmp/SmartYouth-setup.exe"]
+    assert "正在静默安装" in update_check.last_check_text()

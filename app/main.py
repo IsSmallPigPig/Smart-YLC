@@ -2,6 +2,7 @@
 
   （无参数）      打开主窗口
   --tray          托盘后台模式：无窗口，每日定时检查 + 系统通知
+  --silent-install <包路径>  安装助手：静默安装并通知用户重启（内部使用）
 """
 
 from __future__ import annotations
@@ -15,6 +16,15 @@ def run() -> int:
 
         return run_tray()
 
+    if "--silent-install" in sys.argv:
+        from app.services.silent_update import install_and_notify
+
+        index = sys.argv.index("--silent-install")
+        if index + 1 >= len(sys.argv):
+            print("缺少更新包路径", file=sys.stderr)
+            return 2
+        return install_and_notify(sys.argv[index + 1])
+
     from PySide6.QtCore import QEventLoop, Qt
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication
@@ -26,6 +36,14 @@ def run() -> int:
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
+
+    # 只留一个实例：第二次启动把已有窗口叫出来就退出，不再建一套页面与后台线程
+    from app.services.single_instance import SingleInstance
+
+    guard = SingleInstance()
+    if not guard.attach():
+        return 0
+    app.aboutToQuit.connect(guard.close)
 
     # 先放启动画面，再做后面那些慢的事（导入 qfluentwidgets 约 0.4s、构造主窗口
     # 与六个页面约 0.3s，Windows 冷启动还要叠上运行时加载与杀毒扫描）。
@@ -51,6 +69,13 @@ def run() -> int:
         from app.ui.main_window import MainWindow
 
         w = MainWindow()
+
+        def _show_existing(_command: str = ""):
+            w.showNormal()
+            w.raise_()
+            w.activateWindow()
+
+        guard.set_handler(_show_existing)
         w.show()
         # 主窗口自己的启动界面（整窗不透明遮罩）与这张卡同尺寸同底色，交出首帧后
         # 换手看不到接缝；统计快照回来时由 MainWindow 负责淡出那一层。

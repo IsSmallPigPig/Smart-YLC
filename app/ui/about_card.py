@@ -1,13 +1,13 @@
 """系统配置的「关于」分组：作者主页、反馈、检查更新、下载加速。
 
 检查与下载用右下角的浮动进度条反馈（和「同步数据」同一种），下载时按百分比
-推进；按钮本身依次变成「下载 x.y.z」「打开目录」，动作不漂在窗口边缘。
+推进。下载完成后拉起独立进程静默安装，不弹安装窗口；装完发系统通知提醒重启。
+失败时按钮变成「打开目录」，可以手动安装。
 """
 
 from __future__ import annotations
 
 import os
-import sys
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
@@ -21,7 +21,7 @@ from qfluentwidgets import (
 )
 
 from app import __version__
-from app.services import update_check, updater
+from app.services import silent_update, update_check, updater
 from app.ui.combo import ComboBox
 from app.ui.page import CollapsibleCard, SettingRow
 
@@ -228,40 +228,52 @@ class AboutCard(CollapsibleCard):
 
     def _on_downloaded(self, path: str):
         self._downloaded = path
-        self.check_btn.setEnabled(True)
-        self.check_btn.setText("打开目录")
-        self.update_row.set_desc(f"更新包已下载：{os.path.basename(path)}")
-        try:
-            mode = updater.launch_installer(path)
-        except updater.UpdateError as e:
-            # 启动不了就退回到「文件已经下好了」：留着浮层收尾，别让用户以为没下载
-            self._close_toast(text="更新包已下载，但启动安装程序失败")
-            self._notice("error", "无法启动安装程序",
-                         f"{e}。可以点「打开目录」手动运行。", 10000)
-            return
+        self.check_btn.setEnabled(False)
+        self.check_btn.setText("正在安装")
+        self.update_row.set_desc("更新包已下载，正在后台静默安装…")
+        self._pending_install = path
 
-        if mode != "run":
-            self._close_toast(text="更新包已下载，已在文件管理器中定位")
-            return
-        text = "更新包已下载，正在启动安装程序…"
-        if self._fallback:
-            text = "加速不可用，已改用直连下载；正在启动安装程序…"
-        self._close_toast(text=text, hold_ms=1500)
-        if sys.platform == "win32":
-            self._quit_for_install()
-
-    def _quit_for_install(self):
-        """Windows 的安装程序要替换正在运行的 exe：让它先跑起来，再退出主程序。"""
-        window = self.window()
-        worker = getattr(getattr(window, "upload_page", None), "worker", None)
+        # 上传到一半退出会留下半截提交；等它结束再让出文件
+        worker = getattr(getattr(self.window(), "upload_page", None), "worker", None)
         if worker is not None and getattr(worker, "isRunning", lambda: False)():
-            # 上传到一半退出会留下半截提交；留给用户自己选时机重启
-            self._notice("warning", "上传还在进行",
-                         "安装程序已启动；本窗口先不关闭，装完重启应用即可", 9000)
+            self._notice("info", "上传进行中",
+                         "上传完成后会自动安装更新，并通知你重启生效", 7000)
+            worker.finished.connect(self._begin_silent_install)
+            if not worker.isRunning():
+                self._begin_silent_install()
             return
         from PySide6.QtCore import QTimer
 
-        quit_app = getattr(window, "_quit_app", None)
+        QTimer.singleShot(400, self._begin_silent_install)
+
+    def _begin_silent_install(self):
+        """拉起独立安装进程，然后退出主程序；完成通知由那个进程发出。"""
+        path = getattr(self, "_pending_install", "")
+        if not path:
+            return
+        self._pending_install = ""
+        try:
+            silent_update.start(path)
+        except Exception as e:
+            self._close_toast()
+            self.check_btn.setEnabled(True)
+            self.check_btn.setText("打开目录")
+            self.update_row.set_desc(f"更新包已下载：{os.path.basename(path)}")
+            self._notice("error", "无法静默安装",
+                         f"{e}。可以点「打开目录」手动安装。", 10000)
+            return
+
+        text = "正在后台静默安装，完成后会通知你重启应用"
+        if self._fallback:
+            text = "加速不可用，已改用直连下载；" + text
+        self._close_toast(text=text, hold_ms=1200)
+        self._quit_for_install()
+
+    def _quit_for_install(self):
+        """安装要替换正在运行的程序：先让主程序退出，再由安装助手接管。"""
+        from PySide6.QtCore import QTimer
+
+        quit_app = getattr(self.window(), "_quit_app", None)
         if quit_app is not None:
             QTimer.singleShot(1200, quit_app)
 
