@@ -1,4 +1,4 @@
-"""开机自启动管理：macOS LaunchAgent / Windows 注册表 Run 键（登录静默启动托盘后台模式）。"""
+"""开机自启动管理：macOS LaunchAgent / Windows 注册表 Run 键 / Linux XDG autostart（登录静默启动托盘后台模式）。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,25 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 PLIST_DIR = os.path.expanduser("~/Library/LaunchAgents")
 PLIST_PATH = os.path.join(PLIST_DIR, f"{LABEL}.plist")
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# XDG autostart 规范：~/.config/autostart/<桌面项>.desktop，登录时由桌面环境拉起
+AUTOSTART_DESKTOP_DIR = os.path.expanduser("~/.config/autostart")
+AUTOSTART_DESKTOP_PATH = os.path.join(AUTOSTART_DESKTOP_DIR, f"{LABEL}.desktop")
+DESKTOP_TEMPLATE = """[Desktop Entry]
+Type=Application
+Name=智慧团委
+Exec={exe} --tray
+X-GNOME-Autostart-enabled=true
+Comment=智慧团委后台托盘
+"""
+
+
+def _linux_command() -> str:
+    """Linux 自启动命令行：打包后是 AppImage/deb 里的 exe，源码运行回退 python -m。"""
+    exe = sys.executable
+    if os.path.basename(exe) in ("python", "python3"):
+        return f'"{exe}" -m app.main --tray'
+    return f'"{exe}" --tray'
 
 PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,6 +72,8 @@ def is_installed() -> bool:
                 return True
         except OSError:
             return False
+    if sys.platform.startswith("linux"):
+        return os.path.isfile(AUTOSTART_DESKTOP_PATH)
     return os.path.isfile(PLIST_PATH)
 
 
@@ -65,6 +86,11 @@ def install() -> str:
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
             winreg.SetValueEx(k, LABEL, 0, winreg.REG_SZ, cmd)
         return cmd
+    if sys.platform.startswith("linux"):
+        os.makedirs(AUTOSTART_DESKTOP_DIR, exist_ok=True)
+        with open(AUTOSTART_DESKTOP_PATH, "w", encoding="utf-8") as f:
+            f.write(DESKTOP_TEMPLATE.format(exe=_linux_command()))
+        return AUTOSTART_DESKTOP_PATH
     os.makedirs(PLIST_DIR, exist_ok=True)
     log_path = os.path.join(PLIST_DIR, "gd12355-helper-bg.log")
     plist = PLIST_TEMPLATE.format(
@@ -84,6 +110,12 @@ def uninstall() -> None:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
                 winreg.DeleteValue(k, LABEL)
+        except FileNotFoundError:
+            pass
+        return
+    if sys.platform.startswith("linux"):
+        try:
+            os.remove(AUTOSTART_DESKTOP_PATH)
         except FileNotFoundError:
             pass
         return

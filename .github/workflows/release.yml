@@ -132,8 +132,18 @@ jobs:
         env:
           WIN_CERT_PFX_B64: ${{ secrets.WIN_CERT_PFX_B64 }}
           WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
+          if ($env:SIGNPATH_API_TOKEN) {
+            # SignPath 模式：私钥在 SignPath 的 HSM 里，CI 不碰证书文件。
+            # 本地 signtool 全部跳过，安装包整件交 signpath 步骤云端签名。
+            "mode=signpath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "signtool=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "password=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "使用 SignPath 云端签名（正式 CA 证书，无需本地私钥）"
+            exit 0
+          }
           $pwd = ""
           if ($env:WIN_CERT_PFX_B64) {
             $bytes = [Convert]::FromBase64String($env:WIN_CERT_PFX_B64)
@@ -178,7 +188,7 @@ jobs:
             Write-Warning "找不到 signtool，跳过签名（安装包照常产出，但为未签名）"
           }
 
-      - name: 签名主程序
+      - name: 签名主程序（本地证书）
         if: steps.cert.outputs.signtool != ''
         shell: pwsh
         env:
@@ -210,8 +220,54 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译安装包失败" }
           Get-Item "dist\installer\SmartYouth-Windows-x64-setup.exe" | Select-Object Name, Length
 
-      - name: 签名安装包
-        if: steps.cert.outputs.signtool != ''
+      # SignPath 模式：整件安装包交云端签名（主 exe 不单独签——SmartScreen 看
+      # 的是下载文件 setup.exe 的签名与信誉）。先传成 artifact 拿 id，再原地签回。
+      - name: 上传待签名安装包
+        id: unsigned-art
+        if: steps.cert.outputs.mode == 'signpath'
+        uses: actions/upload-artifact@v6
+        with:
+          name: unsigned-windows-setup
+          path: dist/installer/SmartYouth-Windows-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: SignPath 云端签名
+        if: steps.cert.outputs.mode == 'signpath'
+        uses: SignPath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-art.outputs.artifact-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-for-completion: true
+          # 默认会解包：签好的 exe 直接落在 output-artifact-directory 下
+          output-artifact-directory: dist/signed
+
+      - name: 校验并落位签名结果
+        if: steps.cert.outputs.mode == 'signpath'
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem "dist/signed" -Filter "*.exe" -Recurse | Select-Object -First 1
+          if (-not $signed) { throw "SignPath 返回目录里没有签好的 exe" }
+          Move-Item -Force $signed.FullName "dist/installer/SmartYouth-Windows-x64-setup.exe"
+          $sig = Get-AuthenticodeSignature "dist/installer/SmartYouth-Windows-x64-setup.exe"
+          Write-Host "签名状态: $($sig.Status) / 签名者: $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne "Valid") { throw "签名状态异常: $($sig.Status)（$($sig.StatusMessage)）" }
+
+      - name: 上传安装包（SignPath 已签名）
+        if: steps.cert.outputs.mode == 'signpath'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.APP_NAME }}-Windows
+          path: dist/installer/SmartYouth-Windows-x64-setup.exe
+          if-no-files-found: error
+
+      - name: 签名安装包（本地证书）
+        if: steps.cert.outputs.mode != 'signpath' && steps.cert.outputs.signtool != ''
         shell: pwsh
         env:
           SIGN_PWD: ${{ steps.cert.outputs.password }}
@@ -230,8 +286,84 @@ jobs:
             dist/installer/SmartYouth-CodeSigning.cer
           if-no-files-found: error
 
+  build-linux:
+    # 只在 x86_64 出 .deb：ubuntu-22.04 的 glibc 2.35 比 24.04 更旧，
+    # 编出来的包能装的发行版范围更大（deb 不校验 glibc 下限，兼容全靠构建机）
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 安装系统依赖
+        # PyInstaller 分析阶段要真的 import PySide6，缺 libGL/libEGL 直接崩；
+        # Qt xcb 平台插件的运行时依赖也一并列进 deb 的 Depends；xvfb 供冒烟检查。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon0 libdbus-1-3 \
+            fontconfig libglib2.0-0 libx11-6 libxcb1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install "PySide6>=6.12" "PySide6-Fluent-Widgets>=1.11" pypdf pillow openpyxl requests pymupdf
+
+      - name: PyInstaller 打包（onedir）
+        # 脚本在 Linux 上输出 dist/SmartYouth/，并把图标铺进 share/icons/hicolor
+        run: python scripts/build.py
+
+      - name: 冒烟检查（Xvfb 真实 X11）
+        # 分析期 import 过了不算数：这里验证冻结产物真能构造主窗口。
+        # 必须用 Xvfb 而不是 QT_QPA_PLATFORM=offscreen——无边框窗口初始化
+        # 在没有真实窗口系统时会段错误。浏览器页的 Chromium 沙箱在 CI root
+        # 环境起不来，用 QTWEBENGINE_CHROMIUM_FLAGS 关掉（只影响这次冒烟）。
+        run: |
+          QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox" \
+            timeout 90 xvfb-run -a dist/SmartYouth/SmartYouth --smoke-test
+          echo "冻结产物冒烟通过"
+
+      - name: 制作 .deb
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_NAME" = "$VER" ] && VER="0.0.0"   # workflow_dispatch 时没 tag
+          PKG="dist/deb"
+          rm -rf "$PKG"; mkdir -p \
+            "$PKG/DEBIAN" \
+            "$PKG/opt/SmartYouth" \
+            "$PKG/usr/share/applications" \
+            "$PKG/usr/share/icons/hicolor/512x512/apps" \
+            "$PKG/usr/bin"
+          cp -R dist/SmartYouth/. "$PKG/opt/SmartYouth/"
+          # dist/SmartYouth/share 是 build.py 铺的 hicolor 图标，deb 里装到系统图标路径
+          cp "$PKG/opt/SmartYouth/share/icons/hicolor/512x512/apps/SmartYouth.png" \
+            "$PKG/usr/share/icons/hicolor/512x512/apps/" 2>/dev/null || \
+            cp app/assets/smart-ylc@512.png "$PKG/usr/share/icons/hicolor/512x512/apps/SmartYouth.png"
+          # 不用 heredoc：YAML block scalar 里 `<<EOF` 的结束标记带缩义就永不闭合，
+          # 内容行前导空格也会污染 desktop/control 的键值解析，printf 逐行写最稳。
+          printf '[Desktop Entry]\nType=Application\nName=智慧团委\nName[en]=SmartYouth\nExec=/opt/SmartYouth/SmartYouth\nIcon=SmartYouth\nTerminal=false\nCategories=Office;\nComment=多支部账号一屏管理\n' \
+            > "$PKG/usr/share/applications/SmartYouth.desktop"
+          ln -sf /opt/SmartYouth/SmartYouth "$PKG/usr/bin/smartyouth"
+          SIZE=$(du -sk "$PKG/opt/SmartYouth" | cut -f1)
+          printf 'Package: smartyouth\nVersion: %s\nArchitecture: amd64\nInstalled-Size: %s\nMaintainer: AnkoQAQ <ismsmallpigpig@outlook.com>\nDepends: libegl1, libgl1, libxkbcommon0, libdbus-1-3, fontconfig, libglib2.0-0, libx11-6, libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-randr0, libxcb-render-util0, libxcb-shape0, libxcb-xinerama0, libnss3, libnspr4, libxcomposite1, libxdamage1, libxfixes3, libxtst6, libasound2, libcairo2, libpango-1.0-0, libatspi2.0-0, libcups2\nSection: utils\nPriority: optional\nDescription: 智慧团委助手（Smart-YLC helper）\n 多支部账号一屏管理：档案上传、组织状况、站内信与数据导出。\n Qt/PySide6 运行时已随包携带，安装到 /opt/SmartYouth。\n' \
+            "$VER" "$SIZE" > "$PKG/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$PKG" \
+            "dist/$APP_NAME-Linux-x64.deb"
+          ls -lh "dist/$APP_NAME-Linux-x64.deb"
+          dpkg-deb -c "dist/$APP_NAME-Linux-x64.deb" | head -5
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.APP_NAME }}-Linux-x64
+          path: dist/${{ env.APP_NAME }}-Linux-x64.deb
+          if-no-files-found: error
+
   release:
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -247,6 +379,7 @@ jobs:
             echo "## 下载"
             echo "- **macOS（Apple Silicon / M 系列）**：\`SmartYouth-macOS-arm64.dmg\`（挂载后是「智慧团委.app」）"
             echo "- **Windows（64 位）**：\`SmartYouth-Windows-x64-setup.exe\`（每用户安装，不需要管理员权限、不弹 UAC）"
+            echo "- **Linux（x86_64）**：\`SmartYouth-Linux-x64.deb\`（装好后命令 \`smartyouth\` 或应用列表里的「智慧团委」；面向 Ubuntu 22.04+/Debian 12+）"
             echo
             echo "> 仅支持 Apple Silicon；Windows 仅 64 位。安装包用英文名（GitHub 下载文件名不支持中文），装好后的应用名是「智慧团委」。"
             echo
@@ -275,3 +408,4 @@ jobs:
             artifacts/**/*.dmg
             artifacts/**/*setup.exe
             artifacts/**/*.cer
+            artifacts/**/*.deb

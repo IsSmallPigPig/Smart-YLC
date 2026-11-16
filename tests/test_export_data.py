@@ -183,3 +183,43 @@ def test_workbook_without_rows_still_has_a_sheet(tmp_path):
     from openpyxl import load_workbook
 
     assert load_workbook(target).sheetnames == ["导出数据"]
+
+
+def test_control_chars_in_cells_do_not_break_export(tmp_path):
+    """系统抓回来的姓名带控制字符时导出照常成功，不再报
+    「<乱码> cannot be used in worksheets」。"""
+    cfg_ = cfg()
+    members = cfg_["memberCache"]["ssfz12407"]["members"]
+    members[0]["name"] = "张\x07三\x00"      # BEL + NUL：openpyxl 直接拒绝写入
+    members[1]["work_unit"] = "公\x1F司"
+    target = str(tmp_path / "dirty.xlsx")
+    result = export_data.run_export(cfg_, ["members"], "split", "merged", target)
+    assert result["rows"] >= 2
+
+    from openpyxl import load_workbook
+
+    ws = load_workbook(target).active
+    names = [row[1].value for row in ws.iter_rows(min_row=2)]
+    assert "张三" in names
+
+
+def test_control_chars_in_sheet_name_do_not_break_export(tmp_path):
+    cfg_ = {
+        "accounts": [{"userName": "ssfz1", "remark": "高三\x07(七)班"}],
+        "memberCache": {"ssfz1": {"branch": "高三\x07(七)班", "fetchedAt": "", "members": [
+            member("1", "张三", "13800000001")]}},
+        "orgStatsCache": {},
+    }
+    target = str(tmp_path / "ctrl_sheet.xlsx")
+    export_data.run_export(cfg_, ["members"], "split", "branch", target)
+    from openpyxl import load_workbook
+
+    assert load_workbook(target).sheetnames == ["高三(七)班-团员信息"]
+
+
+def test_clean_helper_only_touches_strings():
+    from app.services.xlsx_clean import clean
+
+    assert clean("a\x0b\x1fb") == "ab"
+    assert clean(12.5) == 12.5
+    assert clean(None) is None

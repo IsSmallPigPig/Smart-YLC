@@ -4,6 +4,7 @@
 
   Windows   dist/SmartYouth/智慧团委.exe        （目录名 ASCII，安装脚本按它取文件）
   macOS     dist/智慧团委.app                    （包内可执行文件仍是 ASCII 的 SmartYouth）
+  Linux     dist/SmartYouth/                     （onedir 目录；workflow 用 dpkg-deb 打 .deb）
 
 为什么换回 PyInstaller：
   PyMuPDF 2.x 把 SWIG 绑定写成一份 2.7MB 的 pymupdf/mupdf.py。Nuitka 把所有被导入的
@@ -160,6 +161,21 @@ def _postprocess_windows() -> Path | None:
     return target
 
 
+def _postprocess_linux() -> Path | None:
+    # Linux 上应用图标按 Freedesktop 规范走 hicolor 主题，打进 onedir 目录
+    # 随包分发；桌面环境会把 512 的图缩到需要的尺寸，不用逐档复制。
+    dist = ROOT / "dist"
+    target = dist / APP_NAME
+    if not target.is_dir():
+        return None
+    src = ROOT / "app/assets/smart-ylc@512.png"
+    if src.is_file():
+        d = target / "share/icons/hicolor/512x512/apps"
+        d.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, d / f"{APP_NAME}.png")
+    return target
+
+
 def size_mb(path: Path) -> float:
     if path.is_file():
         return path.stat().st_size / 1024 / 1024
@@ -183,7 +199,12 @@ def main() -> int:
         print(f"PyInstaller 打包失败，退出码 {result.returncode}", file=sys.stderr)
         return result.returncode
 
-    final = _postprocess_windows() if sys.platform == "win32" else _postprocess_macos()
+    if sys.platform == "win32":
+        final = _postprocess_windows()
+    elif sys.platform == "darwin":
+        final = _postprocess_macos()
+    else:
+        final = _postprocess_linux()
     if final is None:
         print("没找到打包产物（dist 下既没有 SmartYouth 也没有 *.app）", file=sys.stderr)
         return 1

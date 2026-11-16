@@ -163,8 +163,11 @@ def save_error_rows(path: str, rows) -> int:
     ws = wb.active
     ws.title = "异常团员名单"
     ws.append(ERROR_ROW_HEADERS)
+    from app.services.xlsx_clean import clean
+
     for r in items:
-        ws.append([r.name, r.mobile, r.kinds, r.problems, r.branch])
+        # 这些字段来自系统抓取，同样可能混控制字符（导出乱码报错的同一根因）
+        ws.append([clean(v) for v in (r.name, r.mobile, r.kinds, r.problems, r.branch)])
     for col, width in zip("ABCDE", (14, 18, 16, 60, 22)):
         ws.column_dimensions[col].width = width
     wb.save(path)
