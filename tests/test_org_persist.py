@@ -99,11 +99,12 @@ def test_partial_sync_keeps_other_branches(app, isolated_store):
 
     assert (page._total, page._uploaded) == (52, 50)   # 启动时按整份缓存恢复
 
-    total, uploaded, by_kind, _rows, unpaid = page._offline_snapshot()
+    total, uploaded, by_kind, _rows, unpaid, extras = page._offline_snapshot()
     assert total == 52, "只同步了一个支部，其余支部被抹掉了"
     assert uploaded == 50
     assert by_kind["identity"] == 2
     assert unpaid == 12.0, "应补缴金额要跟着一起算出来"
+    assert extras["unpaidMonths"] == 1, "欠缴月数也要一起汇总"
     assert sorted(store.load()["orgStatsCache"]) == ["ssfz12401", "ssfz12402", "ssfz12403"]
 
 
