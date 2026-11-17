@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PyQt5.QtCore import QRectF, Qt
+from PyQt5.QtGui import QColor, QPainter, QPainterPath
+from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, IndeterminateProgressRing, TitleLabel
 
 from app.ui.anim import fade_out

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import (
+from PyQt5.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
     QParallelAnimationGroup,
@@ -16,7 +16,7 @@ from PySide6.QtCore import (
     QTimer,
     QVariantAnimation,
 )
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QWidget
+from PyQt5.QtWidgets import QGraphicsOpacityEffect, QWidget
 
 QWIDGETSIZE_MAX = 16777215
 

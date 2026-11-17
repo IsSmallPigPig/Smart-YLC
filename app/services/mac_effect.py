@@ -43,7 +43,7 @@ def enable_acrylic(window, material: str = "acrylic") -> bool:
         disable_acrylic(window)
 
     import Cocoa
-    from PySide6.QtCore import Qt
+    from PyQt5.QtCore import Qt
     from qframelesswindow.mac.window_effect import QMacCocoaViewContainer
 
     ns_window, content = _content_view(window)

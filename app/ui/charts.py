@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QWidget
+from PyQt5.QtCore import QRect, Qt
+from PyQt5.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
+from PyQt5.QtWidgets import QWidget
 
 from qfluentwidgets import isDarkTheme, qconfig
 

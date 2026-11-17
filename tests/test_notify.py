@@ -14,7 +14,7 @@ class FakeTray:
 def test_send_passes_message_icon_to_tray(monkeypatch):
     """曾经把 qfluentwidgets 的 InfoBarIcon 传进 showMessage，Windows 上每次
     通知都 TypeError 然后被吞掉——钉住参数类型，别再回退。"""
-    from PySide6.QtWidgets import QSystemTrayIcon
+    from PyQt5.QtWidgets import QSystemTrayIcon
 
     from app.services import notify
 
@@ -25,7 +25,7 @@ def test_send_passes_message_icon_to_tray(monkeypatch):
     assert len(tray.calls) == 1
     title, body, icon, msecs = tray.calls[0]
     assert title == "有 2 条新站内信" and body == "内容"
-    assert icon is QSystemTrayIcon.MessageIcon.Information
+    assert icon == QSystemTrayIcon.MessageIcon.Information
     assert msecs == 8000
 
 
@@ -57,7 +57,7 @@ def test_macos_native_notification_is_preferred(monkeypatch):
 
 
 def test_macos_native_unavailable_returns_false_for_click(monkeypatch):
-    """源码运行没有 bundle id 时，带点击需求的提醒交给应用内浮窗。"""
+    """源码运行没有 bundle id 时，带点击需求的提醒返回 False（不回落浮窗）。"""
     from app.services import macos_notify, notify
 
     monkeypatch.setattr(notify.platform, "system", lambda: "Darwin")

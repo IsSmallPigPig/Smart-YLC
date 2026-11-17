@@ -13,9 +13,9 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from PySide6.QtCore import QThread, QTimer, Signal, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices
-from PySide6.QtWidgets import (
+from PyQt5.QtCore import QThread, QTimer, pyqtSignal as Signal, Qt, QUrl
+from PyQt5.QtGui import QColor, QDesktopServices
+from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFileDialog,
@@ -110,14 +110,18 @@ class HealthWorker(QThread):
         "risk": "cooldown", "cooldown": "cooldown", "network": "network",
     }
 
-    def __init__(self, accounts: list[dict]):
-        super().__init__()
-        self.accounts = accounts
+    def __init__(self, accounts: list[dict], parent=None):
+        super().__init__(parent)   # 挂页面：页面析构时 Qt 会等线程结束，
+        self.accounts = accounts   # 无父线程被 GC 时直接 abort
         self._stop = False
 
     def stop(self):
         """浮条上点关闭：不再往下测，已拿到的结果照常落盘。"""
         self._stop = True
+
+    def _cancelled(self) -> bool:
+        """用户取消，或页面正在析构（Qt 对带父线程会 requestInterruption）。"""
+        return self._stop or self.isInterruptionRequested()
 
     def _check_one(self, acc: dict) -> tuple[str, str, str]:
         from app.services import login_gate
@@ -125,6 +129,8 @@ class HealthWorker(QThread):
         user, pwd = acc.get("userName", ""), acc.get("password", "")
         if not user or not pwd:
             return user, "unknown", "账号或密码为空"
+        if self._cancelled():
+            return user, "unknown", "已取消"
         try:
             kind, message = login_gate.ensure_logged_in(SiteClient(user, pwd))
             return user, self.KIND_MAP.get(kind, "failed"), message
@@ -133,15 +139,22 @@ class HealthWorker(QThread):
 
     def run(self):
         workers = min(8, max(1, len(self.accounts)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        pool = ThreadPoolExecutor(max_workers=workers)
+        try:
             futures = [pool.submit(self._check_one, dict(a)) for a in self.accounts]
             for fut in as_completed(futures):
-                if self._stop:
+                if self._cancelled():
                     break
                 try:
                     self.account_checked.emit(*fut.result())
                 except Exception as e:  # 单账号线程异常不影响其余结果
                     self.account_checked.emit("", "network", f"测活线程异常：{e}")
+        finally:
+            # 取消（用户关浮条 / 页面要析构）时不能陪着剩下的请求走完超时：
+            # with 块的隐式 shutdown(wait=True) 会把整批账号测完才退出，
+            # PyQt5 下页面先被销毁、运行中的 QThread 跟着析构，直接 abort。
+            # 已派发的请求最多挂到一个 20s 超时；析构路径上 Qt 等的就是它。
+            pool.shutdown(wait=not self._cancelled(), cancel_futures=self._cancelled())
 
 
 class WorkspaceWorker(QThread):
@@ -757,7 +770,7 @@ class SettingsPage(FluentPage):
         """一行说清提醒走哪个通道；被系统关掉时给一个直达开关的按钮。"""
         import sys
 
-        from PySide6.QtWidgets import QHBoxLayout, QWidget
+        from PyQt5.QtWidgets import QHBoxLayout, QWidget
 
         from qfluentwidgets import PushButton
 
@@ -775,22 +788,22 @@ class SettingsPage(FluentPage):
             lay.addWidget(note_label("系统通知已开启，提醒以系统横幅弹出"), 1)
         elif state == "denied":
             lay.addWidget(note_label(
-                "系统通知被关闭，只能在应用内浮窗提醒；在「系统设置 → 通知」里"
+                "系统通知被关闭，后台提醒不会弹出；在「系统设置 → 通知」里"
                 f"打开「{macos_notify.app_name()}」即可"), 1)
             btn = PushButton(FIF.SETTING, "去开启")
             btn.clicked.connect(macos_notify.open_settings)
             lay.addWidget(btn, 0)
         elif state == "undetermined":
-            lay.addWidget(note_label("尚未授权，首次提醒时会询问"), 1)
+            lay.addWidget(note_label("尚未授权，启动时会询问系统通知权限"), 1)
         else:
-            lay.addWidget(note_label("当前运行方式拿不到系统通知，改用应用内浮窗"), 1)
+            lay.addWidget(note_label("当前运行方式拿不到系统通知，打包成 .app 运行即可"), 1)
         return box
 
     def _test_notify(self, btn=None):
         """发一条测试提醒：点它会回到主界面，通道与点击一起验。
 
-        macOS 上优先走系统原生通知（打包版可用），权限被关或源码运行时
-        自动回落到应用内浮窗，两条通道都能点回主界面。"""
+        只走系统原生通知（macOS 系统通知 / Windows 托盘气泡），不用应用内浮窗；
+        原生通道不可用时明确报未送达，并引导去开启系统通知。"""
         from app.ui import bg_toast
 
         window = getattr(self, "window_ref", None)
@@ -803,8 +816,12 @@ class SettingsPage(FluentPage):
             InfoBar.success("已发出测试提醒", "点一下那条提醒，应当回到主界面",
                             duration=4000, parent=self)
         else:
-            InfoBar.warning("测试提醒未送达", "当前平台不可用或系统拒绝了通知",
-                            duration=5000, parent=self)
+            hint = getattr(window, "_hint_notification_channel", None)
+            if hint is not None:
+                hint()
+            else:
+                InfoBar.warning("测试提醒未送达", "当前平台不可用或系统拒绝了通知",
+                                duration=5000, parent=self)
 
     def _refresh_autostart_btn(self):
         from app.services import autostart
@@ -989,7 +1006,7 @@ class SettingsPage(FluentPage):
         时间框与间隔框每次打开都新建并挂在弹窗下，关窗写回 _notify_time /
         _notify_interval_hours（_save_config 与行说明读的正是这两个值）。页面不放
         这两个控件——无父控件的 LineEdit / ComboBox 会被 Qt 当成独立顶层窗口。"""
-        from PySide6.QtWidgets import QVBoxLayout, QWidget
+        from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
         from qfluentwidgets import LineEdit, PushButton
 
@@ -1138,7 +1155,7 @@ class SettingsPage(FluentPage):
     # ---------- 账号删除（行内按钮 + 勾选批量） ----------
 
     def _download_account_template(self):
-        from PySide6.QtWidgets import QFileDialog
+        from PyQt5.QtWidgets import QFileDialog
 
         from app.services.export_data import default_name
 
@@ -1154,7 +1171,7 @@ class SettingsPage(FluentPage):
 
     def _export_config_json(self):
         """导出整份设置为 JSON（config.json 完整快照，含账号密码与全部设置）。"""
-        from PySide6.QtWidgets import QFileDialog
+        from PyQt5.QtWidgets import QFileDialog
 
         import json
 
@@ -1180,7 +1197,7 @@ class SettingsPage(FluentPage):
 
     def _import_config_json(self):
         """从备份恢复整份设置：先看清要覆盖什么，再替换并即时重载。"""
-        from PySide6.QtWidgets import QFileDialog
+        from PyQt5.QtWidgets import QFileDialog
 
         import json
 
@@ -1459,7 +1476,7 @@ class SettingsPage(FluentPage):
         for i, acc in enumerate(self.accounts):
             # 所有 item 都在独立状态配置完（flags/text/color）再 setItem——
             # setItem 之后的 setFlags 会触发 dataChanged → 列宽重算 →
-            # delegate Python override，PySide6 6.12 下会 shiboken 崩溃
+            # delegate Python override，PyQt5 5.15 下会 shiboken 崩溃
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
             chk.setCheckState(Qt.CheckState.Checked if acc["userName"] in checked_users
@@ -1626,15 +1643,17 @@ class SettingsPage(FluentPage):
         if force:
             self._show_health_progress()
 
-        def _enable_buttons():
-            self.health_btn.setEnabled(True)
-            self.refresh_btn.setEnabled(True)
-
-        self._worker = HealthWorker(accounts)
+        self._worker = HealthWorker(accounts, parent=self)
         self._worker.account_checked.connect(self._on_account_checked)
-        self._worker.finished.connect(_enable_buttons)
+        # 槽必须是页面的绑定方法：finished 在 worker 线程发出，闭包槽会被
+        # 直接投递到 worker 线程执行（碰控件=段错误），绑定方法才走队列回 GUI 线程
+        self._worker.finished.connect(self._on_health_buttons_back)
         self._worker.finished.connect(self._on_health_finished)
         self._worker.start()
+
+    def _on_health_buttons_back(self):
+        self.health_btn.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
 
     # ---------- 测活进度 ----------
 
@@ -1656,6 +1675,17 @@ class SettingsPage(FluentPage):
         self._health_progress = None
         if self._worker is not None and self._worker.isRunning():
             self._worker.stop()
+
+    def shutdown(self):
+        """退出前收束后台线程：PyQt5 析构还在运行的 QThread 会直接 abort。
+
+        stop() 只置取消位，线程等手上那批请求返回；这里最多再等 2 秒，
+        没等完的交给事件循环收尾（quit 之后进程本来就要走）。"""
+        for worker in (self._worker, self._ws_worker):
+            if worker is not None and worker.isRunning():
+                if worker is self._worker:
+                    worker.stop()
+                worker.wait(2000)
 
     def _close_health_progress(self, finished: bool = False):
         toast, self._health_progress = getattr(self, "_health_progress", None), None
@@ -1933,7 +1963,7 @@ class SettingsPage(FluentPage):
 
     def _setup_watcher(self, dirs):
         """监听所有来源目录（只监听顶层，子文件夹的变化靠上传页刷新兜住）。"""
-        from PySide6.QtCore import QFileSystemWatcher
+        from PyQt5.QtCore import QFileSystemWatcher
 
         if isinstance(dirs, str):
             dirs = [dirs]

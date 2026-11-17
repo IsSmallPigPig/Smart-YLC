@@ -17,7 +17,7 @@ Fluent 2 语义色参考：https://fluent2.microsoft.design/color
 
 from __future__ import annotations
 
-from PySide6.QtGui import QColor
+from PyQt5.QtGui import QColor
 from qfluentwidgets import isDarkTheme
 
 # 语义色 / 中性文字色 / 品牌色：(浅色, 深色)

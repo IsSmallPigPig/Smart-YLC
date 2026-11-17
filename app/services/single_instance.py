@@ -13,17 +13,22 @@ from __future__ import annotations
 import getpass
 import os
 
-from PySide6.QtCore import QObject, Signal
-from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PyQt5.QtCore import QObject, pyqtSignal as Signal
+from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 
 COMMAND_SHOW = b"show"
 SERVER_PREFIX = "SmartYLC"
+# 进程内后缀：--demo 会设成 "demo"，让演示实例与正式实例各用一把锁。
+# 不加这个时，演示实例启动会把已经开着的正式窗口叫到前面然后自己退掉，
+# 反过来也一样——两个用途完全不同，不该互相顶。
+SUFFIX = ""
 
 
 def server_name() -> str:
     """按用户隔离；Windows 的用户名可能带空格，QLocalServer 接受。"""
     user = getpass.getuser() or str(os.getpid())
-    return f"{SERVER_PREFIX}-{user}"
+    tail = f"-{SUFFIX}" if SUFFIX else ""
+    return f"{SERVER_PREFIX}-{user}{tail}"
 
 
 def notify_running(command: bytes = COMMAND_SHOW) -> bool:

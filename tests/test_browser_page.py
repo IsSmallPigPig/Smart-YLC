@@ -32,7 +32,7 @@ def test_home_is_the_site_dashboard():
 
 def test_site_root_counts_as_login_page():
     """站点根路径就是登录页：打完接口登录后回根路径，等于一直停在登录页。"""
-    from PySide6.QtCore import QUrl
+    from PyQt5.QtCore import QUrl
 
     from app.ui.browser_page import _is_home_page, _is_login_page
 
@@ -55,7 +55,7 @@ def test_branch_picker_lists_accounts(monkeypatch, tmp_path):
     from app.services import store
 
     monkeypatch.setattr(store, "CONFIG_FILE", os.path.join(tmp_path, "config.json"))
-    from PySide6.QtWidgets import QApplication, QWidget
+    from PyQt5.QtWidgets import QApplication, QWidget
 
     app = QApplication.instance() or QApplication([])
     from app.ui.branch_picker import BranchPickerDialog

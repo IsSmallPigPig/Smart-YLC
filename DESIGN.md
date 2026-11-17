@@ -268,7 +268,7 @@
 
 ## 8. 交互与性能
 
-- **启动画面先于重活**：`app/main.py` 在 QApplication 之后立刻 show 一张只用 PySide6 自绘的
+- **启动画面先于重活**：`app/main.py` 在 QApplication 之后立刻 show 一张只用 PyQt5 自绘的
   启动卡（`app/ui/boot.py`），然后才导入 qfluentwidgets、构造主窗口和页面。卡的尺寸取
   `main_window_rect()`，MainWindow 用同一个函数，交棒时几何不差像素；两者底色按同一公式
   算，主窗口自己的整窗启动界面盖着，boot 淡出时看不到接缝。启动失败时 boot 一定被关掉。

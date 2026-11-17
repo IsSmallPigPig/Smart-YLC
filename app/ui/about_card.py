@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QHBoxLayout, QWidget
+from PyQt5.QtCore import QUrl
+from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtWidgets import QHBoxLayout, QWidget
 
 from qfluentwidgets import (
     FluentIcon as FIF,
@@ -245,7 +245,7 @@ class AboutCard(CollapsibleCard):
             if not worker.isRunning():
                 self._begin_silent_install()
             return
-        from PySide6.QtCore import QTimer
+        from PyQt5.QtCore import QTimer
 
         QTimer.singleShot(400, self._begin_silent_install)
 
@@ -274,7 +274,7 @@ class AboutCard(CollapsibleCard):
 
     def _quit_for_install(self):
         """安装要替换正在运行的程序：先让主程序退出，再由安装助手接管。"""
-        from PySide6.QtCore import QTimer
+        from PyQt5.QtCore import QTimer
 
         quit_app = getattr(self.window(), "_quit_app", None)
         if quit_app is not None:

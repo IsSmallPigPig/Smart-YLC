@@ -19,7 +19,7 @@
 必须显式喂进去的三样东西（少了任何一样，运行时才报错、打包时不会）：
   * app/assets        界面图标、托盘图标（brand.assets_dir() 按 _MEIPASS/assets 找）
   * qfluentwidgets    包内自带字体/资源，PyInstaller 默认不收第三方包数据
-  * PySide6.QtSvg     brand 里在函数内才 import，显式带上更稳
+  * PyQt5.QtSvg     brand 里在函数内才 import，显式带上更稳
   pymupdf 由 PyInstaller 的 hook 自动收集原生库，无需手写。
 """
 
@@ -87,7 +87,7 @@ def build_command() -> list[str]:
         f"--name={APP_NAME}",
         # qfluentwidgets 包内带字体和资源，PyInstaller 默认不收第三方包数据
         "--collect-all=qfluentwidgets",
-        "--hidden-import=PySide6.QtSvg",
+        "--hidden-import=PyQt5.QtSvg",
         # PyInstaller 把数据放到 _MEIPASS/assets；brand.assets_dir() 认这个落点
         f"--add-data=app/assets{os.pathsep}assets",
     ]

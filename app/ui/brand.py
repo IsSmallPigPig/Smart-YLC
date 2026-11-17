@@ -15,8 +15,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRect, QRectF, QSize, Qt
-from PySide6.QtGui import QIcon, QImage, QPainter, QPainterPath, QPixmap
+from PyQt5.QtCore import QRect, QRectF, QSize, Qt
+from PyQt5.QtGui import QIcon, QImage, QPainter, QPainterPath, QPixmap
 
 from app.ui.hidpi import hidpi_canvas, scale_to
 
@@ -54,7 +54,7 @@ def app_pixmap(size: int = 256) -> QPixmap:
             return scale_to(pm, size)
     svg = icon_path("smart-ylc-icon.svg")
     if svg.is_file():
-        from PySide6.QtSvg import QSvgRenderer
+        from PyQt5.QtSvg import QSvgRenderer
 
         renderer = QSvgRenderer(str(svg))
         return hidpi_canvas(size, lambda p: renderer.render(p, QRectF(0, 0, size, size)))
@@ -72,7 +72,7 @@ def app_tile_pixmap(size: int = 64) -> QPixmap:
     """
     svg = icon_path("smart-ylc-icon.svg")
     if svg.is_file():
-        from PySide6.QtSvg import QSvgRenderer
+        from PyQt5.QtSvg import QSvgRenderer
 
         renderer = QSvgRenderer(str(svg))
         if renderer.isValid():
@@ -128,7 +128,7 @@ def mark_pixmap(size: int = 64) -> QPixmap:
     if not svg.is_file():
         return QPixmap()
     try:
-        from PySide6.QtSvg import QSvgRenderer
+        from PyQt5.QtSvg import QSvgRenderer
 
         renderer = QSvgRenderer(str(svg))
         return hidpi_canvas(size, lambda p: renderer.render(p, QRectF(0, 0, size, size)))

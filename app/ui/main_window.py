@@ -7,9 +7,9 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QApplication, QWidget
+from PyQt5.QtCore import QPoint, Qt, QTimer
+from PyQt5.QtGui import QColor, QPainter
+from PyQt5.QtWidgets import QApplication, QWidget
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import (
     MSFluentWindow,
@@ -51,21 +51,27 @@ if sys.platform == "darwin" and not os.environ.get("QT_QPA_PLATFORM", "").starts
 
     StandardTitleBar.__init__ = _local_titlebar_font
 
-    # 让 Qt 内容层带 alpha：_initFrameless() 会调 winId() 创建原生 NSWindow，
-    # 构造之后再设 WA_TranslucentBackground 实测无效（alphaBufferSize 仍是 -1、
-    # NSWindow.isOpaque 仍是 True，QNSView 的不透明底色会盖住混合层）。
+    # 让 Qt 内容层带 alpha：首次取 winId() 会创建原生 NSWindow，之后再设
+    # WA_TranslucentBackground 实测无效（alphaBufferSize 仍是 -1、NSWindow.isOpaque
+    # 仍是 True，QNSView 的不透明底色会盖住混合层）。
     # 这里只处理 Qt 侧的 backing store；毛玻璃效果层本身全部使用官方默认参数，
     # 见 app/services/mac_effect.py。
-    from qframelesswindow.mac import MacFramelessWindowBase
+    #
+    # 两版包的入口名不同：PySide6 版是 MacFramelessWindowBase._initFrameless()，
+    # PyQt5 版（PyQt5-Frameless-Window 0.8）是 MacFramelessWindow.updateFrameless()。
+    # 语义一样（建标题栏 + 建 NSWindow），按存在性挂到对应的方法上。
+    from qframelesswindow import mac as _mac
 
-    _orig_init_frameless = MacFramelessWindowBase._initFrameless
+    _base = getattr(_mac, "MacFramelessWindowBase", None) or _mac.MacFramelessWindow
+    _hook_name = "_initFrameless" if hasattr(_base, "_initFrameless") else "updateFrameless"
+    _orig_native_init = getattr(_base, _hook_name)
 
-    def _init_frameless_translucent(self):
+    def _init_frameless_translucent(self, *args, **kwargs):
         if getattr(type(self), "_translucent_window", False):
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        _orig_init_frameless(self)
+        _orig_native_init(self, *args, **kwargs)
 
-    MacFramelessWindowBase._initFrameless = _init_frameless_translucent
+    setattr(_base, _hook_name, _init_frameless_translucent)
 
 
 def _pump():
@@ -74,8 +80,8 @@ def _pump():
     启动画面是独立窗口，主线程闷头建六个页面时它就冻在那儿；每建完一页让一拍，
     转圈能继续动，系统也不会把这个刚起来的进程标成「未响应」。
     只放行绘制与定时器，不吃用户输入、不碰套接字。"""
-    from PySide6.QtCore import QEventLoop
-    from PySide6.QtWidgets import QApplication
+    from PyQt5.QtCore import QEventLoop
+    from PyQt5.QtWidgets import QApplication
 
     QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
                                | QEventLoop.ProcessEventsFlag.ExcludeSocketNotifiers)
@@ -115,6 +121,9 @@ class MainWindow(MSFluentWindow):
         self.notice_center = NoticeCenter(self)
         self.settings_page = SettingsPage()
         _pump()
+        # 退出前收束设置页的后台线程（测活/工作区）：PyQt5 析构运行中的
+        # QThread 会直接 abort，托盘退出、关窗退出、崩溃兜底都走 aboutToQuit
+        QApplication.instance().aboutToQuit.connect(self.settings_page.shutdown)
         self.home_page = HomePage(self)
         _pump()
         self.upload_page = UploadPage(self)
@@ -178,7 +187,7 @@ class MainWindow(MSFluentWindow):
         # 明暗模式切换（手动或跟随系统变化）：重绘窗口底色 + 重建带烘焙颜色的页面
         from qfluentwidgets import qconfig
 
-        qconfig.themeChanged.connect(lambda *_: self.on_theme_changed())
+        qconfig.themeChanged.connect(self.on_theme_changed)
 
         # 同步系统数据：成员缓存 → 站内信 → 组织状况统计，工作线程串行执行，
         # 只用已保存会话取数，不登录。刷新登录状态是独立操作，由设置页按各账号
@@ -237,7 +246,9 @@ class MainWindow(MSFluentWindow):
             return
         self._engine_warm = True
         try:
-            from PySide6.QtWebEngineCore import QWebEngineProfile
+            # PyQt5 把 QWebEngineProfile 留在 QtWebEngineWidgets；PySide6 才在
+            # QtWebEngineCore 里，迁移时照抄旧路径会 ImportError
+            from PyQt5.QtWebEngineWidgets import QWebEngineProfile
 
             QWebEngineProfile.defaultProfile()
         except Exception:
@@ -324,7 +335,7 @@ class MainWindow(MSFluentWindow):
 
         配色由 InfoBarIcon 决定（success 绿 / warning 橙 / error 红 / info 蓝），
         右上角自动堆叠、内容只显示首行；有处理入口时按钮贴最右。"""
-        from PySide6.QtCore import Qt
+        from PyQt5.QtCore import Qt
         from qfluentwidgets import (
             InfoBar,
             InfoBarIcon,
@@ -381,13 +392,13 @@ class MainWindow(MSFluentWindow):
     # ---------- 托盘驻留 ----------
 
     def _setup_tray(self):
-        from PySide6.QtWidgets import QSystemTrayIcon
+        from PyQt5.QtWidgets import QSystemTrayIcon
 
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = None
             return
-        from PySide6.QtGui import QAction
-        from PySide6.QtWidgets import QMenu
+        from PyQt5.QtWidgets import QAction
+        from PyQt5.QtWidgets import QMenu
 
         from app.ui.brand import app_icon
 
@@ -409,7 +420,7 @@ class MainWindow(MSFluentWindow):
         self.tray.show()
 
     def _on_tray_activated(self, reason):
-        from PySide6.QtWidgets import QSystemTrayIcon
+        from PyQt5.QtWidgets import QSystemTrayIcon
 
         if reason in (QSystemTrayIcon.ActivationReason.Trigger,
                       QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -423,25 +434,27 @@ class MainWindow(MSFluentWindow):
     def _alert(self, title: str, body: str = "", action: str = "", tone: str = ""):
         """后台提醒：点一下回到主界面，并切到该处理的那一页。
 
-        macOS 走系统原生通知（打包版），权限被关或源码运行时回落应用内浮窗；
-        Windows 走托盘气泡。原生通道被系统关掉时，第一次顺便说清怎么打开。"""
+        只走系统原生通道：macOS 系统通知（打包版），Windows 托盘气泡。
+        原生通道不可用时不再弹应用内浮窗，第一次提醒失败时说清怎么开启。"""
         from app.ui import bg_toast
 
-        bg_toast.alert(
+        delivered = bg_toast.alert(
             title, body, tone=tone, tray=getattr(self, "tray", None),
             on_click=lambda: self._open_alert(action),
         )
-        self._hint_notification_channel()
+        if not delivered:
+            self._hint_notification_channel()
 
     def _hint_notification_channel(self):
-        """macOS 通知权限被关时提示一次：否则以后只会看到应用内浮窗。"""
+        """提醒没能送达时提示一次：没有原生通道就没有任何后台提醒。"""
         import sys
 
         if sys.platform != "darwin" or getattr(self, "_notify_hint_shown", False):
             return
         from app.services import macos_notify
 
-        if macos_notify.permission_state() != "denied":
+        state = macos_notify.permission_state()
+        if state == "ok":
             return
         self._notify_hint_shown = True
         from qfluentwidgets import (
@@ -451,10 +464,15 @@ class MainWindow(MSFluentWindow):
             TransparentPushButton,
         )
 
+        if state == "denied":
+            content = (f"后台提醒不会弹出：在「系统设置 → 通知」里打开"
+                       f"「{macos_notify.app_name()}」")
+        else:
+            content = ("后台提醒不会弹出：打包成 .app 运行才能使用系统通知"
+                       f"（当前挂在「{macos_notify.app_name()}」名下）")
         bar = InfoBar(
-            icon=InfoBarIcon.WARNING, title="系统通知已关闭",
-            content=f"在「系统设置 → 通知」里打开「{macos_notify.app_name()}」，"
-                    "后台提醒才会以系统横幅弹出",
+            icon=InfoBarIcon.WARNING, title="系统通知不可用",
+            content=content,
             orient=Qt.Horizontal, isClosable=True,
             position=InfoBarPosition.TOP_RIGHT, duration=12000, parent=self,
         )
@@ -698,14 +716,13 @@ class MainWindow(MSFluentWindow):
         from qfluentwidgets import qconfig
 
         self.back_btn = TransparentToolButton(chevron_left_icon(), self.back_slot)
-        qconfig.themeChanged.connect(
-            lambda *_: self.back_btn.setIcon(chevron_left_icon(enabled=self.back_btn.isEnabled())))
+        qconfig.themeChanged.connect(self._restyle_back_icon)
         set_tip(self.back_btn, "返回上一页")
         self.back_btn.setFixedSize(30, 30)
         self.back_btn.move(0, 0)
 
         # 标题栏放应用图标：带白底板的小方块，深浅主题下都有清晰边界
-        from PySide6.QtWidgets import QLabel
+        from PyQt5.QtWidgets import QLabel
 
         from app.ui.brand import app_tile_pixmap
 
@@ -754,6 +771,15 @@ class MainWindow(MSFluentWindow):
         self._sync_back_state()
         self._sync_search()
         QTimer.singleShot(0, self._place_search)
+
+    def _restyle_back_icon(self, *_):
+        """主题切换后重烘焙返回键图标：图标是位图旋转来的，颜色生成时定死。
+
+        槽必须是绑定方法（随窗口析构自动断开）；lambda 挂在 qconfig 全局
+        信号上，窗口销毁后打进悬空对象，PyQt5 里直接 abort。"""
+        from app.ui.page import chevron_left_icon
+
+        self.back_btn.setIcon(chevron_left_icon(enabled=self.back_btn.isEnabled()))
 
     def _on_back_clicked(self):
         """详情页优先退回支部列表，其余情况按导航历史返回上一页。"""

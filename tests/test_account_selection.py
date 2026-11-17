@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from PySide6.QtCore import Qt
+from PyQt5.QtCore import Qt
 
 from app.ui import settings_page as mod
 

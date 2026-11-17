@@ -6,7 +6,7 @@ import os
 import tempfile
 
 import pytest
-from PySide6.QtWidgets import QApplication, QWidget
+from PyQt5.QtWidgets import QApplication, QWidget
 
 
 @pytest.fixture()
@@ -34,6 +34,24 @@ def _member(i: int, branch: str, unpaid: float = 0.0) -> dict:
 def _cache(total, uploaded, by_kind, updated):
     return {"branch": "x", "total": total, "uploaded": uploaded, "by_kind": by_kind,
             "transfer": {"applied": 0}, "error_rows": [], "updatedAt": updated}
+
+
+def _drain(page, qapp, timeout: float = 5.0):
+    """等页面的后台线程收尾，再把页面删掉。
+
+    OrgPage 的离线重算跑在 CallbackWorker 上；用例结束时直接丢引用，
+    QThread 会在下一个用例的事件循环里带着已死的槽投递，PyQt5 段错误。
+    这里显式 wait + deleteLater，把生命周期收在本用例内。"""
+    import time
+
+    for w in list(getattr(page, "_offline_workers", []) or []):
+        end = time.monotonic() + timeout
+        while w.isRunning() and time.monotonic() < end:
+            qapp.processEvents()
+            time.sleep(0.005)
+        w.wait(2000)
+    page.deleteLater()
+    qapp.processEvents()
 
 
 class _Window(QWidget):
@@ -106,3 +124,59 @@ def test_empty_account_list_does_not_wipe_cache(app, isolated_store):
     page._persist_account("ssfz12402", "2班", 5, 5,
                           {"identity": 0, "report": 0, "archive": 0, "fees": 0}, None, [])
     assert "ssfz12401" in store.load()["orgStatsCache"]
+
+
+def test_boot_computes_offline_when_only_members_cached(app, isolated_store):
+    """有成员缓存但没有统计缓存时（首次启动、导入配置、换机恢复备份），
+    组织状况必须立刻离线算出来，而不是停在 0 等 30 秒后的成员同步。
+
+    此前 --demo 启动与导入备份都踩这一条：memberCache 齐了、orgStatsCache 是空，
+    _restore_persisted 直接 return，页面一片「暂无数据」。"""
+    import time
+
+    store = isolated_store
+    store.save({
+        "accounts": [{"userName": "demo01", "password": "x", "remark": "高一1班"}],
+        "memberCache": {"demo01": {
+            "branch": "高一1班", "fetchedAt": "",
+            "members": [_member(1, "高一1班"), _member(2, "高一1班", unpaid=2.0)]}},
+        "orgStatsCache": {},
+    })
+
+    from app.ui.org_page import OrgPage
+
+    page = OrgPage(_Window([{"userName": "demo01", "password": "x", "remark": "高一1班"}]))
+    end = time.monotonic() + 5
+    while time.monotonic() < end and page._total == 0:
+        app.processEvents()
+        time.sleep(0.01)
+    assert page._total == 2, page._total
+    assert page._uploaded == 2
+    assert page._by_kind["fees"] == 1
+    assert len(page._error_rows) == 1
+    _drain(page, app)
+
+
+def test_demo_data_counts_each_branch_once(app, isolated_store):
+    """演示数据的统计要按账号逐支部计一次：orgStatsCache 用支部名做键、或与
+    memberCache 同时存在时，汇总会把同一个支部算两遍（260 人变 520）。"""
+    import time
+
+    from app.services import demo_data
+
+    cfg = demo_data.build_config()
+    isolated_store.save(cfg)
+    total_members = sum(len(b["members"]) for b in cfg["memberCache"].values())
+
+    from app.ui.org_page import OrgPage
+
+    page = OrgPage(_Window(cfg["accounts"]))
+    end = time.monotonic() + 8
+    while time.monotonic() < end and page._total == 0:
+        app.processEvents()
+        time.sleep(0.01)
+    assert page._total == total_members, (page._total, total_members)
+    # 异常人数必须真的存在，否则「统计全 0」这类假数据问题又会漏过去
+    assert page._error_rows, "演示数据应当包含异常团员"
+    assert sum(page._by_kind.values()) > 0
+    _drain(page, app)

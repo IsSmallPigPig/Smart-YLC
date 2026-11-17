@@ -10,7 +10,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from PySide6.QtCore import QThread, QTimer, Signal
+from PyQt5.QtCore import QThread, QTimer, pyqtSignal as Signal
 
 from app.services import store, updater
 

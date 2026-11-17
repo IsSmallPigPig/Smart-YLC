@@ -2,6 +2,7 @@
 
   （无参数）      打开主窗口
   --tray          托盘后台模式：无窗口，每日定时检查 + 系统通知
+  --demo          用演示数据启动（隔离的临时配置，不碰真实配置）
   --silent-install <包路径>  安装助手：静默安装并通知用户重启（内部使用）
   --smoke-test    打包冒烟检查：真正构造主窗口后退出，供 CI 验证冻结产物
 """
@@ -9,6 +10,33 @@
 from __future__ import annotations
 
 import sys
+
+
+def _enter_demo_home() -> str:
+    """--demo：把配置目录指到一份临时 HOME，并在那里写一份演示数据。
+
+    必须在 import app 之前设环境变量：constants 里 CONFIG_FILE 是
+    `expanduser("~/.gd12355-helper/config.json")` 在 import 时求值的，
+    晚一步设就还写到真实配置上。演示数据只存在这份临时目录里，退出即弃，
+    正式版永远不含测试数据。
+    """
+    import json
+    import os
+    import tempfile
+
+    home = tempfile.mkdtemp(prefix="smartyouth-demo-")
+    os.environ["HOME"] = home
+    os.environ["USERPROFILE"] = home
+
+    from app.constants import CONFIG_FILE
+    from app.services import demo_data
+
+    cfg = demo_data.build_config()
+    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    print(f"[demo] 配置目录 {home}；{demo_data.summary(cfg)}", flush=True)
+    return home
 
 
 def _smoke_test() -> int:
@@ -29,8 +57,8 @@ def _smoke_test() -> int:
     os.environ["HOME"] = tmp_home
     os.environ["USERPROFILE"] = tmp_home
 
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication(sys.argv)
@@ -60,6 +88,11 @@ def _smoke_test() -> int:
 
 
 def run() -> int:
+    # --demo 要赶在任何 app 模块 import 之前改 HOME（config 路径在 import 时求值）
+    demo = "--demo" in sys.argv
+    if demo:
+        _enter_demo_home()
+
     if "--tray" in sys.argv:
         from app.tray import run_tray
 
@@ -77,9 +110,9 @@ def run() -> int:
             return 2
         return install_and_notify(sys.argv[index + 1])
 
-    from PySide6.QtCore import QEventLoop, QTimer, Qt
-    from PySide6.QtGui import QGuiApplication
-    from PySide6.QtWidgets import QApplication
+    from PyQt5.QtCore import QEventLoop, QTimer, Qt
+    from PyQt5.QtGui import QGuiApplication
+    from PyQt5.QtWidgets import QApplication
 
     # 内嵌网页（账号网页标签页）要求共享 OpenGL 上下文，必须在 QApplication 之前设置
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
@@ -92,6 +125,12 @@ def run() -> int:
     # 只留一个实例：第二次启动把已有窗口叫出来就退出，不再建一套页面与后台线程
     from app.services.single_instance import SingleInstance
 
+    if demo:
+        # 演示实例与正式实例各用一把锁，互不顶掉
+        from app.services import single_instance
+
+        single_instance.SUFFIX = "demo"
+
     guard = SingleInstance()
     if not guard.attach():
         return 0
@@ -99,7 +138,7 @@ def run() -> int:
 
     # 先放启动画面，再做后面那些慢的事（导入 qfluentwidgets 约 0.4s、构造主窗口
     # 与六个页面约 0.3s，Windows 冷启动还要叠上运行时加载与杀毒扫描）。
-    # 这一步只用到 PySide6；顺序反了就又回到「双击后几秒黑屏」。
+    # 这一步只用到 PyQt5；顺序反了就又回到「双击后几秒黑屏」。
     from app.ui.boot import BootSplash
 
     boot = BootSplash()
@@ -150,6 +189,12 @@ def run() -> int:
     from app.services.update_check import check_on_startup
 
     QTimer.singleShot(1200, lambda: check_on_startup(parent=w))
+    # macOS：界面立起来就主动弹系统授权框，不等第一条提醒再问。
+    # 提醒只走原生通道（没有应用内浮窗兜底），没授权就没有任何后台提醒。
+    if sys.platform == "darwin":
+        from app.services import macos_notify
+
+        QTimer.singleShot(1500, macos_notify.request_permission)
     return app.exec()
 
 

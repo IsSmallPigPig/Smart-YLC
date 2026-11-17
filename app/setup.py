@@ -37,8 +37,8 @@ def _apply_font(families: list[str] | None) -> None:
 
     抗锯齿显式钉住：系统里关掉「平滑屏幕字体边缘」（虚拟机、远程桌面常见）时
     Qt 会照做，界面上的字就是硬边毛刺；本来开着的系统不受影响。"""
-    from PySide6.QtGui import QFont
-    from PySide6.QtWidgets import QApplication
+    from PyQt5.QtGui import QFont
+    from PyQt5.QtWidgets import QApplication
 
     font = QApplication.font()
     if families:

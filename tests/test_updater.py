@@ -462,7 +462,7 @@ def test_probe_all_records_each_mirror(monkeypatch):
 
 def test_download_worker_walks_the_ordered_chain(monkeypatch):
     """目标站失败后自动换下一个，最终成功；每次失败都发 fallback。"""
-    from PySide6.QtCore import QCoreApplication
+    from PyQt5.QtCore import QCoreApplication
 
     QCoreApplication.instance() or QCoreApplication([])
     chain = [updater.gateway_by_key("gh-proxy.com"), updater.DIRECT]
@@ -490,7 +490,7 @@ def test_download_worker_walks_the_ordered_chain(monkeypatch):
 
 def test_download_worker_auto_mode_uses_measured_order(monkeypatch):
     """自动模式：按测速结果从最快的站开始，不用再问一遍走哪个。"""
-    from PySide6.QtCore import QCoreApplication
+    from PyQt5.QtCore import QCoreApplication
 
     QCoreApplication.instance() or QCoreApplication([])
     updater.remember_probe("gh.zwy.one", 100)
@@ -508,7 +508,7 @@ def test_download_worker_auto_mode_uses_measured_order(monkeypatch):
 
 
 def test_download_worker_all_mirrors_fail_reports_error(monkeypatch):
-    from PySide6.QtCore import QCoreApplication
+    from PyQt5.QtCore import QCoreApplication
 
     QCoreApplication.instance() or QCoreApplication([])
     monkeypatch.setattr(updater, "resolve_order",
@@ -526,7 +526,7 @@ def test_download_worker_all_mirrors_fail_reports_error(monkeypatch):
 
 
 def test_check_worker_reports_failure_instead_of_crashing(monkeypatch):
-    from PySide6.QtCore import QCoreApplication
+    from PyQt5.QtCore import QCoreApplication
 
     QCoreApplication.instance() or QCoreApplication([])
 
@@ -709,7 +709,7 @@ def test_install_failure_notifies_manual_step(monkeypatch):
 
 def test_startup_check_downloads_and_installs_silently(tmp_path, monkeypatch):
     """后台发现新版本后直接下载并拉起静默安装，不弹版本提示。"""
-    from PySide6.QtCore import QCoreApplication, QTimer
+    from PyQt5.QtCore import QCoreApplication, QTimer
 
     from app.services import silent_update
 
@@ -743,3 +743,35 @@ def test_startup_check_downloads_and_installs_silently(tmp_path, monkeypatch):
 
     assert started == ["/tmp/SmartYouth-setup.exe"]
     assert "正在静默安装" in update_check.last_check_text()
+
+
+@pytest.mark.parametrize("is64,win7,expected", [
+    (True, False, "SmartYouth-Win-x64-setup.exe"),
+    (False, False, "SmartYouth-Win-x86-setup.exe"),
+    (True, True, "SmartYouth-Win7-x64-setup.exe"),
+    (False, True, "SmartYouth-Win7-x86-setup.exe"),
+])
+def test_pick_asset_matches_windows_bit_and_os(monkeypatch, is64, win7, expected):
+    """Windows 有四个安装包（世代 × 位数），必须挑与本机系统、位数都匹配的那份。
+
+    32 位系统装不了 64 位包；Win7 也装不了 Win10 包（解释器/运行时不同）。
+    挑错不会在下载时报错，要等安装或启动才炸，所以在这里钉死。"""
+    monkeypatch.setattr(updater.platform_module, "architecture",
+                        lambda: ("64bit" if is64 else "32bit", ""))
+    monkeypatch.setattr(updater, "_is_windows7", lambda: win7)
+    assets = [
+        {"name": "SmartYouth-Win7-x86-setup.exe", "browser_download_url": "u1"},
+        {"name": "SmartYouth-Win7-x64-setup.exe", "browser_download_url": "u2"},
+        {"name": "SmartYouth-Win-x86-setup.exe", "browser_download_url": "u3"},
+        {"name": "SmartYouth-Win-x64-setup.exe", "browser_download_url": "u4"},
+        {"name": "SmartYouth-macOS-arm64.dmg", "browser_download_url": "u5"},
+    ]
+    assert updater._pick_asset(assets, "win32")["name"] == expected
+
+
+def test_pick_asset_windows_falls_back_when_only_one_package(monkeypatch):
+    """老版本 Release 只有一个 Windows 包时仍要能用，不能挑不出就返回 None。"""
+    monkeypatch.setattr(updater.platform_module, "architecture", lambda: ("32bit", ""))
+    monkeypatch.setattr(updater, "_is_windows7", lambda: False)
+    assets = [{"name": "SmartYouth-Windows-x64-setup.exe", "browser_download_url": "u1"}]
+    assert updater._pick_asset(assets, "win32")["name"] == "SmartYouth-Windows-x64-setup.exe"

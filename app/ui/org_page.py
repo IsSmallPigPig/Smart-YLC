@@ -9,9 +9,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QFont, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal as Signal
+from PyQt5.QtGui import QFont, QPainter
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
@@ -556,6 +556,11 @@ class OrgPage(FluentPage):
 
         cache = store.load().get("orgStatsCache") or {}
         if not cache:
+            # 有成员缓存却没有统计缓存（首次启动、导入配置、换机恢复备份）：
+            # 页面会一直停在 0，直到 30 秒后的成员同步才重算。这里直接离线算一次，
+            # 不联网、不打扰，打开就有数。
+            if (store.load().get("memberCache") or {}):
+                self.refresh_offline()
             return
         agg = self._aggregate(cache)
         self._total, self._uploaded = agg["total"], agg["uploaded"]
@@ -628,7 +633,7 @@ class OrgPage(FluentPage):
         先切页（立刻出画面），再把「按支部名打开详情」推迟到下一轮事件循环——
         组织管理页首显会异步算分支树，这一步不阻塞点击，树算好后自动补开。
         找不到支部时由 reveal_branch 的 on_missing 兜底提示。"""
-        from PySide6.QtCore import QTimer
+        from PyQt5.QtCore import QTimer
 
         window = getattr(self, "window_ref", None)
         page = getattr(window, "org_manage_page", None)
