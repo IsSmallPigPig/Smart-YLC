@@ -107,40 +107,29 @@ def cross_fade(widget: QWidget, apply_work, out: int = 110, back: int = 170) -> 
 
 
 def switch_with_fade(old: QWidget, new: QWidget, duration: int = 240) -> QAbstractAnimation:
-    """旧视图淡出后切换可见性，新视图淡入。两者同属一个布局、同一位置。"""
+    """切换两个同位置视图，新视图淡入。
+
+    可见性必须在**函数里**切完，不能等动画结束信号：`QAbstractAnimation.stop()`
+    不触发 finished，连续点击（概览→详情→概览）时上一段被打断，
+    `new.setVisible(True)` 就永远不执行，页面停在错误状态——表现为标题消失、
+    卡片被挤到底部。
+    """
     old_ani = getattr(old, "_switch_ani", None)
     new_ani = getattr(new, "_switch_ani", None)
     for ani in (old_ani, new_ani):
         if ani is not None:
             ani.stop()
 
-    eff_old = _opacity_effect(old)
-    eff_old.setOpacity(1.0)
-    out = QPropertyAnimation(eff_old, b"opacity", old)
-    out.setDuration(int(duration * 0.38))
-    out.setStartValue(1.0)
-    out.setEndValue(0.0)
-    out.setEasingCurve(QEasingCurve.Type.InCubic)
+    # 先把两个控件的残留 effect 与动画状态清干净，再切可见性
+    old.setGraphicsEffect(None)
+    new.setGraphicsEffect(None)
+    old.setVisible(False)
+    new.setVisible(True)
 
-    group = QSequentialAnimationGroup(old)
-    group.addAnimation(out)
-
-    def _swap():
-        old.setGraphicsEffect(None)
-        old.setVisible(False)
-        new.setVisible(True)
-        fade_in(new, duration=int(duration * 0.66), dy=6)
-
-    def _done():
-        old._switch_ani = None
-        new._switch_ani = None
-
-    group.finished.connect(_swap)
-    group.finished.connect(_done)
-    old._switch_ani = group
-    new._switch_ani = group
-    group.start()
-    return group
+    ani = fade_in(new, duration=int(duration * 0.66), dy=0)
+    old._switch_ani = ani
+    new._switch_ani = ani
+    return ani
 
 
 def _content_height(widget: QWidget) -> int:
@@ -162,14 +151,32 @@ def _content_height(widget: QWidget) -> int:
 
 
 def animate_expand(widget: QWidget, show: bool, duration: int = 210, on_done=None):
-    """高度展开/收起，同时淡入淡出；收起完成后隐藏 widget。"""
+    """高度展开/收起，同时淡入淡出；收起完成后隐藏 widget。
+
+    反复连续点击时卡片会越按越歪，根因是 `QAbstractAnimation.stop()` **不触发**
+    `finished`：上一段动画被打断时，收尾逻辑（放开 maximumHeight 上限、逐级
+    invalidate 父布局）一次都没跑。父布局于是始终拿着动画中途的尺寸提示，
+    每打断一次就积一层误差，按几次之后卡片高度、子控件位置全偏。
+
+    所以这里把「收尾」与「动画结束」解耦：打断前先把上一段的收尾强制执行一遍，
+    让状态落到确定值（要么全开、要么全收），再开始新的一段。
+    """
     prev = getattr(widget, "_expand_ani", None)
+    prev_finish = getattr(widget, "_expand_finish", None)
     if prev is not None:
         prev.stop()
+        # stop() 不会发 finished，手动补上收尾，别让父布局停在半截尺寸上
+        if prev_finish is not None:
+            prev_finish()
 
     eff = _opacity_effect(widget)
-    target = _content_height(widget) if show else 0
-    start = widget.height() if widget.isVisible() else 0
+    full = _content_height(widget)
+    target = full if show else 0
+    # 收尾已把状态归一，这里从「确定的当前态」起步：
+    # 展开时从 0 长出来，收起时从满高缩回去，不再接中间值
+    start = widget.height() if (show and widget.isVisible()) else (
+        full if not show else 0)
+    start = max(0, min(start, full))
 
     opacity_start = 0.0
     if show:
@@ -196,22 +203,30 @@ def animate_expand(widget: QWidget, show: bool, duration: int = 210, on_done=Non
     group.addAnimation(height)
     group.addAnimation(opa)
 
+    finished = {"done": False}
+
     def _done():
+        # 同一个 group 的收尾只跑一次（finished 与打断后的补调可能都到）
+        if finished["done"]:
+            return
+        finished["done"] = True
         if show:
-            # 高度上限放开后强制布局按完整尺寸重排：动画期间被挤矮的子控件
-            # 必须回到 sizeHint，否则下一次展开会把缩水后的高度当成起点。
-            widget.setMaximumHeight(QWIDGETSIZE_MAX)
-            lay = widget.layout()
-            if lay is not None:
-                lay.invalidate()
-                lay.activate()
+            widget.setVisible(True)
         else:
             # 先隐藏再放开高度上限，别让父布局在 visible=True 的瞬间按完整
             # 高度把卡片撑大，留下收起后仍比原来高十几像素的空白。
             widget.setVisible(False)
-            widget.setMaximumHeight(QWIDGETSIZE_MAX)
+        # 无论展开还是收起都放开上限：动画期间被压住的高度限制是错位的源头，
+        # 归一后由布局按 sizeHint 重新决定真实高度
+        widget.setMaximumHeight(QWIDGETSIZE_MAX)
+        lay = widget.layout()
+        if lay is not None:
+            lay.invalidate()
+            lay.activate()
         widget.setGraphicsEffect(None)
-        widget._expand_ani = None
+        if getattr(widget, "_expand_ani", None) is group:
+            widget._expand_ani = None
+            widget._expand_finish = None
         # maximumHeight 动画只通知直接父布局；卡片外层（页面 ScrollArea 的布局）
         # 仍拿着动画中途的旧尺寸提示，连续点击后就会把卡片压在半高、子控件也被挤矮。
         # 必须等本轮事件循环处理完动画的最后一个 resize，再从内容区往上逐级重排。
@@ -231,6 +246,8 @@ def animate_expand(widget: QWidget, show: bool, duration: int = 210, on_done=Non
 
     group.finished.connect(_done)
     widget._expand_ani = group
+    # 供下一次打断时强制收尾
+    widget._expand_finish = _done
     group.start()
     return group
 

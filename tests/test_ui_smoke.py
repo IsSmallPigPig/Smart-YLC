@@ -2210,3 +2210,210 @@ def test_corner_dispatch_windows_and_linux(app, monkeypatch):
     materials.clear_corners(widget)
     assert materials.set_corners(widget, 10, platform="darwin", build=0) is True
     assert calls == []
+
+
+def test_animate_expand_interruption_finalizes_state(app):
+    """连续点击折叠按钮不能让卡片越按越歪。
+
+    `QAbstractAnimation.stop()` 不触发 `finished`，所以被打断时 `_done` 的收尾
+    （放开 maximumHeight、逐级重排父布局）必须手动补一次，否则每打断一次积
+    一层误差，卡片高度与子控件位置就偏了。
+    """
+    from PyQt5.QtWidgets import QLabel, QVBoxLayout
+
+    from app.ui.anim import _content_height, animate_expand
+
+    host = QWidget()
+    lay = QVBoxLayout(host)
+    panel = QWidget()
+    pl = QVBoxLayout(panel)
+    pl.setContentsMargins(0, 0, 0, 0)
+    for _ in range(4):
+        pl.addWidget(QLabel("x" * 40))
+    panel.setVisible(False)
+    lay.addWidget(panel)
+    lay.addStretch(1)
+    host.resize(500, 400)
+    host.show()
+    app.processEvents()
+
+    full = _content_height(panel)
+    assert full > 0
+
+    # 连点偶数次 → 最终收起
+    for i in range(10):
+        animate_expand(panel, i % 2 == 0, duration=40)
+        app.processEvents()
+    from PyQt5.QtTest import QTest
+
+    QTest.qWait(150)
+    app.processEvents()
+    assert panel.maximumHeight() == 16777215, "打断后 maximumHeight 必须放开"
+    assert not panel.isVisible(), "连点偶数次最终应收起"
+    assert panel.height() == 0, f"收起后高度应为 0，实际 {panel.height()}"
+
+    # 连点奇数次 → 最终展开到完整高度
+    for i in range(9):
+        animate_expand(panel, i % 2 == 0, duration=40)
+        app.processEvents()
+    QTest.qWait(150)
+    app.processEvents()
+    assert panel.isVisible(), "连点奇数次最终应展开"
+    assert panel.height() == full, f"展开高度应回到 {full}，实际 {panel.height()}"
+
+
+def test_org_detail_hides_banner_and_top_margin(app, isolated_store):
+    """异常团员子页不带头图，顶部边距随之收回。
+
+    只藏 banner 不改边距会在子页顶部留一条 196px 空白；
+    反过来只改边距不藏 banner，头图会盖住面包屑。两者要联动。
+    """
+    from app.ui.org_page import OrgPage
+
+    class Host(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.settings_page = type("S", (), {
+                "accounts": [], "roster": None})()
+
+    page = OrgPage(Host())
+    page.resize(900, 700)
+    page.show()
+    app.processEvents()
+
+    assert page.header.isVisible()
+    assert page.vBoxLayout.contentsMargins().top() == 212
+
+    page._open_detail()
+    app.processEvents()
+    assert not page.header.isVisible(), "子页不该显示头图"
+    assert page.vBoxLayout.contentsMargins().top() == 16, "子页顶部边距应收回"
+    assert not page.detail_box.isHidden()
+
+    page.back_to_overview()
+    app.processEvents()
+    assert page.header.isVisible(), "返回概览应恢复头图"
+    assert page.vBoxLayout.contentsMargins().top() == 212
+
+
+def test_switch_with_fade_switches_visibility_immediately(app):
+    """视图切换必须在函数内切完可见性，不能依赖动画结束信号。
+
+    stop() 不触发 finished；连续点「查看 → 返回」时上一段被打断，
+    若 setVisible(True) 在 finished 回调里就永远不执行，
+    页面停在错误状态（标题消失、卡片被挤到底部）。
+    """
+    from app.ui.anim import switch_with_fade
+
+    a, b = QWidget(), QWidget()
+    a.show()
+    b.hide()
+    app.processEvents()
+
+    switch_with_fade(a, b, duration=200)
+    # 不等待动画结束，立刻检查
+    assert not a.isVisible()
+    assert b.isVisible()
+
+    # 反向再切一次，打断上一段
+    switch_with_fade(b, a, duration=200)
+    assert a.isVisible()
+    assert not b.isVisible()
+
+
+def test_detail_title_uses_theme_foreground(app, isolated_store):
+    """异常团员标题要取主题前景色，不能留默认的白字。
+
+    section_title 只设字号。浅色主题下若不显式设色，白字画在白底上
+    整行标题像消失了一样。
+    """
+    from app.ui import palette as P
+    from app.ui.org_page import OrgPage
+
+    class Host(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.settings_page = type("S", (), {
+                "accounts": [], "roster": None})()
+
+    page = OrgPage(Host())
+    app.processEvents()
+    label = page.error_title
+    color = label.palette().color(label.foregroundRole())
+    # 传入的是「浅色/深色」颜色对，两个值都要显式设过；
+    # 不写 setTextColor 时 palette 里是默认白，_qfluent 的 theme 色对不会生效
+    from qfluentwidgets import isDarkTheme
+
+    expected = P.fg("fg")
+    assert color.name() == expected.name(), \
+        f"标题色 {color.name()} 与主题前景 {expected.name()} 不符（暗色={isDarkTheme()}）"
+
+
+def test_browser_tab_aligns_to_system_button_and_retries(app, monkeypatch):
+    """标签行按系统按钮中线定位；几何未定时挂起，等稳定后重试。
+
+    showEvent 那一拍窗口高度可能还小于 100，`_sync_title_metrics` 提前返回；
+    若没有 pending 标记 + resize 重试，标签就永远停在常量位置，与红绿灯差几像素。
+    这里用替身跑纯计算，不在测试进程里调 AppKit / 起 WebEngine。
+    """
+    from app.ui import browser_page as B
+
+    class Bar:
+        def __init__(self):
+            self.h = 0
+
+        def setFixedHeight(self, h):
+            self.h = h
+
+        def height(self):
+            return self.h
+
+    class Lay:
+        def __init__(self):
+            self.m = None
+
+        def setContentsMargins(self, l, t, r, b):
+            self.m = (l, t, r, b)
+
+    class Row:
+        def __init__(self):
+            self.h = 0
+            self.lay = Lay()
+
+        def setFixedHeight(self, h):
+            self.h = h
+
+        def layout(self):
+            return self.lay
+
+    host = type("H", (), {})()
+    host.titleBar = Bar()
+    host.hBoxLayout = Lay()
+    host.tab_row = Row()
+    host._tab_top = B.TAB_TOP
+    host._metrics_pending = True
+    host._win_h = 760
+
+    def fake_height(self):
+        return self._win_h
+
+    host.height = fake_height.__get__(host)
+
+    # 几何未定 → 挂起，不动位置
+    host._win_h = 60
+    monkeypatch.setattr(B, "native_button_center", lambda w: 20)
+    B.BrowserWindow._sync_title_metrics(host)
+    assert host._metrics_pending is True
+    assert host._tab_top == B.TAB_TOP
+
+    # 几何稳定：中线 20 → 上沿 = 20 - 16 = 4
+    host._win_h = 760
+    B.BrowserWindow._sync_title_metrics(host)
+    assert host._tab_top == 4
+    assert host.titleBar.height() == 4 + B.TAB_HEIGHT + B.TITLE_BAR_PAD
+    assert host._metrics_pending is False
+
+    # 中线变了（不同 macOS 版本）要能重算
+    monkeypatch.setattr(B, "native_button_center", lambda w: 24)
+    B.BrowserWindow._sync_title_metrics(host)
+    assert host._tab_top == 8

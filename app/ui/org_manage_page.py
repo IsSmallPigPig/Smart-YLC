@@ -979,7 +979,8 @@ class OrgManagePage(FluentPage):
         if m.cls:
             h.addWidget(note_label(m.cls))
         h.addStretch(1)
-        h.addWidget(_pill(SOURCE_LABEL[m.source], SOURCE_COLOR[m.source]))
+        h.addWidget(_pill(SOURCE_LABEL[m.source], SOURCE_COLOR[m.source]),
+                    0, Qt.AlignmentFlag.AlignVCenter)
         toggle = None
         if m.system is not None:
             toggle = TransparentToolButton()
@@ -987,7 +988,10 @@ class OrgManagePage(FluentPage):
             toggle.setFixedSize(28, 28)
             # 初始就显示收起态的 chevron，否则没点过的行没有箭头、渲染上「有的有箭头有的没有」
             toggle.setIcon(chevron_icon(False))
-            h.addWidget(toggle)
+            # 必须钉死对齐：不写对齐标志时布局会把按钮纵向拉满整行，
+            # 行高被展开的详情面板撑高后，28×28 的按钮就被拉成一根竖胶囊，
+            # 看着就是「折叠按钮错位」。横向同理，不能让它吃掉 stretch 的余量。
+            h.addWidget(toggle, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
 
         wrap = QWidget()
         v = QVBoxLayout(wrap)

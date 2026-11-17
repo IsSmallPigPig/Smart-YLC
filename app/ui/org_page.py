@@ -266,6 +266,7 @@ class OrgPage(FluentPage):
         self._snapshot = None  # 刷新前的展示快照（整轮失败时回滚）
         self._first_result = True
         self._ok_accounts = 0
+        self._banner_on = True   # 概览有头图；进子页（异常名单）时收掉
         self._busy: BusyOverlay | None = None  # 手动统计期间盖住逐条增长的错误卡片
         QTimer.singleShot(0, self._restore_persisted)  # 重启后恢复上次的组织状况
 
@@ -356,7 +357,9 @@ class OrgPage(FluentPage):
         det = QVBoxLayout(self.detail_box)
         det.setContentsMargins(0, 0, 0, 0)
         det.setSpacing(10)
-        det.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # 不要用 det.setAlignment(AlignTop)：布局级对齐会让带 stretch 的子控件
+        # 拿不到分配到的空间，标题被压扁、卡片被挤到底部——看起来就是「渲染错位」。
+        # 让内容自然铺开，末尾留一条 stretch 把焦点压回顶部即可。
         self.detail_lay = det
         lay.addWidget(self.detail_box, 1)
         self.detail_box.setVisible(False)
@@ -365,11 +368,17 @@ class OrgPage(FluentPage):
         self.error_lay = QVBoxLayout(self.error_box)
         self.error_lay.setContentsMargins(0, 0, 0, 0)
         self.error_lay.setSpacing(8)
-        self.error_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.error_title = section_title("异常团员 0")
+        # section_title 只管字号，不设颜色；不显式取主题色时，浅色主题下
+        # 的白字画在白底上，整行标题像是消失了
+        self.error_title.setTextColor(*P.text_colors("fg"))
         det.addWidget(self.error_title)
         det.addWidget(self.error_box, 1)
+        det.addStretch(0)
 
+        # 概览内容不足一屏时靠这条 stretch 顶住顶部；进名单视图要摘掉它，
+        # 否则它和 detail_box 的 stretch 平分剩余高度，名单只占半屏。
+        # QBoxLayout 的 spacer 不能改 stretch 值，只能整条移出 / 插回。
         lay.addStretch(1)
         self._detail_open = False
         self._set_nav(False)
@@ -378,8 +387,9 @@ class OrgPage(FluentPage):
         qconfig.themeChanged.connect(self._on_theme_changed)
 
     def _on_theme_changed(self, *_):
-        """切主题：概览卡里的数字色与图例圆点按新主题重画。"""
+        """切主题：概览卡里的数字色、图例圆点、详情标题都要按新主题重画。"""
         self._refresh_overview()
+        self.error_title.setTextColor(*P.text_colors("fg"))
     # ---------- 概览卡片：构建 ----------
 
     # 错落网格：不同角色给不同高度，避免四块一样大的死板感。
@@ -719,12 +729,18 @@ class OrgPage(FluentPage):
     # ---------- 视图切换（概览 ↔ 异常名单） ----------
 
     def _open_detail(self, *_):
-        """点异常团员卡：切到名单视图，面包屑可点回概览。"""
+        """点异常团员卡：切到名单视图，面包屑可点回概览。
+
+        名单是子页，不带头图：banner 是「页面级」的东西，进到子页还挂着一张
+        主导航的图，视觉上会以为还在概览层。同时把顶部边距从 banner 高度收回
+        16，否则子页顶上会空出一大片。
+        """
         from app.ui.anim import switch_with_fade
 
         self._add_crumb()
         self._detail_open = True
         self._set_nav(True)
+        self._set_banner(False)
         self.detail_changed.emit(True)
         self.detail_box.setVisible(True)
         self.error_title.setText(f"异常团员 {len(self._error_rows)}")
@@ -739,10 +755,45 @@ class OrgPage(FluentPage):
 
         self._detail_open = False
         self._set_nav(False)
+        self._set_banner(True)
         self.detail_changed.emit(False)
         # 从名单回概览是「返回」，用同样时长的反向过渡，方向感一致
         switch_with_fade(self.detail_box, self.overview_group)
         return True
+
+    def _set_banner(self, on: bool):
+        """子页收起头图，并把内容区顶部边距一起改掉。
+
+        边距写死在布局上（banner 高度 + 16）：只藏 banner 不改边距，子页顶上
+        会留一条 196px 的空白，看起来像内容整体被往下推、渲染错位。
+        """
+        self._banner_on = on
+        if getattr(self, "header", None) is not None:
+            self.header.setVisible(on)
+        lay = self.vBoxLayout
+        m = lay.contentsMargins()
+        top = PageBanner.HEIGHT + 16 if on else 16
+        if m.top() != top:
+            lay.setContentsMargins(m.left(), top, m.right(), m.bottom())
+        if on:
+            self._place_banner()
+        self._place_busy()
+        self._set_bottom_stretch(on)
+
+    def _set_bottom_stretch(self, on: bool):
+        """页面末尾那条「顶住顶部」的 stretch：概览要，名单不要。
+
+        QBoxLayout 的 spacer 改不了 stretch 值，只能把它取出来再插回去。
+        名单视图里它和 detail_box 都是 stretch=1，会把剩余高度对半分，
+        名单就只占了半屏、下半屏一片空白。
+        """
+        lay = self.vBoxLayout
+        last = lay.count() - 1
+        has = lay.itemAt(last) is not None and lay.itemAt(last).spacerItem() is not None
+        if on and not has:
+            lay.addStretch(1)
+        elif not on and has:
+            lay.takeAt(last)
 
     def _add_crumb(self):
         if "org" not in self.crumb_bar.itemMap:
@@ -779,7 +830,7 @@ class OrgPage(FluentPage):
     def _place_busy(self):
         if self._busy is None:
             return
-        top = PageBanner.HEIGHT
+        top = PageBanner.HEIGHT if getattr(self, "_banner_on", True) else 0
         self._busy.setGeometry(0, top, self.viewport().width(),
                                max(0, self.viewport().height() - top))
         self._busy.raise_()
