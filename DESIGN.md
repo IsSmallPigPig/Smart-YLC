@@ -343,10 +343,21 @@
   写盘；否则每轮同步结束时拖动窗口会卡一下。
 - 单实例用 `QLocalServer`：第二个进程只发送 `show` 后退出，已有实例把窗口叫到前面。
   托盘与主界面共用同一把锁，避免两套 30 秒同步线程同时跑。
-- 访问支部标题栏高度取系统按钮中线两倍（macOS 42、Windows 32）：macOS 的红绿灯由
-  AppKit 摆在窗口顶部往下 21px 处，不是 32px 标题栏的中点，按 32 排会整体高 5px。
-  标签行固定 32 高、在标题栏里 `AlignVCenter`，加号与导航图标因此和圆点同一条中线；
-  showEvent 里用 `native_button_center()` 量一次实际位置再校正，常量只做兜底。
+- 访问支部标题栏：标签与加号要和右上角红绿灯**同一条水平线**（不是水平居中）。
+  macOS 的红绿灯由 AppKit 摆在窗口顶部往下约 21px，不是 32px 标题栏的中点，按常量排会
+  差几像素。`native_button_center()` 量出圆点中线，标签行上沿摆到「中线 − 半标签高」。
+  这个位置**不能在 showEvent 只量一次**：窗口首次显示时几何还没稳，`height()<100`
+  会提前返回，标签就永远停在常量位置。加 `_metrics_pending` 标记，几何未定或读不到
+  中线时置起，`resizeEvent` 里再排一拍重试，读到后清零。常量只做兜底。
+- 折叠面板的高宽动画：`QAbstractAnimation.stop()` **不触发** `finished`。连点折叠按钮
+  时上一段被打断，若收尾（放开 `maximumHeight`、逐级 `invalidate` 父布局）挂在
+  `finished` 上就一次都不跑，父布局一直拿着动画中途的尺寸提示——卡片越按越歪。
+  打断前先手动补一次收尾，让状态归一到「全开/全收」再起新动画；收尾自身用 flag
+  保证只跑一次。`switch_with_fade` 同理：可见性切换必须在函数里同步做完，不能等
+  `finished`，否则连点「详情→返回」会让标题消失、卡片被挤到底部。
+- 「异常团员」是组织状况的**子页**，不带头图：`_set_banner(False)` 收起 banner 的同时
+  把内容区顶部边距从 `HEIGHT+16` 收回 16，并摘掉末尾那条「顶住顶部」的 stretch
+  （它和详情列表同为 stretch=1 会把列表压到半屏）。返回概览时三者一起恢复。
 - 浏览器窗口的拖窗交回**系统接管**：`mousePressEvent` 里调
   `qframelesswindow.utils.startSystemMove(window, e.globalPos())`，由系统负责跟手。
   它按平台分派（macOS → `performWindowDragWithEvent:`，Windows → `ReleaseCapture` +

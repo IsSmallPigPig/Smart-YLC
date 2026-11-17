@@ -71,12 +71,18 @@
 
 ### 从源码运行
 
+依赖装在项目内的虚拟环境里。macOS 上直接 `python -m app.main` 通常指向系统/基础解释器，那边没有这些包，会报 `No module named 'qfluentwidgets'`；先激活 `.venv-qt5`。
+
 ```bash
+python3.11 -m venv .venv-qt5        # 首次：用 3.11，与打包环境一致
+source .venv-qt5/bin/activate       # Windows 用 .venv-qt5\Scripts\activate
 pip install -r requirements.txt
-python3 -m app.main          # 主窗口
-python3 -m app.main --tray   # 托盘后台：定时检查 + 系统通知
-python3 -m app.main --demo    # 演示数据：6 个支部、260 名团员，隔离在临时目录
+python -m app.main          # 主窗口
+python -m app.main --tray   # 托盘后台：定时检查 + 系统通知
+python -m app.main --demo   # 演示数据：6 个支部、260 名团员，隔离在临时目录
 ```
+
+不想激活环境时，直接用 `.venv-qt5/bin/python -m app.main --demo` 等价。
 
 `--demo` 会新建一个临时配置目录并灌入演示数据（六成合规，其余分散在「没上传档案 / 身份信息缺项 / 志愿书未审 / 团费欠缴」，另含重复手机号与超长姓名、超长支部名），用于截图与排版验收。它不读写 `~/.gd12355-helper`，退出即弃，因此正式版安装包里没有任何测试数据入口。
 

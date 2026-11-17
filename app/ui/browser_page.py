@@ -397,6 +397,7 @@ class BrowserWindow(FluentWindowBase):
         # macOS 实测后再改这两份（见 _sync_title_metrics）
         self._title_height = TITLE_BAR_HEIGHT
         self._tab_top = TAB_TOP
+        self._metrics_pending = True   # 等窗口几何稳定后按系统按钮中线重算
 
         # FluentWindowBase 自带一个没进布局的 stackedWidget，它就停在窗口左上角
         # 画一块不透明的底（截图里左上角那块）。浏览区用的是自建的 stack，
@@ -448,6 +449,8 @@ class BrowserWindow(FluentWindowBase):
         row.setContentsMargins(10, self._tab_top, SYSTEM_BUTTON_INSET, 0)
         row.setSpacing(4)
 
+        # 标签靠左，窗口按钮始终在最右侧；垂直位置由 _sync_title_metrics
+        # 按系统按钮中线校准（见 showEvent）——标签与红黄绿按钮要在同一条水平线上。
         # 标签自己排一行；宽度由 _relayout_tabs 按剩余空间算，不参与布局伸缩
         self.tab_lay = QHBoxLayout()
         self.tab_lay.setContentsMargins(0, 0, 0, 0)
@@ -642,16 +645,21 @@ class BrowserWindow(FluentWindowBase):
         圆点在同一条线上；标题栏高度取「上沿 + 标签行 + 底部留白」。
         """
         if self.height() < 100:      # 几何还没定，保持常量，别拿错值去改
+            self._metrics_pending = True
             return
         center = native_button_center(self)
         if center is None:
+            self._metrics_pending = True
             return
         top = max(0, center - TAB_HEIGHT // 2)
         height = top + TAB_HEIGHT + TITLE_BAR_PAD
-        if top == self._tab_top and height == self.titleBar.height():
+        # 已经对齐且没有待处理标记时跳过；resizeEvent 传来的 pending 会强制重算
+        if (top == self._tab_top and height == self.titleBar.height()
+                and not getattr(self, "_metrics_pending", False)):
             return
         self._tab_top = top
         self._title_height = height
+        self._metrics_pending = False
         self.titleBar.setFixedHeight(height)
         self.hBoxLayout.setContentsMargins(0, height, 0, 0)
         self.tab_row.setFixedHeight(TAB_HEIGHT + top)
@@ -976,6 +984,10 @@ class BrowserWindow(FluentWindowBase):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        # 系统按钮的纵向位置要在窗口几何稳定后再读一次：showEvent 那一拍
+        # 若 height() 还小于 100，_sync_title_metrics 会提前返回，
+        # 标签行就一直停在常量位置，跟红黄绿按钮差几像素、看着没排齐。
+        QTimer.singleShot(0, self._sync_title_metrics)
         QTimer.singleShot(0, self._relayout_tabs)
 
     def _sync_nav(self):
