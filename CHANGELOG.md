@@ -2,6 +2,12 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.0.2
+
+- [41992ce] fix: 避免公告拉取线程导致原生崩溃并支持导出日志
+
+@AnkoQAQ
+
 ## v1.0.1
 
 - [ac8d63b] fix(ci): Windows x86 构建钉 PyMuPDF 1.24.11，避免源码编译卡死
