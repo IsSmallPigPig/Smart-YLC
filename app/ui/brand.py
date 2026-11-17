@@ -13,12 +13,13 @@
 from __future__ import annotations
 
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 from PyQt5.QtCore import QRect, QRectF, QSize, Qt
 from PyQt5.QtGui import QIcon, QImage, QPainter, QPainterPath, QPixmap
 
-from app.ui.hidpi import hidpi_canvas, scale_to
+from app.ui.hidpi import hidpi_canvas, scale_to, ui_dpr
 
 
 def assets_dir() -> Path:
@@ -43,10 +44,9 @@ def icon_path(name: str) -> Path:
     return assets_dir() / name
 
 
-def app_pixmap(size: int = 256) -> QPixmap:
-    """应用图标位图：优先用 PNG，其次渲染 SVG。
-
-    按屏幕 dpr 栅格化（2× 屏出 2 倍像素），否则窗口/托盘图标会被放大发虚。"""
+@lru_cache(maxsize=32)
+def _app_pixmap(size: int, dpr: float) -> QPixmap:
+    """真正的栅格化，按 (尺寸, dpr) 缓存。QPixmap 不可哈希，dpr 由调用方传入。"""
     png = icon_path("smart-ylc@512.png")
     if png.is_file():
         pm = QPixmap(str(png))
@@ -59,6 +59,15 @@ def app_pixmap(size: int = 256) -> QPixmap:
         renderer = QSvgRenderer(str(svg))
         return hidpi_canvas(size, lambda p: renderer.render(p, QRectF(0, 0, size, size)))
     return QPixmap()
+
+
+def app_pixmap(size: int = 256) -> QPixmap:
+    """应用图标位图：优先 PNG，其次 SVG；按屏幕 dpr 栅格化，结果缓存。
+
+    app_icon 一次要 5 个尺寸，没有缓存时每处调用都重新解码 512px PNG 并缩放，
+    启动链路上被调用 6 处（主窗口两处、托盘、通知、浏览器、启动画面）。
+    """
+    return _app_pixmap(size, ui_dpr())
 
 
 def app_tile_pixmap(size: int = 64) -> QPixmap:
@@ -114,12 +123,17 @@ def app_tile_pixmap(size: int = 64) -> QPixmap:
     return scale_to(src.copy(crop), size)
 
 
-def app_icon() -> QIcon:
-    """窗口与托盘图标。"""
+@lru_cache(maxsize=1)
+def _app_icon(dpr: float) -> QIcon:
     icon = QIcon()
     for size in (16, 32, 64, 128, 256):
-        icon.addPixmap(app_pixmap(size))
+        icon.addPixmap(_app_pixmap(size, dpr))
     return icon
+
+
+def app_icon() -> QIcon:
+    """窗口与托盘图标。全局同一份 QIcon，不重复栅格化 5 个尺寸。"""
+    return _app_icon(ui_dpr())
 
 
 def mark_pixmap(size: int = 64) -> QPixmap:

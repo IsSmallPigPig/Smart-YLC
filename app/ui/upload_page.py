@@ -48,7 +48,7 @@ from app.services.workspace import (load_pending, load_workspace_dirs,
                                     remove_pending, save_workspace_dirs)
 from app.ui import palette as P
 from app.ui.page import (BatchedBuild, BusyOverlay, CollapsibleCard, FluentPage,
-                         PageBanner, PageHeader, note_label, page_bg_color,
+                         PageBanner, note_label, page_bg_color,
                          section_title, set_tip)
 from app.ui.widgets import PillLabel, StatusList
 

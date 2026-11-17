@@ -17,7 +17,7 @@ import math
 import time
 from dataclasses import dataclass
 
-from app.constants import CONFIRM_PHRASE, LIMITS, MB
+from app.constants import LIMITS, MB
 
 CHUNK_BYTES = LIMITS["CHUNK_BYTES"]
 MAX_BATCH = LIMITS["MAX_UPLOAD_PER_BATCH"]

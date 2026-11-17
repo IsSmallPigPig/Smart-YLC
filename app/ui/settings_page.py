@@ -48,7 +48,7 @@ from app.ui.browser_page import MAX_TABS as MAX_WEB_TABS
 from app.ui.combo import ComboBox
 from app.ui.page import (CONTROL_MAX_WIDTH, CONTROL_WIDTH, CallbackWorker, CollapsibleCard, FluentPage,
                           set_tip,
-                          FullRow, PageBanner, PageHeader, SettingRow, bind_table_context_menu,
+                          FullRow, PageBanner, SettingRow, bind_table_context_menu,
                           fit_table_columns, note_label)
 from app.ui.rule_dialog import RuleDialog
 from app.ui import palette as P

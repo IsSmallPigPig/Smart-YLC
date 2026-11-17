@@ -331,6 +331,18 @@
 
 ## 8. 交互与性能
 
+- **图标栅格化结果要缓存**：`brand.app_pixmap/app_icon`、`icons.native_pixmap` 都是
+  「读资源 → 解析 → 按 dpr 画成位图」，而彩色图标在 `paintEvent` 里每次绘制都会取一次。
+  实测单次 0.33ms（含磁盘 IO），六个图标一帧约 2ms；app_icon 一次要 5 个尺寸、启动链路
+  调用 6 处，单次 2.6ms。用 `lru_cache` 按 **(资源名, 逻辑尺寸, dpr)** 缓存：`QPixmap`
+  不可哈希，dpr 由 `ui_dpr()` 传入并成为键的一部分——多屏缩放不同时复用低分辨率那张会糊。
+- **运行日志与崩溃报告**（`app/services/app_log.py`）：日志落配置目录下的 `logs/app.log`，
+  3×1MB 滚动，路径**延迟解析**（--demo / 测试改了 CONFIG_FILE 后要跟着走，写死会让演示
+  日志落进用户真实 home）。崩溃时 `sys.excepthook` 把 traceback 落盘后弹**原生**
+  QMessageBox（崩溃路径上不依赖 fluent 主题/QSS），附「复制报告 / 打开日志目录」。
+  excepthook 在 QApplication 之后才装——更早没有应用实例，弹不出窗口；KeyboardInterrupt
+  不当崩溃处理。
+
 - **启动画面先于重活**：`app/main.py` 在 QApplication 之后立刻 show 一张只用 PyQt5 自绘的
   启动卡（`app/ui/boot.py`），然后才导入 qfluentwidgets、构造主窗口和页面。卡的尺寸取
   `main_window_rect()`，MainWindow 用同一个函数，交棒时几何不差像素；两者底色按同一公式

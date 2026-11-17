@@ -11,13 +11,14 @@
 from __future__ import annotations
 
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtCore import QRectF
 from PyQt5.QtGui import QIcon, QPainter, QPixmap
 
-from app.ui.hidpi import hidpi_canvas
+from app.ui.hidpi import hidpi_canvas, ui_dpr
 
 
 def icons_dir() -> Path:
@@ -34,8 +35,10 @@ def icon_path(name: str) -> Path:
     return icons_dir() / f"{name}.svg"
 
 
-def native_pixmap(name: str, size: int = 32) -> QPixmap:
-    """按 SVG 原始配色渲染，不做任何染色或字符串替换。"""
+@lru_cache(maxsize=128)
+def _render(name: str, size: int, dpr: float) -> QPixmap:
+    """真正的渲染。缓存键带 dpr：同一 size 在不同缩放屏上物理像素不同，
+    复用低分辨率那张会糊。dpr 由调用方传入，QPixmap 本身不可哈希。"""
     path = icon_path(name)
     if not path.is_file():
         return QPixmap()
@@ -55,6 +58,16 @@ def native_pixmap(name: str, size: int = 32) -> QPixmap:
         renderer.render(painter, QRectF(0, 0, size, size))
 
     return hidpi_canvas(size, _paint)
+
+
+def native_pixmap(name: str, size: int = 32) -> QPixmap:
+    """按 SVG 原始配色渲染，不做任何染色或字符串替换。
+
+    彩色图标控件在 paintEvent 里调用，拖动/滚动时每帧都会进来；每次重新读盘、
+    解析 SVG、栅格化是纯粹的浪费（实测单次 0.33ms，六个图标一帧就是 2ms）。
+    按 (名称, 尺寸, 缩放) 缓存，命中时零磁盘 IO。
+    """
+    return _render(name, size, ui_dpr())
 
 
 def native_icon(name: str, size: int = 32) -> QIcon:

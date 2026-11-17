@@ -1721,7 +1721,7 @@ def test_org_page_statistics_cover_layout_changes(app, isolated_store):
 
     page._ok_accounts = 1
     for i in range(6):
-        page._append_card(f"团员{i}", "13800000000", [], f"问题 {i}", "示例支部", "identity")
+        page._append_card(f"团员{i}", "13800000000", [], f"问题 {i}", "示例支部")
     page._on_run_done()
     _pump(app, 40)
     assert busy.isHidden()
