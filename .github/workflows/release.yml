@@ -404,8 +404,9 @@ jobs:
             echo
             echo "---"
             echo
-            # 只贴本次版本的条目：CHANGELOG 攒了多个版本后，整份贴出来会淹没本次改动
-            awk '/^## v/{n++} n==1' CHANGELOG.md
+            # 从第一个版本段落开始整份贴出：本版发布说明包含全部历史变更。
+            # 前面两行是文件标题和说明，不属于发布内容。
+            awk '/^## v/{p=1} p' CHANGELOG.md
           } > release_body.md
 
       - name: 校验主产物齐全
