@@ -1,6 +1,7 @@
 ## 下载
-- **macOS（Apple Silicon / M 系列）**：`SmartYouth-macOS-arm64.dmg`（挂载后是「智慧团委.app」）
-- **Windows 10 / 11（64 位）**：`SmartYouth-Windows10-x64-setup.exe`（每用户安装，不需要管理员权限、不弹 UAC）
+
+- **macOS（Apple Silicon / M 系列）**：`SmartYouth-macOS-arm64.dmg`
+- **Windows 10 / 11（64 位）**：`SmartYouth-Windows10-x64-setup.exe`
 - **Windows 10 / 11（32 位）**：`SmartYouth-Windows10-x86-setup.exe`
 - **Windows 7（64 位）**：`SmartYouth-Windows7-x64-setup.exe`
 - **Windows 7（32 位）**：`SmartYouth-Windows7-x86-setup.exe`
