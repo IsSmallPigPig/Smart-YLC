@@ -768,6 +768,8 @@ class MainWindow(MSFluentWindow):
         qrouter.emptyChanged.connect(self._sync_back_state)
         self.stackedWidget.currentChanged.connect(self._sync_back_state)
         self.org_manage_page.detail_changed.connect(self._sync_back_state)
+        # 组织状况的「异常团员名单」同样是详情视图，返回键要能退回来
+        self.org_page.detail_changed.connect(self._sync_back_state)
         self._sync_back_state()
         self._sync_search()
         QTimer.singleShot(0, self._place_search)
@@ -782,18 +784,22 @@ class MainWindow(MSFluentWindow):
         self.back_btn.setIcon(chevron_left_icon(enabled=self.back_btn.isEnabled()))
 
     def _on_back_clicked(self):
-        """详情页优先退回支部列表，其余情况按导航历史返回上一页。"""
-        if (self.stackedWidget.currentWidget() is self.org_manage_page
-                and self.org_manage_page.go_back()):
+        """详情视图优先退回它自己的列表，其余情况按导航历史返回上一页。"""
+        page = self.stackedWidget.currentWidget()
+        if page is self.org_manage_page and self.org_manage_page.go_back():
+            return
+        if page is self.org_page and self.org_page.back_to_overview():
             return
         qrouter.pop()
 
     def _sync_back_state(self, *_):
         from app.ui.page import chevron_left_icon
 
-        on_org = (self.stackedWidget.currentWidget() is self.org_manage_page
-                  and self.org_manage_page.isVisible())
-        detail = on_org and self.org_manage_page.in_detail()
+        page = self.stackedWidget.currentWidget()
+        on_org = page is self.org_manage_page and self.org_manage_page.isVisible()
+        on_stats = page is self.org_page and self.org_page.isVisible()
+        detail = ((on_org and self.org_manage_page.in_detail())
+                  or (on_stats and self.org_page.in_detail()))
         usable = bool(qrouter.history) or detail
         # 返回键一直留在标题栏上：没有可返回的历史时置灰，而不是整块消失，
         # 槽位宽度也不变，标题文字的左边缘因此始终固定。

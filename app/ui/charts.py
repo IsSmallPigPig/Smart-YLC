@@ -163,3 +163,113 @@ class ProgressDonut(QWidget):
         p.setPen(QPen(dim, 1))
         p.drawText(QRect(0, top + fm_num.height() + gap, self.width(), fm_sub.height()),
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, self._sub)
+
+
+class SegmentedDonut(QWidget):
+    """多段圆环：一个总数按类别切成若干彩色扇段。
+
+    qfluentwidgets 只有单值的 ProgressRing，画不了「同一个环上分色表示几类」，
+    所以自绘（与上面 BarRowWidget 同一套做法）。圆心放总数，环上每段按 `segments`
+    的占比铺开，段间留缝以便分辨；`missing` 用中性灰占位，表示总数里这部分没有报道。
+    """
+
+    GAP_DEGREES = 2.0   # 段间缝：不留缝时纯色相接分界看不清，留太多又会吃掉细段
+    MIN_SPAN = 3.5      # 非零段的最小可见角度
+    # 260 人基数下 4 人的段只有 5.5°，读者几乎看不出来；给每个非零段一个
+    # 可见下限，占比仍然按真实人数算（圆心与图例给准确数字）
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._segments: list[tuple[str, int, QColor]] = []
+        self._total = 0
+        self._missing = 0
+        self._caption = "总团员"
+        self._progress = 1.0
+        _bind_theme(self)
+        self.setFixedSize(150, 150)
+
+    def set_data(self, total: int, segments: list[tuple[str, int, str]],
+                 missing: int = 0, caption: str = "总团员"):
+        """segments: [(名称, 人数, 颜色)]；missing: 总数里「没有报道」的人数。"""
+        self._total = max(int(total), 0)
+        self._missing = max(int(missing), 0)
+        self._caption = caption
+        self._segments = [(name, max(int(value), 0), QColor(color))
+                          for name, value, color in segments]
+        self.update()
+
+    def set_progress(self, ratio: float):
+        """入场动画：0→1 时环上各段一起长出来。"""
+        self._progress = max(0.0, min(1.0, ratio))
+        self.update()
+
+    def segments_snapshot(self) -> list[tuple[str, int]]:
+        """给图例用，顺序与环上一致。"""
+        return [(name, value) for name, value, _ in self._segments]
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        dark = isDarkTheme()
+
+        # 环身给厚一些：细环上分段的颜色几乎读不出来
+        ring = self.rect().adjusted(8, 8, -8, -8)
+        width = 17
+
+        pen = QPen(QColor(255, 255, 255, 26) if dark else QColor(0, 0, 0, 14), width)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        p.setPen(pen)
+        p.drawArc(ring, 0, 360 * 16)
+
+        # 分母用总数（缺口也占位），扇段长度才能直接读作占比
+        denom = max(self._total, 1)
+        gap = self.GAP_DEGREES
+        start = 90.0                      # 12 点方向起步，顺时针
+        for _name, value, color in self._segments:
+            if value <= 0:
+                continue
+            span = 360.0 * value / denom * self._progress
+            if span <= 0:
+                continue
+            # 非零段不低于可见下限；极细的段不缩缝，否则 1 个人会被缝隙吃没
+            span = max(span, self.MIN_SPAN * self._progress) if value > 0 else span
+            shrink = gap if span > gap * 2 else 0.0
+            pen = QPen(color, width)
+            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+            p.setPen(pen)
+            p.drawArc(ring, int((start - shrink / 2) * 16), int(-(span - shrink) * 16))
+            start -= span
+
+        if self._missing > 0:
+            span = 360.0 * self._missing / denom * self._progress
+            pen = QPen(QColor(255, 255, 255, 46) if dark else QColor(0, 0, 0, 30), width)
+            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+            p.setPen(pen)
+            if span > gap * 2:
+                p.drawArc(ring, int((start - gap / 2) * 16), int(-(span - gap) * 16))
+
+        self._draw_center(p)
+
+    def _draw_center(self, p: QPainter):
+        num_font = p.font()
+        num_font.setPixelSize(26)
+        num_font.setBold(True)
+        cap_font = p.font()
+        cap_font.setPixelSize(11)
+
+        fm_num = QFontMetrics(num_font)
+        fm_cap = QFontMetrics(cap_font)
+        gap = 3
+        total_h = fm_num.height() + gap + fm_cap.height()
+        top = (self.height() - total_h) // 2
+
+        p.setFont(num_font)
+        p.setPen(QPen(P.fg("fg"), 1))
+        p.drawText(QRect(0, top, self.width(), fm_num.height()),
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                   str(self._total) if self._total else "—")
+        p.setFont(cap_font)
+        p.setPen(QPen(P.fg("fg2"), 1))
+        p.drawText(QRect(0, top + fm_num.height() + gap, self.width(), fm_cap.height()),
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                   self._caption)

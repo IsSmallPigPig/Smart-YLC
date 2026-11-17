@@ -67,6 +67,12 @@ class PillLabel(QWidget):
         "report": (P.KIND["report"], "#ffffff"),
         "archive": (P.KIND["archive"], "#ffffff"),
         "fees": (P.KIND["fees"], "#ffffff"),
+        # 组织状况概览的分类语气：黄=信息错误，红=欠缴团费，灰=没有报道/档案，
+        # 与那里的多段圆环同一套读法
+        "ring-identity": (P.RING["identity"], "#1f2937"),
+        "ring-fees": (P.RING["fees"], "#ffffff"),
+        "ring-report": (P.RING["report"], "#ffffff"),
+        "ring-archive": (P.RING["archive"], "#1f2937"),
     }
 
     def __init__(self, text: str = "", tone: str = "gray", parent=None):

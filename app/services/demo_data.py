@@ -98,9 +98,14 @@ def _member(rng: random.Random, branch: str, idx: int, kind: str) -> dict:
     elif kind == "report":
         if idx % 2 == 0:
             m["report_apply_at"] = ""              # 没提交
+            m["report_data_status"] = "已填写"
         else:
             m["report_audit_at"] = ""               # 提交未审
-        m["report_data_status"] = "已填写"
+            m["report_data_status"] = "已填写"
+    elif kind == "archive":
+        # 人已报到，缺的是电子志愿书档案 —— 单独一类，不与「没有报道」混算
+        m["report_data_status"] = "电子志愿书待上传"
+        m["ebook_status"] = ""
     elif kind == "fees":
         months = rng.choice([1, 2, 3, 6, 12, 18])
         m["unpaid_months"] = months
@@ -152,7 +157,7 @@ def build_config(member_count: int = 260) -> dict:
                 kind = "ok"
             else:
                 # 异常类型在四类里轮转，保证每类都有样本
-                kind = ("nofile", "identity", "report", "fees")[i % 4]
+                kind = ("nofile", "identity", "report", "fees", "archive")[i % 5]
             members.append(_member(rng, org_name, i, kind=kind))
 
         member_cache[user] = {

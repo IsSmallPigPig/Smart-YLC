@@ -105,3 +105,26 @@ def summarize_members(members: list[MemberRecord], results: list[CheckResult]) -
         abnormal=abnormal,
         by_kind={k: len(v) for k, v in by_ids.items()},
     )
+
+
+# ---------- 概览卡口径 ----------
+
+def unpaid_amount(results: list[CheckResult]) -> float:
+    """应补缴团费总额：所有欠缴团员的未交金额之和。"""
+    return round(sum(r.amount for r in results if r.kind == "fees" and r.abnormal), 2)
+
+
+def merge_totals(system_total: int, local_total: int) -> tuple[int, int]:
+    """概览圆环的总人数与「没有报道」人数。
+
+    本地名单（系统配置里导入的 xlsx）与线上系统的人数经常不等：有的班在线上多了
+    转入的新团员，有的班本地名单更全（线上还没同步）。规则取两者较大者作分母，
+    差额记作「没有报道」——线上多出来的人说明本地登记缺人，本地多出来的人说明
+    系统里还没报到。两者相等时差额为 0。
+
+    返回 (总数, 没有报道人数)。
+    """
+    system_total = max(int(system_total), 0)
+    local_total = max(int(local_total), 0)
+    total = max(system_total, local_total)
+    return total, max(0, total - system_total)
