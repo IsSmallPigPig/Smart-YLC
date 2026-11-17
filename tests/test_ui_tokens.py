@@ -96,53 +96,84 @@ def test_font_scale_is_compact(app):
     assert min(P.FONT.values()) >= 12
 
 
-def test_mono_font_is_bundled_and_registered(app):
-    """等宽数字字体随程序打包并注册，不依赖系统装了什么。
+def test_fonts_are_bundled_and_registered(app):
+    """内置字体随程序打包并注册，不依赖系统装了什么。
 
     枚举系统字体（Consolas / Menlo / ...）在没装的机器上会静默回退成比例字体，
     数字宽度照旧不等，各人机器结果还不一样——等于没修。"""
-    from app.ui.brand import assets_dir
-    from app.ui.widgets import mono_family, tabular_label
+    from PyQt5.QtGui import QFontDatabase
     from PyQt5.QtWidgets import QLabel
 
-    from app.setup import FONT_FILE
+    from app.setup import FONT_FAMILY, FONT_FILES, register_fonts
+    from app.ui.brand import assets_dir
+    from app.ui.widgets import tabular_label
 
-    font_file = assets_dir() / "fonts" / FONT_FILE
-    assert font_file.is_file(), f"打包缺字体文件：{font_file}"
-    assert (assets_dir() / "fonts" / "LICENSE-MapleMono.txt").is_file(), \
-        "字体许可证要随包分发"
+    folder = assets_dir() / "fonts"
+    for name in FONT_FILES:
+        assert (folder / name).is_file(), f"打包缺字体文件：{folder / name}"
+    assert (folder / "LICENSE-MiSans.txt").is_file(), "字体许可证要随包分发"
 
-    from PyQt5.QtGui import QFontDatabase
-
-    family = mono_family()
     # 只比名字不够：注册失败时代码会回落成系统族名，这里确认字体真在库里
-    assert family in QFontDatabase().families(), f"字体未注册到 Qt：{family}"
+    assert register_fonts() == FONT_FAMILY
+    assert FONT_FAMILY in QFontDatabase().families(), f"字体未注册到 Qt：{FONT_FAMILY}"
     lbl = tabular_label(QLabel("42/260（16%）"))
-    assert lbl.font().family() == family
+    assert lbl.font().family() == FONT_FAMILY
 
 
-def test_bundled_font_is_monospaced_for_cjk_and_latin(app):
-    """内置字体对英文、数字、中文必须等宽。
+def test_bundled_font_has_monospaced_digits(app):
+    """数字必须等宽，中文与字母保持 MiSans 的比例字形。
 
-    这是选它的唯一理由：数字跳动不抖、中英混排不换字体。
-    用字体度量实测，而不是信字体名字里带不带 Mono——名字不可靠。
+    数字等宽是硬要求：统计值实时跳动时宽度不变，`245 / 260`、`13 / 52 人`
+    这类并排数值才成列。中英文用 MiSans 原字形，读起来比全等宽自然。
+    用字体度量实测，不信字体名字。
     """
     from PyQt5.QtGui import QFont, QFontMetricsF
 
-    from app.ui.widgets import mono_family
+    from app.setup import FONT_FAMILY, register_fonts
 
-    font = QFont(mono_family())
+    assert register_fonts() == FONT_FAMILY
+    font = QFont(FONT_FAMILY)
     font.setPixelSize(14)
     fm = QFontMetricsF(font)
 
-    def width(ch: str) -> float:
-        return fm.horizontalAdvance(ch)
+    digits = [fm.horizontalAdvance(c) for c in "0123456789"]
+    assert max(digits) - min(digits) < 0.5, f"数字不等宽：{digits}"
 
-    # 西文与数字完全等宽
-    latin = [width(c) for c in "0123456789ABCXYZacxyz"]
-    assert max(latin) - min(latin) < 0.5, f"西文不齐：{latin}"
+    # 中文在 MiSans 里也是等宽的（每个汉字同宽），这是 CJK 排版的基础
+    cjk = [fm.horizontalAdvance(c) for c in "团员状况信息错误欠缴"]
+    assert max(cjk) - min(cjk) < 0.5, f"中文不等宽：{cjk}"
 
-    # 中文彼此等宽，且恰好是西文的 2 倍（CJK 等宽的惯例）
-    cjk = [width(c) for c in "团员状况信息错误欠缴"]
-    assert max(cjk) - min(cjk) < 0.5, f"中文不齐：{cjk}"
-    assert abs(max(cjk) - min(latin) * 2) < 1.0, "中文宽度应为西文 2 倍"
+    # 字母是比例字形：若被误烧成等宽，说明 cmap 改过头了
+    latin = {c: fm.horizontalAdvance(c) for c in "iW"}
+    assert latin["W"] - latin["i"] > 1.0, f"字母应为比例字形：{latin}"
+
+
+def test_every_bundled_weight_resolves(app):
+    """四个字重都要能精确匹配到文件。
+
+    只注册 Regular 时 Qt 会合成假粗体：笔画发糊，而且字宽与真粗体不同，
+    等宽数字的对齐也会跟着歪。
+    """
+    from PyQt5.QtGui import QFont, QFontDatabase, QFontInfo, QFontMetricsF
+
+    from app.setup import FONT_FAMILY, register_fonts
+
+    assert register_fonts() == FONT_FAMILY
+    db = QFontDatabase()
+    for weight in (QFont.Weight.Normal, QFont.Weight.Medium,
+                   QFont.Weight.DemiBold, QFont.Weight.Bold):
+        font = QFont(FONT_FAMILY)
+        font.setPixelSize(14)
+        font.setWeight(weight)
+        assert QFontInfo(font).exactMatch(), f"字重 {weight} 没有匹配到字体文件"
+        assert db.styleString(font) != "", f"字重 {weight} 没有样式名"
+
+    # 四档字重的数字宽度应各不相同——相同说明都落到同一个文件（即合成粗体）
+    widths = set()
+    for weight in (QFont.Weight.Normal, QFont.Weight.Medium,
+                   QFont.Weight.DemiBold, QFont.Weight.Bold):
+        font = QFont(FONT_FAMILY)
+        font.setPixelSize(14)
+        font.setWeight(weight)
+        widths.add(round(QFontMetricsF(font).horizontalAdvance("9"), 2))
+    assert len(widths) == 4, f"字重没有真正生效：{sorted(widths)}"

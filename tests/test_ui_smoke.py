@@ -1935,3 +1935,24 @@ def test_browser_screenshot_wiring(app, isolated_store, monkeypatch):
         assert opened == ["/tmp"]
     finally:
         host.deleteLater()
+
+
+def test_value_animation_stops_when_widget_destroyed(app):
+    """控件被销毁后，数值补间不能再回调它。
+
+    页面切走或测试收尾时，520ms 的动画还在跑，而回调闭包抓着已销毁的控件。
+    PyQt5 碰到悬空对象直接 abort（没有 Python 异常可捕），表现为整轮测试随机
+    段错误。这里显式销毁控件并推进事件循环，进程不崩即通过。
+    """
+    from app.ui.anim import value_animation
+
+    widget = QWidget()
+    seen: list[float] = []
+    value_animation(widget, 0.0, 1.0, seen.append, duration=400)
+    _pump(app, 80)
+    assert seen, "动画在控件存活期间就该有回调"
+
+    widget.deleteLater()
+    app.processEvents()
+    # 让动画在控件已销毁的状态下继续走完，进程不崩即通过
+    _pump(app, 400)
