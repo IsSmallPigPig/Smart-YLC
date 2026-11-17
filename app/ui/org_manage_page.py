@@ -25,7 +25,6 @@ from qfluentwidgets import (
     IconWidget,
     InfoBar,
     PrimaryPushButton,
-    PrimaryToolButton,
     StrongBodyLabel,
     ToggleToolButton,
     ToolButton,

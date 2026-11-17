@@ -145,6 +145,10 @@ def set_custom_mirror(prefix: str):
 
 
 def record(status: str, detail: str = ""):
+    if status == "error":
+        from app.services.app_log import error
+
+        error("更新检查失败：%s", detail)
     store.update(lambda cfg: cfg.__setitem__("lastUpdateCheck", {
         "at": datetime.now().isoformat(timespec="minutes"),
         "status": status,

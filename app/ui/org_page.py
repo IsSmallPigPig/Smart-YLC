@@ -45,7 +45,7 @@ from app.ui import palette as P
 from app.ui.widgets import PillLabel
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.page import (BusyOverlay, CallbackWorker, FluentPage, PageBanner,
-                         PageHeader, note_label, paint_tinted_card, set_tip,
+                         note_label, paint_tinted_card, set_tip,
                          section_title, theme_font)
 # 面包屑与组织管理页同一套实现：节点按主题取色、按内容取宽，直接复用
 from app.ui.org_manage_page import CrumbBar
@@ -965,7 +965,7 @@ class OrgPage(FluentPage):
             self._clear_cards()
             for r in rows:
                 self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
-                                  r.problems, r.branch, r.kinds)
+                                  r.problems, r.branch)
             self.error_title.setText(f"异常团员 {len(rows)}")
         # 卡片落地后下一帧再收遮罩：让布局先把最终高度算完，避免露出中间态
         QTimer.singleShot(0, self._hide_busy)
@@ -1051,7 +1051,7 @@ class OrgPage(FluentPage):
         self._clear_cards()
         for r in error_rows:
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
-                              r.problems, r.branch, r.kinds)
+                              r.problems, r.branch)
         self.error_title.setText(f"异常团员 {len(error_rows)}")
 
     def _on_account(self, user, branch, total, uploaded, abnormal, by_kind, status, message, transfer, rows):
@@ -1088,11 +1088,11 @@ class OrgPage(FluentPage):
         if status != "ok":
             # 账号级失败：不参与名单，单独一张卡片说明，避免静默丢账号
             self._append_card("—", "—", [], f"账号 {user or '未标注'} 检查失败："
-                              f"{STATUS_LABEL.get(status, status)}：{message}", branch, None)
+                              f"{STATUS_LABEL.get(status, status)}：{message}", branch)
         for r in rows:
             self._error_rows.append(r)
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
-                              r.problems, r.branch, r.kinds)
+                              r.problems, r.branch)
         self.error_title.setText(f"异常团员 {len(self._error_rows)}")
         if status == "ok":
             self._persist_account(user, branch, total, uploaded, dict(by_kind or {}), transfer, rows)
@@ -1201,7 +1201,7 @@ class OrgPage(FluentPage):
         self._clear_cards()
         for r in agg["rows"]:
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
-                              r.problems, r.branch, r.kinds)
+                              r.problems, r.branch)
         self.error_title.setText(f"异常团员 {len(agg['rows'])}")
         # 缓存里是 ISO 时间串，直接显示会带 T 和秒；截图/阅读都不好看
         updated = agg["updated"]
@@ -1217,7 +1217,7 @@ class OrgPage(FluentPage):
                 item.widget().deleteLater()
         self.error_title.setText("异常团员 0")
 
-    def _append_card(self, name, mobile, kinds: list, problem, branch, kinds_text):
+    def _append_card(self, name, mobile, kinds: list, problem, branch):
         """一张异常团员卡片：左侧姓名+手机号，右侧支部；下方类别与问题。"""
         # kinds 为 None 是账号级失败，没有可跳转的支部，保持普通卡片
         if kinds is None or not branch:

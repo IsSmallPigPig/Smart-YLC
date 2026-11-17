@@ -51,7 +51,6 @@ from app.ui.page import (
     FluentPage,
     set_tip,
     PageBanner,
-    PageHeader,
     note_label,
     theme_font,
     triangle_icon,

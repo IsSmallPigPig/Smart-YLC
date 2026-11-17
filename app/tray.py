@@ -23,6 +23,9 @@ class DailyWorker(QThread):
         try:
             self.done.emit(*run_daily_check())
         except Exception as e:
+            from app.services.app_log import exception
+
+            exception("托盘每日检查失败")
             self.done.emit(False, f"每日检查异常：{e}")
 
 
@@ -131,6 +134,11 @@ def run_tray() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    # 托盘常驻没有窗口，异常见不到任何提示；崩溃日志是唯一的现场证据
+    from app.services.app_log import install_crash_handler
+
+    install_crash_handler()
 
     # 与主界面共用单实例锁：已有实例时只把它的窗口叫出来，不再开第二个托盘
     from app.services.single_instance import SingleInstance

@@ -143,6 +143,12 @@ def run() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
 
+    # 崩溃处理器要在 QApplication 之后装：更早崩没有应用实例，弹不出窗口。
+    # 日志本身在 --demo 之后才初始化，路径跟着 demo 的临时 HOME 走。
+    from app.services.app_log import install_crash_handler
+
+    install_crash_handler()
+
     # 只留一个实例：第二次启动把已有窗口叫出来就退出，不再建一套页面与后台线程
     from app.services.single_instance import SingleInstance
 
@@ -156,6 +162,9 @@ def run() -> int:
     if not guard.attach():
         return 0
     app.aboutToQuit.connect(guard.close)
+    from app.services.app_log import info as log_info
+
+    log_info("单实例锁已获取，开始构造界面")
 
     # 先放启动画面，再做后面那些慢的事（导入 qfluentwidgets 约 0.4s、构造主窗口
     # 与六个页面约 0.3s，Windows 冷启动还要叠上运行时加载与杀毒扫描）。
@@ -182,6 +191,7 @@ def run() -> int:
 
         setup_app()
         _pump()
+        log_info("字体与主题已就绪")
 
         from app.ui.brand import app_icon
 
@@ -190,6 +200,7 @@ def run() -> int:
         from app.ui.main_window import MainWindow
 
         w = MainWindow()
+        log_info("主窗口构造完成")
 
         def _show_existing(_command: str = ""):
             w.showNormal()

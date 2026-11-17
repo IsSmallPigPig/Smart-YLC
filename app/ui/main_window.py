@@ -19,7 +19,6 @@ from qfluentwidgets import (
     qrouter,
 )
 
-from app import __version__ as VERSION
 from app.domain.account_health import excluded_summary, split_accounts
 from app.services import store
 from app.services.notices import NoticeCenter

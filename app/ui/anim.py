@@ -12,7 +12,6 @@ from PyQt5.QtCore import (
     QParallelAnimationGroup,
     QPoint,
     QPropertyAnimation,
-    QSequentialAnimationGroup,
     QTimer,
     QVariantAnimation,
 )
