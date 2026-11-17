@@ -71,3 +71,29 @@ def test_linux_postprocess_noop_without_dist(tmp_path, monkeypatch):
 
     monkeypatch.setattr(build, "ROOT", tmp_path)
     assert build._postprocess_linux() is None
+
+
+def test_all_windows_variants_pin_pymupdf_with_win32_wheel():
+    """四个 Windows 变体都必须钉 PyMuPDF 1.24.11。
+
+    更高版本没有 win32 wheel，pip 会回退到 88MB 的 sdist 现场编译 MuPDF 的 C 代码，
+    Windows10-x86 构建会卡在 "Preparing metadata (pyproject.toml)" 几十分钟。
+    1.24.11 的 cp38-abi3 wheel 同时覆盖 Python 3.8 / 3.11 与 32/64 位。
+    """
+    import re
+
+    text = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    block = text.split("build-windows:", 1)[1].split("\n  build-linux:", 1)[0]
+    variants = re.findall(r"- name: (Windows[\w-]+)", block)
+    assert len(variants) == 4, f"应覆盖四个 Windows 变体，实际 {variants}"
+    # 每个变体的 deps 行都要钉同一个版本，不能留裸 pymupdf
+    deps_lines = re.findall(r"deps: (.+)", block)
+    assert len(deps_lines) == 4
+    for line in deps_lines:
+        assert "pymupdf==1.24.11" in line, f"未钉 PyMuPDF：{line}"
+        assert not re.search(r"(?<![\w=.-])pymupdf(?![\w=.-])", line), \
+            f"仍有裸 pymupdf：{line}"
+
+    # requirements.txt 同样要钉，避免本地安装踩同一个坑
+    req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "pymupdf==1.24.11" in req
