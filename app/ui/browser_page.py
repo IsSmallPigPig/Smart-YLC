@@ -684,8 +684,10 @@ class BrowserWindow(FluentWindowBase):
             # 圆角偏好也一起重设（窗口 frame 被 Qt 重设过）。圆角先设，
             # 它内部的 addShadowEffect 会重设 frame 扩展，放在材质后会顶掉 Mica。
             from app.services.materials import apply_rounded_corners, apply_windows_effect
+            from app.ui import palette as P
 
-            apply_rounded_corners(self)
+            # 与主窗口同一个圆角档位：两个窗口各写一个数迟早不一致
+            apply_rounded_corners(self, P.RADIUS["window"])
             self._material_applied = apply_windows_effect(self, self._material)
             self._translucent = self._material_applied
             self._apply_background()
@@ -771,7 +773,9 @@ class BrowserWindow(FluentWindowBase):
                 disable_acrylic(self)
                 self._material_applied = True
         elif sys.platform == "win32" and self._translucent:
-            apply_rounded_corners(self)
+            from app.ui import palette as P
+
+            apply_rounded_corners(self, P.RADIUS["window"])
             self._material_applied = apply_windows_effect(self, material)
             if not self._material_applied:
                 self._translucent = False

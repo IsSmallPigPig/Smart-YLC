@@ -163,48 +163,64 @@ def _apply_mica(window) -> bool:
         return False
 
 
-def apply_rounded_corners(window, radius: int = 10) -> bool:
-    """让无边框窗口拿到圆角与投影，跨平台各自走最合适的那条路。
+def apply_dwm_round_corners(window) -> bool:
+    """只设 Windows 11 的 DWM 圆角偏好，不碰阴影。
 
-    三档实现，按系统能力从优到劣：
-
-    * **macOS**：系统给无边框窗口切圆角（NSWindow 自带），什么都不用做。
-    * **Windows 11**：DWM 有圆角偏好，设成 ROUND 并由 DWM 补窗口投影。
-      半径由系统定（约 8px），传进来的 radius 不参与——这是系统级的圆角，
-      和界面内自绘的卡片圆角本来就该按系统那一档走。
-    * **Windows 10 / 其它**：没有系统接口，用 `setMask` 自己切。遮罩切出来的
-      边缘没有抗锯齿，但总比一张方角窗户顶着一堆圆角卡片强；窗口透明材质在
-      Win10 上本来就退回纯色底，边缘锯齿不明显。
-
-    返回是否真的切了圆角（macOS 返回 True，因为系统本来就有）。
+    和阴影分开是有原因的：`addShadowEffect` 内部是
+    `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`，它会让 DWM 重算窗口 frame 并
+    发一次 `WM_SIZE`。在 `resizeEvent` 里顺手调它，等于「resize → 改 frame →
+    又 resize」，会自激成死循环，CPU 直接打满、栈深到崩溃。
+    所以圆角偏好（纯属性写入，不改变窗口几何）可以随尺寸重设，
+    阴影只能在外面单独调一次。
     """
-    if sys.platform == "darwin":
-        return True
-    if win11_build() >= WINDOWS_MICA_BUILD:
-        try:
-            from ctypes import byref, c_int, sizeof
+    if win11_build() < WINDOWS_MICA_BUILD:
+        return False
+    try:
+        from ctypes import byref, c_int, sizeof
 
-            effect = _window_effect(window)
-            hwnd = int(window.winId())
-            if hwnd == 0:
-                return False
-            pref = c_int(DWMWCP_ROUND)
-            effect.DwmSetWindowAttribute(
-                hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, byref(pref), sizeof(pref))
-            effect.addShadowEffect(hwnd)
-            return True
-        except Exception:
+        effect = _window_effect(window)
+        hwnd = int(window.winId())
+        if hwnd == 0:
             return False
-    return apply_mask_corners(window, radius)
+        pref = c_int(DWMWCP_ROUND)
+        effect.DwmSetWindowAttribute(
+            hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, byref(pref), sizeof(pref))
+        return True
+    except Exception:
+        return False
+
+
+def add_dwm_shadow(window) -> bool:
+    """给无边框窗口补一层 DWM 投影。
+
+    只能在窗口几何稳定之后调（showEvent / 显式尺寸变更后），
+    绝不要放在 `resizeEvent` 的同步路径里——见 apply_dwm_round_corners 的说明。
+    """
+    if win11_build() < WINDOWS_MICA_BUILD:
+        return False
+    try:
+        effect = _window_effect(window)
+        hwnd = int(window.winId())
+        if hwnd == 0:
+            return False
+        effect.addShadowEffect(hwnd)
+        return True
+    except Exception:
+        return False
 
 
 def apply_mask_corners(window, radius: int = 10) -> bool:
     """用 setMask 把窗口切成圆角（没有系统圆角接口时用）。
 
-    遮罩是按位图走的：边缘没有抗锯齿，半径给小一点更干净——10px 在这个窗口
-    尺度上看着是「轻微倒角」，不像大圆角那样把锯齿暴露出来。
+    遮罩按位图走，边缘没有抗锯齿，半径给小一点更干净。
 
-    尺寸变了要重新切，所以方法挂在窗口上、由调用方在 resizeEvent 里再喊一次。
+    两个限制要知道：
+    * Windows 上 `setMask` 会调 `SetWindowRgn`，那同样会让窗口重算区域并触发
+      重绘甚至尺寸确认——所以它**不能**放在 resizeEvent 的同步路径里反复调，
+      只能由调用方去抖后调用，并且尺寸没变时不要重复调（见 set_corners）。
+    * 它和「DWM 把客户区扩展成玻璃边框」是冲突的：一个要求裁掉圆角外的像素，
+      另一个要求那块像素交给系统合成。所以开了亚克力/Mica 的 Windows 窗口
+      不要走这条路径。
     """
     try:
         from PyQt5.QtGui import QPainterPath, QRegion
@@ -218,6 +234,81 @@ def apply_mask_corners(window, radius: int = 10) -> bool:
         return True
     except Exception:
         return False
+
+
+# 上次切圆角时的 (id(窗口), 宽, 高, 半径)：尺寸没变就不重复调系统接口
+_CORNER_STATE: dict[int, tuple[int, int, int]] = {}
+
+
+def set_corners(window, radius: int = 10, force: bool = False,
+                platform: str | None = None, build: int | None = None) -> bool:
+    """统一入口：按平台切窗口圆角，并保证幂等。
+
+    调用方可以在 resizeEvent 里放心调——尺寸和半径都没变时这里直接返回，
+    不碰任何系统接口。真正变化时也只做一次，不会自激。
+
+    `force=True` 时忽略幂等检查（例如材质切换后窗口 frame 被系统重设过，
+    需要重新贴一次圆角偏好）。
+
+    各平台策略：
+    * macOS：无边框窗口由系统切圆角，什么都不做。
+    * Windows 11：只写 DWM 圆角偏好（纯属性，不改窗口几何）。**绝不 setMask**，
+      那会和「客户区扩展成玻璃边框」打架。
+    * Windows 10：没有系统接口，退到 setMask。
+    * Linux：不进 setMask。Qt 在 Wayland 上不支持窗口遮罩，X11 上遮罩会把阴影
+      一起裁掉；而主流桌面环境对无边框窗口本来就有自己的圆角与阴影，
+      再切一次反而更差。
+
+    `platform` / `build` 只为测试注入：这些分支在 macOS 上跑不到，闪退恰恰出在
+    Windows 那两条，必须能在开发机上覆盖。正常调用留空即取当前系统。
+    """
+    platform = sys.platform if platform is None else platform
+    build = win11_build() if build is None else build
+
+    key = id(window)
+    size = (window.width(), window.height(), radius)
+    if not force and _CORNER_STATE.get(key) == size:
+        return True
+    _CORNER_STATE[key] = size
+
+    if platform == "darwin":
+        return True
+    if platform != "win32":
+        return False
+    if build >= WINDOWS_MICA_BUILD:
+        return apply_dwm_round_corners(window)
+    return apply_mask_corners(window, radius)
+
+
+def clear_corners(window) -> None:
+    """撤掉遮罩式圆角，并把幂等缓存清掉。
+
+    窗口要切成「不透明纯色 + 直角」或者要交给 DWM 合成圆角时必须先撤遮罩：
+    mask 与「DWM 把客户区扩展成玻璃边框」是互斥的，两者同时生效会在圆角处
+    切掉一块系统合成的像素。
+    """
+    _CORNER_STATE.pop(id(window), None)
+    try:
+        window.clearMask()
+    except Exception:
+        pass
+
+
+def apply_rounded_corners(window, radius: int = 10) -> bool:
+    """切圆角 + 补 Windows 11 投影。
+
+    「切圆角」走幂等的 set_corners；「补投影」只在 Win11 上做，且因此
+    这个函数**不能**出现在 resizeEvent 的同步路径里——`addShadowEffect` 内部是
+    `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`，会改变窗口 frame 并触发新的
+    WM_SIZE，在缩放回调里调它就成了自激循环（CPU 打满、栈深到崩溃）。
+    现有调用点都在 showEvent / set_material 之后，属于「几何已定」的时机。
+    """
+    if sys.platform == "darwin":
+        return True
+    ok = set_corners(window, radius)
+    if sys.platform == "win32" and win11_build() >= WINDOWS_MICA_BUILD:
+        add_dwm_shadow(window)
+    return ok
 
 
 def remove_windows_effect(window) -> None:
