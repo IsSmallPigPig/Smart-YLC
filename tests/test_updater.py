@@ -746,10 +746,10 @@ def test_startup_check_downloads_and_installs_silently(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("is64,win7,expected", [
-    (True, False, "SmartYouth-Win-x64-setup.exe"),
-    (False, False, "SmartYouth-Win-x86-setup.exe"),
-    (True, True, "SmartYouth-Win7-x64-setup.exe"),
-    (False, True, "SmartYouth-Win7-x86-setup.exe"),
+    (True, False, "SmartYouth-Windows10-x64-setup.exe"),
+    (False, False, "SmartYouth-Windows10-x86-setup.exe"),
+    (True, True, "SmartYouth-Windows7-x64-setup.exe"),
+    (False, True, "SmartYouth-Windows7-x86-setup.exe"),
 ])
 def test_pick_asset_matches_windows_bit_and_os(monkeypatch, is64, win7, expected):
     """Windows 有四个安装包（世代 × 位数），必须挑与本机系统、位数都匹配的那份。
@@ -760,10 +760,10 @@ def test_pick_asset_matches_windows_bit_and_os(monkeypatch, is64, win7, expected
                         lambda: ("64bit" if is64 else "32bit", ""))
     monkeypatch.setattr(updater, "_is_windows7", lambda: win7)
     assets = [
-        {"name": "SmartYouth-Win7-x86-setup.exe", "browser_download_url": "u1"},
-        {"name": "SmartYouth-Win7-x64-setup.exe", "browser_download_url": "u2"},
-        {"name": "SmartYouth-Win-x86-setup.exe", "browser_download_url": "u3"},
-        {"name": "SmartYouth-Win-x64-setup.exe", "browser_download_url": "u4"},
+        {"name": "SmartYouth-Windows7-x86-setup.exe", "browser_download_url": "u1"},
+        {"name": "SmartYouth-Windows7-x64-setup.exe", "browser_download_url": "u2"},
+        {"name": "SmartYouth-Windows10-x86-setup.exe", "browser_download_url": "u3"},
+        {"name": "SmartYouth-Windows10-x64-setup.exe", "browser_download_url": "u4"},
         {"name": "SmartYouth-macOS-arm64.dmg", "browser_download_url": "u5"},
     ]
     assert updater._pick_asset(assets, "win32")["name"] == expected
@@ -773,5 +773,5 @@ def test_pick_asset_windows_falls_back_when_only_one_package(monkeypatch):
     """老版本 Release 只有一个 Windows 包时仍要能用，不能挑不出就返回 None。"""
     monkeypatch.setattr(updater.platform_module, "architecture", lambda: ("32bit", ""))
     monkeypatch.setattr(updater, "_is_windows7", lambda: False)
-    assets = [{"name": "SmartYouth-Windows-x64-setup.exe", "browser_download_url": "u1"}]
-    assert updater._pick_asset(assets, "win32")["name"] == "SmartYouth-Windows-x64-setup.exe"
+    assets = [{"name": "SmartYouth-Windows10-x64-setup.exe", "browser_download_url": "u1"}]
+    assert updater._pick_asset(assets, "win32")["name"] == "SmartYouth-Windows10-x64-setup.exe"

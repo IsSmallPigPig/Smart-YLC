@@ -372,15 +372,17 @@ def _arch_markers(p: str) -> tuple[str, ...]:
 
     macOS：M 系列认 arm64，Intel 认 x86_64（沿用历史命名）。
     Windows：先认本系统世代的包，再退到另一位宽的包——Win10+ 的 64 位机器
-    可以跑 Win7 包与 32 位包，反过来不行。"""
+    可以跑 Win7 包与 32 位包，反过来不行。产物名统一带系统世代与位宽
+    （SmartYouth-Windows10-x64-setup.exe），标记得与文件名保持一致。"""
     if p == "darwin":
         return ("arm64",) if platform_module.machine().startswith("arm") else ("x86_64",)
     if p == "win32":
         is64 = platform_module.architecture()[0] == "64bit"
         win7 = _is_windows7()
+        # 产物名形如 SmartYouth-Windows10-x64-setup.exe / SmartYouth-Windows7-x86-setup.exe
         if win7:
-            return ("win7-x64", "win7-x86") if is64 else ("win7-x86",)
-        return ("win-x64", "win-x86") if is64 else ("win-x86",)
+            return ("windows7-x64", "windows7-x86") if is64 else ("windows7-x86",)
+        return ("windows10-x64", "windows10-x86") if is64 else ("windows10-x86",)
     return ()
 
 

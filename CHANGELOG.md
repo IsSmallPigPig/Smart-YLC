@@ -2,6 +2,27 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.7.0
+
+### 修复
+- **Windows 四个安装包全部编译失败**：`installer.iss` 里把位宽写成无引号的数字
+  `#if BitWidth == 64`，而 ISCC 的 `/D` 传进来的是**字符串**，ISPP 拿字符串和整数
+  比较直接报错。现在统一成 `#if Is64 == "1"`，与传参类型一致。
+
+### 变更（产物命名）
+Windows 产物名简化为「系统世代 + 位宽」，下载列表一眼能分清：
+
+| 产物 | 适用 | 构建解释器 |
+|:--|:--|:--|
+| `SmartYouth-Windows10-x64-setup.exe` | Windows 10 / 11 64 位 | Python 3.11 |
+| `SmartYouth-Windows10-x86-setup.exe` | Windows 10 / 11 32 位 | Python 3.11 |
+| `SmartYouth-Windows7-x64-setup.exe` | Windows 7 64 位 | Python 3.8 |
+| `SmartYouth-Windows7-x86-setup.exe` | Windows 7 32 位 | Python 3.8 |
+
+`build-windows-legacy` 合并进 `build-windows`：同一个矩阵跑四种组合，
+产物名、系统、位宽由同一组变量驱动，不会再出现「编译出来的名字和取件用的名字
+不一致」这类前后脱节。`updater` 的挑包标记同步为 `windows10-x64` 这套写法。
+
 ## v1.6.10
 
 ### 修复
