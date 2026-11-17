@@ -136,3 +136,76 @@ def test_abnormal_card_opens_detail_with_breadcrumb(app):
     assert not page.in_detail()
     assert page.crumb_host.isHidden()
     assert page.back_to_overview() is False   # 已在概览，不重复触发
+
+
+# ---------- 辅助指标（待办数据 / 档案完整度） ----------
+
+def test_ecard_missing_counts_blank_photo():
+    """电子团员证未采集：状态里没有「已采集」的都算。"""
+    from app.domain.check_rules import MemberRecord
+    from app.domain.org_stats import ecard_missing
+
+    ms = [MemberRecord(name="a", ecard_photo_status="已采集"),
+          MemberRecord(name="b", ecard_photo_status=""),
+          MemberRecord(name="c", ecard_photo_status=None)]
+    assert ecard_missing(ms) == 2
+
+
+def test_duplicate_mobiles_counts_extra_people():
+    """手机号重复：同一号码出现 N 次，多出来的 N-1 人算重复；空号不算。"""
+    from app.domain.check_rules import MemberRecord
+    from app.domain.org_stats import duplicate_mobiles
+
+    ms = [MemberRecord(name="a", mobile="13800000000"),
+          MemberRecord(name="b", mobile="13800000000"),
+          MemberRecord(name="c", mobile="13800000000"),
+          MemberRecord(name="d", mobile="13900000000"),
+          MemberRecord(name="e", mobile="")]
+    assert duplicate_mobiles(ms) == 2
+
+
+def test_unpaid_months_and_oldest():
+    """欠缴月数合计与最长欠缴：一个求和、一个取最大。"""
+    from app.domain.check_rules import MemberRecord
+    from app.domain.org_stats import oldest_unpaid, unpaid_months_total
+
+    ms = [MemberRecord(name="a", unpaid_months=18),
+          MemberRecord(name="b", unpaid_months=2),
+          MemberRecord(name="c", unpaid_months=0)]
+    assert unpaid_months_total(ms) == 20
+    assert oldest_unpaid(ms) == 18
+
+
+def test_overview_has_all_cards_after_refresh(app):
+    """八张卡刷新后都要有值，不能有一张永远显示 0/—。"""
+    page = _page(_Win())
+    _feed(page, total=260,
+          by_kind={"identity": 5, "report": 16, "archive": 6, "fees": 10},
+          rows=[object()] * 37, unpaid=104.5)
+    page._uploaded = 245
+    page._extras = {"dupMobile": 1, "ecardMissing": 9,
+                    "unpaidMonths": 71, "oldestUnpaid": 54}
+    page._refresh_overview()
+
+    assert page.upload_value.text() == "94%"
+    assert "245 / 260" in page.upload_sub.text()
+    assert page._strip["ecardMissing"].text() == "9"
+    assert page._strip["unpaidMonths"].text() == "71"
+    # 档案完整度三项都是「齐 / 总」
+    assert page._complete_rows["uploaded"].text() == "245 / 260"
+    assert page._complete_rows["ecard"].text() == "251 / 260"
+    assert page._complete_rows["mobile"].text() == "259 / 260"
+
+
+def test_grid_is_staggered_not_equal(app):
+    """错落网格：圆环卡跨两行、异常卡跨两列，不是四等分。
+
+    只比数量不够——四张卡等宽等高时也满足「有 4 张卡」，这里直接查网格跨度。
+    """
+    page = _page(_Win())
+    grid = page.overview_lay
+    def span(w):
+        idx = grid.indexOf(w)
+        return grid.getItemPosition(idx)[2:]   # (rowSpan, colSpan)
+    assert span(page.overview_card) == (2, 1), "圆环卡应跨两行"
+    assert span(page.abnormal_card) == (1, 2), "异常卡应跨两列"

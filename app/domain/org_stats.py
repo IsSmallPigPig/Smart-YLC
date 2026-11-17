@@ -128,3 +128,49 @@ def merge_totals(system_total: int, local_total: int) -> tuple[int, int]:
     local_total = max(int(local_total), 0)
     total = max(system_total, local_total)
     return total, max(0, total - system_total)
+
+
+# ---------- 概览卡：辅助指标 ----------
+
+ECARD_MARK = "已采集"
+
+
+def ecard_missing(members: list[MemberRecord]) -> int:
+    """未采集电子团员证照片的人数。
+
+    检查模板里这一项不算异常（站点自己也不标红），但它挡着团员证下发，
+    单独计数给管理员一个可推进的活儿。"""
+    return sum(1 for m in members if ECARD_MARK not in (m.ecard_photo_status or ""))
+
+
+def duplicate_mobiles(members: list[MemberRecord]) -> int:
+    """手机号重复的人数（重复组里除第一个人之外的都算）。
+
+    同一个人被两个支部收录、或家长手机号被复用，都会导致报到与通知发错人。"""
+    seen: dict[str, int] = {}
+    for m in members:
+        mobile = (m.mobile or "").strip()
+        if mobile:
+            seen[mobile] = seen.get(mobile, 0) + 1
+    return sum(count - 1 for count in seen.values() if count > 1)
+
+
+def unpaid_months_total(members: list[MemberRecord]) -> int:
+    """欠缴月数合计：衡量补缴工作量，比人数更能反映要收多少个月的账。"""
+    return sum(int(m.unpaid_months or 0) for m in members)
+
+
+def oldest_unpaid(members: list[MemberRecord]) -> int:
+    """单个团员最长欠缴月数：用来判断有没有拖了很久的账。"""
+    return max((int(m.unpaid_months or 0) for m in members), default=0)
+
+
+def upload_progress(members: list[MemberRecord]) -> tuple[int, int]:
+    """(已上传, 总数)：档案上传进度。"""
+    return sum(1 for m in members if is_uploaded(m)), len(members)
+
+
+def member_kinds(members: list[MemberRecord],
+                 results: list[CheckResult]) -> dict[str, int]:
+    """四类异常各自的人数（与 summarize_members 同口径，供卡片直接取）。"""
+    return summarize_members(members, results).by_kind

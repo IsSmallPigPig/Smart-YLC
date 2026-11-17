@@ -9,9 +9,10 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal as Signal
+from PyQt5.QtCore import QRectF, Qt, QThread, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QColor, QFont, QPainter
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QSizePolicy,
+                               QVBoxLayout, QWidget)
 
 from qfluentwidgets import (
     BodyLabel,
@@ -22,6 +23,7 @@ from qfluentwidgets import (
     PrimaryPushButton,
     StrongBodyLabel,
     CaptionLabel,
+    isDarkTheme,
     qconfig,
 )
 
@@ -31,7 +33,9 @@ from app.domain.check_rules import (
     build_report_results,
 )
 from app.domain.org_stats import (KIND_LABEL, ErrorMemberRow, build_error_rows,
-                                  merge_totals, summarize_members, unpaid_amount)
+                                  duplicate_mobiles, ecard_missing, merge_totals,
+                                  oldest_unpaid, summarize_members, unpaid_amount,
+                                  unpaid_months_total)
 from app.domain.account_health import excluded_summary, split_accounts
 from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services import store
@@ -60,6 +64,7 @@ KIND_COLOR = P.KIND
 TRANSFER_COLOR = P.TRANSFER
 # by_kind 里的旁路键：承载「应补缴金额」，不参与分类计数
 _UNPAID = "__unpaid__"
+_EXTRAS = "__extras__"
 # 概览卡里小标签的语气键：黄=信息错误、红=欠缴、灰=没有报道
 _RING_TONE = {"identity": "ring-identity", "fees": "ring-fees",
               "report": "ring-report", "archive": "ring-archive"}
@@ -86,6 +91,32 @@ class _Dot(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(self._color)
         p.drawEllipse(0, 0, self.width(), self.height())
+
+
+class _MiniBar(QWidget):
+    """6px 细进度条：只画一条轨道 + 一段填充，没有文字与交互。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._ratio = 0.0
+        self.setFixedHeight(6)
+
+    def set_ratio(self, ratio: float):
+        self._ratio = max(0.0, min(1.0, ratio))
+        self.update()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        h = self.height()
+        r = h / 2
+        p.setBrush(QColor(255, 255, 255, 26) if isDarkTheme() else QColor(0, 0, 0, 15))
+        p.drawRoundedRect(QRectF(0, 0, self.width(), h), r, r)
+        if self._ratio > 0:
+            w = max(self.width() * self._ratio, h)
+            p.setBrush(P.fg("brand"))
+            p.drawRoundedRect(QRectF(0, 0, w, h), r, r)
 
 
 class TapCard(CardWidget):
@@ -152,6 +183,12 @@ class OrgWorker(QThread):
             kinds = dict(s.by_kind)
             # 金额随 by_kind 一起带出去：不改信号签名，调用方按 _UNPAID 取值
             kinds[_UNPAID] = unpaid_amount(results)
+            kinds[_EXTRAS] = {
+                "dupMobile": duplicate_mobiles(members),
+                "ecardMissing": ecard_missing(members),
+                "unpaidMonths": unpaid_months_total(members),
+                "oldestUnpaid": oldest_unpaid(members),
+            }
             return user, branch, s.total, s.uploaded, s.abnormal, kinds, "ok", "", transfer, rows
         except Exception as e:
             return user, branch, 0, 0, 0, {}, "network", str(e), None, []
@@ -224,6 +261,8 @@ class OrgPage(FluentPage):
         self._error_rows: list = []
         self._transfer_applied = 0
         self._unpaid_amount = 0.0
+        self._extras = {"dupMobile": 0, "ecardMissing": 0,
+                        "unpaidMonths": 0, "oldestUnpaid": 0}
         self._snapshot = None  # 刷新前的展示快照（整轮失败时回滚）
         self._first_result = True
         self._ok_accounts = 0
@@ -233,6 +272,7 @@ class OrgPage(FluentPage):
         lay = self.vBoxLayout
         # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐
         lay.setContentsMargins(32, PageBanner.HEIGHT + 16, 32, 24)
+
 
         # 头图通栏贴顶（overlay，不占布局），标题与操作控件叠在 banner 上
         self.header = PageBanner("组织状况", "团员信息核对与异常统计", self.scrollWidget)
@@ -262,30 +302,51 @@ class OrgPage(FluentPage):
         self.crumb_host.setVisible(False)
         lay.addWidget(self.crumb_host)
 
-        # ── 概览：四张卡片一行铺开（团员概览圆环 / 异常团员 / 欠缴团费 / 没有档案）──
+        # ── 概览：错落网格（不是四等分）──
+        # 左：团员概览跨两行（圆环是主角，给足高度）
+        # 中：异常团员跨两列（异常名单入口，横向铺开才装得下分类标签）
+        # 右：欠缴团费 / 没有档案 上下叠两张
+        # 底：一条紧凑指标带（上传进度、完整档案、手机号重复、最长欠缴）
         self.overview_box = QWidget()
-        ov = QHBoxLayout(self.overview_box)
-        ov.setContentsMargins(0, 0, 0, 0)
-        ov.setSpacing(12)
-        self.overview_lay = ov
+        grid = QGridLayout(self.overview_box)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
+        self.overview_lay = grid
 
         self.overview_card = self._build_overview_card()
         self.abnormal_card = self._build_abnormal_card()
         self.fees_card = self._build_fees_card()
         self.archive_card = self._build_archive_card()
-        for c in (self.overview_card, self.abnormal_card,
-                  self.fees_card, self.archive_card):
-            ov.addWidget(c, 1)   # 同 stretch 且都钉了最小高度 → 等宽等高
+        self.upload_card = self._build_upload_card()
+        self.extra_strip = self._build_extra_strip()
+        self.rank_card = self._build_branch_rank_card()
+        self.health_card = self._build_health_card()
+
+        grid.addWidget(self.overview_card, 0, 0, 2, 1)      # 左：跨两行
+        grid.addWidget(self.abnormal_card, 0, 1, 1, 2)      # 中上：跨两列
+        grid.addWidget(self.fees_card, 1, 1, 1, 1)          # 中下左
+        grid.addWidget(self.archive_card, 1, 2, 1, 1)       # 中下右
+        grid.addWidget(self.upload_card, 0, 3, 1, 1)        # 右上
+        grid.addWidget(self.extra_strip, 1, 3, 1, 1)        # 右下
+        grid.addWidget(self.rank_card, 2, 0, 1, 2)          # 第三行：支部排行
+        grid.addWidget(self.health_card, 2, 2, 1, 2)        # 第三行：账号状态
+        # 列宽：圆环卡固定窄一些，中间两列等宽铺开，最右一列收窄
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+        grid.setColumnStretch(3, 0)
+        grid.setRowStretch(2, 1)
 
         # 概览区整体（四张卡 + 下方转接说明）一起显隐，进名单视图时整块收起
         self.overview_group = QWidget()
         grp = QVBoxLayout(self.overview_group)
         grp.setContentsMargins(0, 0, 0, 0)
         grp.setSpacing(10)
-        grp.addWidget(self.overview_box)
+        grp.addWidget(self.overview_box, 1)
         self.transfer_note = note_label("")
         grp.addWidget(self.transfer_note)
-        lay.addWidget(self.overview_group)
+        lay.addWidget(self.overview_group, 1)
 
         # ── 异常团员名单：点异常卡片进来，竖向占满剩余高度 ──
         self.detail_box = QWidget()
@@ -318,14 +379,18 @@ class OrgPage(FluentPage):
         self._refresh_overview()
     # ---------- 概览卡片：构建 ----------
 
-    # 四张概览卡统一最小高度：内容行数不同（圆环卡有图例、其余只有数字），
-    # 不钉住的话并排时底边参差
-    CARD_MIN_H = 168
+    # 错落网格：不同角色给不同高度，避免四块一样大的死板感。
+    # 圆环卡跨两行，要装下圆环+图例；中间两列一行高；右边一列更紧凑。
+    CARD_MIN_H = 150      # 单行卡（右列 / 中下两卡）
+    CARD_WIDE_H = 150     # 中间异常卡（单行、跨两列）
+    # 跨两行的圆环卡不钉高度：由两行实际高度撑开，钉死会比邻列高出一截
+    CARD_TALL_H = None
 
-    def _card_shell(self, title: str, hint: str = "") -> tuple[CardWidget, QVBoxLayout]:
-        """概览卡共用外壳：标题一行 + 内容区，高度四卡一致。"""
+    def _card_shell(self, title: str, hint: str = "",
+                    height: int | None = None) -> tuple[CardWidget, QVBoxLayout]:
+        """概览卡共用外壳：标题一行 + 内容区。高度按角色给，不再全等。"""
         card = CardWidget()
-        card.setMinimumHeight(self.CARD_MIN_H)
+        card.setMinimumHeight(height if height is not None else self.CARD_MIN_H)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(18, 14, 18, 16)
         lay.setSpacing(8)
@@ -367,7 +432,28 @@ class OrgPage(FluentPage):
             self.ring_legend.addLayout(line)
         self.ring_legend.addStretch(1)
         row.addLayout(self.ring_legend, 1)
+        lay.addStretch(1)
         lay.addLayout(row)
+        lay.addSpacing(14)
+
+        # 环下面补一行档案完整度：圆环只说异常分布，这里说「底子齐不齐」
+        self.completeness = QVBoxLayout()
+        self.completeness.setSpacing(7)
+        self._complete_rows: dict[str, StrongBodyLabel] = {}
+        for key, label in (("uploaded", "档案已上传"),
+                           ("ecard", "团员证照片齐全"),
+                           ("mobile", "手机号可用")):
+            line = QHBoxLayout()
+            line.setSpacing(6)
+            name = note_label(label)
+            name.setWordWrap(False)
+            line.addWidget(name, 1)
+            value = theme_font(StrongBodyLabel("—"), P.FONT["caption"],
+                               int(QFont.Weight.DemiBold))
+            line.addWidget(value, 0, Qt.AlignmentFlag.AlignRight)
+            self._complete_rows[key] = value
+            self.completeness.addLayout(line)
+        lay.addLayout(self.completeness)
         lay.addStretch(1)
         return card
 
@@ -375,7 +461,7 @@ class OrgPage(FluentPage):
         """异常团员：点进去看名单（竖向可以更长）。"""
         card = TapCard()
         card.clicked.connect(self._open_detail)
-        card.setMinimumHeight(self.CARD_MIN_H)
+        card.setMinimumHeight(self.CARD_WIDE_H)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(18, 14, 18, 16)
         lay.setSpacing(8)
@@ -423,7 +509,6 @@ class OrgPage(FluentPage):
         lay.addLayout(row)
         self.fees_sub = note_label("0 人欠缴")
         lay.addWidget(self.fees_sub)
-        lay.addStretch(1)
         return card
 
     def _build_archive_card(self) -> CardWidget:
@@ -433,7 +518,76 @@ class OrgPage(FluentPage):
         lay.addWidget(self.archive_value)
         self.archive_sub = note_label("0 人缺少电子志愿书档案")
         lay.addWidget(self.archive_sub)
-        lay.addStretch(1)
+        return card
+
+    def _build_branch_rank_card(self) -> CardWidget:
+        """支部异常排行：哪几个支部问题最多，直接指向要催的班。
+
+        异常名单是按人排的，管理员真正先问的是「哪个班最麻烦」。
+        这里按异常人数降序列出前几名，点一行就进对应支部。
+        """
+        card, lay = self._card_shell("支部异常排行")
+        self._rank_rows = QVBoxLayout()
+        self._rank_rows.setSpacing(8)
+        lay.addLayout(self._rank_rows)
+        self._rank_empty = note_label("还没有支部数据")
+        lay.addWidget(self._rank_empty)
+        self._rank_widgets: list[QWidget] = []
+        return card
+
+    def _build_health_card(self) -> CardWidget:
+        """账号在线状态：几个能取数、几个要重新登录，决定统计能不能跑全。"""
+        card, lay = self._card_shell("账号状态")
+        self._health_text = theme_font(StrongBodyLabel("—"), P.FONT["metric"],
+                                       int(QFont.Weight.Bold))
+        lay.addWidget(self._health_text)
+        self._health_sub = note_label("可以正常取数")
+        lay.addWidget(self._health_sub)
+        return card
+
+    def _build_upload_card(self) -> CardWidget:
+        """上传进度：已上传档案 / 应上传总数，给一个能直接看进度的百分比。"""
+        card, lay = self._card_shell("上传进度")
+        self.upload_value = theme_font(StrongBodyLabel("0%"), P.FONT["metric"],
+                                       int(QFont.Weight.Bold))
+        lay.addWidget(self.upload_value)
+        self.upload_sub = note_label("0 / 0 人已上传")
+        lay.addWidget(self.upload_sub)
+
+        # 细进度条：一眼看出还差多少，不占地方
+        self.upload_bar = _MiniBar()
+        lay.addWidget(self.upload_bar)
+        return card
+
+    def _build_extra_strip(self) -> CardWidget:
+        """紧凑指标带：四项与档案/数据质量相关的小数字，竖排贴着右列。
+
+        这些是「顺手能修」的活儿（补照片、并重复号、催最长欠缴），
+        单独成卡会占掉一整块版面，做成一条紧凑列表更合适。
+        """
+        card = CardWidget()
+        card.setMinimumHeight(self.CARD_MIN_H)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(9)
+        lay.addWidget(theme_font(StrongBodyLabel("待办数据"), P.FONT["title"],
+                                 int(QFont.Weight.DemiBold)))
+
+        self._strip: dict[str, StrongBodyLabel] = {}
+        for key, label in (("ecardMissing", "电子团员证未采集"),
+                           ("dupMobile", "手机号重复"),
+                           ("unpaidMonths", "欠缴月数合计"),
+                           ("oldestUnpaid", "最长欠缴月数")):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            name = note_label(label)
+            name.setWordWrap(False)
+            row.addWidget(name, 1)
+            value = theme_font(StrongBodyLabel("0"), P.FONT["body"],
+                               int(QFont.Weight.DemiBold))
+            row.addWidget(value, 0, Qt.AlignmentFlag.AlignRight)
+            self._strip[key] = value
+            lay.addLayout(row)
         return card
 
     # ---------- 概览卡片：刷新 ----------
@@ -443,7 +597,10 @@ class OrgPage(FluentPage):
         self._uploaded = uploaded
 
     def _refresh_overview(self):
-        """把当前数字铺到四张卡上。所有数字都来自 _total/_by_kind/_error_rows。"""
+        """把当前数字铺到全部概览卡上。
+
+        数字只来自 _total/_uploaded/_by_kind/_error_rows/_unpaid_amount/_extras，
+        不在这里发请求、不重算——刷新路径与离线重算各算一次，避免两处走样。"""
         local_total = self._local_roster_total()
         total, missing = merge_totals(self._total, local_total)
 
@@ -474,6 +631,80 @@ class OrgPage(FluentPage):
         self.archive_value.setText(str(archive))
         self.archive_sub.setText(
             f"{archive} 人缺少电子志愿书档案" if archive else "档案齐全")
+
+        # 上传进度：分母用圆环那套总人数（本地/线上取大），分子是实际上传数
+        uploaded = min(self._uploaded, total) if total else 0
+        ratio = uploaded / total if total else 0.0
+        self.upload_value.setText(f"{ratio * 100:.0f}%" if total else "—")
+        self.upload_sub.setText(f"{uploaded} / {total} 人已上传" if total else "暂无数据")
+        self.upload_bar.set_ratio(ratio)
+
+        for key, value in self._strip.items():
+            value.setText(str(int(self._extras.get(key, 0) or 0)))
+
+        # 档案完整度：与圆环同一分母（总人数），三项各报「齐 / 总」
+        ecard_missing = int(self._extras.get("ecardMissing", 0) or 0)
+        dup = int(self._extras.get("dupMobile", 0) or 0)
+        self._complete_rows["uploaded"].setText(f"{uploaded} / {total}" if total else "—")
+        self._complete_rows["ecard"].setText(
+            f"{max(0, total - ecard_missing)} / {total}" if total else "—")
+        self._complete_rows["mobile"].setText(
+            f"{max(0, total - dup)} / {total}" if total else "—")
+
+        self._refresh_rank()
+        self._refresh_health()
+
+    def _branch_rows(self) -> list[tuple[str, int, int]]:
+        """从 orgStatsCache 取 (支部名, 异常数, 团员数)，按异常数降序。
+
+        异常数用该支部 error_rows 的条数——它就是名单里那批人，
+        与「异常团员」卡的数字同源。"""
+        cache = store.load().get("orgStatsCache") or {}
+        rows = []
+        for entry in cache.values():
+            name = str(entry.get("branch") or "").strip()
+            if not name:
+                continue
+            rows.append((name, len(entry.get("error_rows") or []),
+                         int(entry.get("total") or 0)))
+        rows.sort(key=lambda r: (-r[1], r[0]))
+        return rows
+
+    def _refresh_rank(self):
+        """支部异常排行：最多列 5 行，异常为 0 的不占地方。"""
+        for w in getattr(self, "_rank_widgets", []):
+            w.deleteLater()
+        self._rank_widgets = []
+
+        rows = [r for r in self._branch_rows() if r[1] > 0][:5]
+        self._rank_empty.setVisible(not rows)
+        for name, abnormal, total in rows:
+            line = QWidget()
+            h = QHBoxLayout(line)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(8)
+            label = note_label(name)
+            label.setWordWrap(False)
+            h.addWidget(label, 1)
+            # 右侧「异常 5 / 43」：分母是该支部人数，方便判断严重程度
+            stat = theme_font(StrongBodyLabel(f"{abnormal} / {total} 人"),
+                              P.FONT["caption"], int(QFont.Weight.DemiBold))
+            h.addWidget(stat, 0, Qt.AlignmentFlag.AlignRight)
+            self._rank_rows.addWidget(line)
+            self._rank_widgets.append(line)
+
+    def _refresh_health(self):
+        """账号状态：正常可统计 / 需处理（密码错、验证码、冷却等）。"""
+        accounts = list(getattr(self.window_ref.settings_page, "accounts", []) or [])
+        usable, bad = split_accounts(accounts)
+        if not accounts:
+            self._health_text.setText("—")
+            self._health_sub.setText("还没有配置支部账号")
+            return
+        # 一行读完：「6 / 6 正常」，有事才把待处理数点出来
+        self._health_text.setText(f"{len(usable)} / {len(accounts)}")
+        self._health_sub.setText(
+            f"全部可用" if not bad else f"{len(bad)} 个需重新登录，本轮统计会跳过")
 
     def _local_roster_total(self) -> int:
         """本地名单（系统配置里导入的 xlsx）人数；没导入时为 0。"""
@@ -597,14 +828,22 @@ class OrgPage(FluentPage):
             self.start_btn.setEnabled(False)
         # 保留现有展示：归零累加器但不重绘，新账号结果陆续抵达时逐个替换；
         # 整轮一无所获（全失败/全跳过）时回滚快照，组织状况数据不丢
-        self._snapshot = (
-            self._total, self._uploaded, dict(self._by_kind),
-            self._transfer_applied, self.transfer_note.text(), list(self._error_rows),
-            self._unpaid_amount)
+        # 用 dict 而不是越拼越长的元组：字段一多，元组解包漏一个就错位
+        self._snapshot = {
+            "total": self._total, "uploaded": self._uploaded,
+            "by_kind": dict(self._by_kind),
+            "transfer": self._transfer_applied,
+            "note": self.transfer_note.text(),
+            "rows": list(self._error_rows),
+            "unpaid": self._unpaid_amount,
+            "extras": dict(self._extras),
+        }
         self._total = self._uploaded = 0
         self._by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
         self._transfer_applied = 0
         self._unpaid_amount = 0.0
+        self._extras = {"dupMobile": 0, "ecardMissing": 0,
+                        "unpaidMonths": 0, "oldestUnpaid": 0}
         self._error_rows = []
         self._first_result = True
         self._ok_accounts = 0
@@ -652,11 +891,15 @@ class OrgPage(FluentPage):
         self._stopped = False
         if self._ok_accounts == 0:
             # 这一轮没有拿到任何账号数据：恢复刷新前的组织状况
-            (self._total, self._uploaded, byk,
-             self._transfer_applied, note, rows, unpaid) = self._snapshot
-            self._by_kind = byk
-            self._error_rows = rows
-            self._unpaid_amount = unpaid
+            snap = self._snapshot
+            self._total = snap["total"]
+            self._uploaded = snap["uploaded"]
+            self._by_kind = snap["by_kind"]
+            self._transfer_applied = snap["transfer"]
+            self._error_rows = snap["rows"]
+            self._unpaid_amount = snap["unpaid"]
+            self._extras = dict(snap.get("extras") or {})
+            note, rows = snap["note"], snap["rows"]
             self.transfer_note.setText(note)
             self._set_ratio(self._total, self._uploaded)
             self._update_bars()
@@ -718,24 +961,32 @@ class OrgPage(FluentPage):
                 "by_kind": dict(s.by_kind),
                 "transfer": (stats.get(user) or {}).get("transfer"),
                 "error_rows": [vars(r) for r in rows],
+                "extras": {
+                    "dupMobile": duplicate_mobiles(members),
+                    "ecardMissing": ecard_missing(members),
+                    "unpaidMonths": unpaid_months_total(members),
+                    "oldestUnpaid": oldest_unpaid(members),
+                },
                 "unpaidAmount": unpaid_amount(results),
                 "updatedAt": datetime.now().isoformat(timespec="seconds"),
             }
             # 逐个支部照样落盘（transfer 传 None = 保留上次在线结果）
             self._persist_account(user, branch, s.total, s.uploaded,
                                   dict(s.by_kind), None, rows,
-                                  unpaid=unpaid_amount(results))
+                                  unpaid=unpaid_amount(results),
+                                  extras=stats[user]["extras"])
 
         agg = self._aggregate(stats)
         return (agg["total"], agg["uploaded"], agg["by_kind"], agg["rows"],
-                agg["unpaid_amount"])
+                agg["unpaid_amount"], agg["extras"])
 
     def _apply_offline(self, data):
-        total, uploaded, by_kind, error_rows, unpaid = data
+        total, uploaded, by_kind, error_rows, unpaid, extras = data
         self._total, self._uploaded = total, uploaded
         self._by_kind = by_kind
         self._error_rows = error_rows
         self._unpaid_amount = unpaid
+        self._extras = dict(extras or {})
         self._set_ratio(total, uploaded)
         self._update_bars()
         self._clear_cards()
@@ -759,6 +1010,13 @@ class OrgPage(FluentPage):
         for k, v in (by_kind or {}).items():
             if k == _UNPAID:
                 self._unpaid_amount += float(v or 0)
+            elif k == _EXTRAS:
+                for ek, ev in (v or {}).items():
+                    # 最长欠缴取最大值，其余累加
+                    if ek == "oldestUnpaid":
+                        self._extras[ek] = max(int(self._extras.get(ek, 0)), int(ev or 0))
+                    else:
+                        self._extras[ek] = int(self._extras.get(ek, 0)) + int(ev or 0)
             elif k in self._by_kind:
                 self._by_kind[k] = self._by_kind.get(k, 0) + v
         if transfer:
@@ -801,6 +1059,9 @@ class OrgPage(FluentPage):
         amount = 0.0
         names: list[str] = []
         updated = ""
+        # 辅助指标：手机号重复、电子团员证未采集、欠缴月数、最长欠缴
+        extras = {"dupMobile": 0, "ecardMissing": 0, "unpaidMonths": 0,
+                  "oldestUnpaid": 0}
         for entry in (cache or {}).values():
             total += int(entry.get("total") or 0)
             uploaded += int(entry.get("uploaded") or 0)
@@ -809,6 +1070,9 @@ class OrgPage(FluentPage):
                     by_kind[k] += int(v or 0)
             rows.extend(ErrorMemberRow(**r) for r in entry.get("error_rows") or [])
             amount += float(entry.get("unpaidAmount") or 0)
+            extra = entry.get("extras") or {}
+            for key in extras:
+                extras[key] += int(extra.get(key) or 0)
             t = entry.get("transfer") or {}
             applied += int(t.get("applied") or 0)
             succeeded += int(t.get("succeeded") or 0)
@@ -819,10 +1083,10 @@ class OrgPage(FluentPage):
         return {"total": total, "uploaded": uploaded, "by_kind": by_kind, "rows": rows,
                 "applied": applied, "succeeded": succeeded, "pending": pending,
                 "returned": returned, "names": names, "updated": updated,
-                "unpaid_amount": round(amount, 2)}
+                "unpaid_amount": round(amount, 2), "extras": extras}
 
     def _persist_account(self, user, branch, total, uploaded, by_kind, transfer, rows,
-                         unpaid: float = 0.0):
+                         unpaid: float = 0.0, extras: dict | None = None):
         """本支部统计成功 → 写入配置 orgStatsCache；重启后从缓存恢复，不被清除。
 
         transfer 为 None（离线重算）时保留上次在线结果；已删除账号的旧条目
@@ -848,6 +1112,7 @@ class OrgPage(FluentPage):
                 # 金额单独存，别混进 by_kind 的四个分类里。
                 # 在线路径从旁路键取，离线路径由调用方显式传入。
                 "unpaidAmount": round(float(unpaid or by_kind.get(_UNPAID, 0) or 0), 2),
+                "extras": dict(extras or {}),
                 "updatedAt": datetime.now().isoformat(timespec="seconds"),
             }
 
