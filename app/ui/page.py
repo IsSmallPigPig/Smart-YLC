@@ -207,12 +207,12 @@ def theme_font(lbl, pixel_size: int, weight: int = 0):
 
 def section_title(text: str) -> StrongBodyLabel:
     """卡片区块标题：16px 加粗，比正文略大，与灰色说明文字拉开层级。"""
-    return theme_font(StrongBodyLabel(text), 16, int(QFont.Weight.DemiBold))
+    return theme_font(StrongBodyLabel(text), P.FONT["title"], int(QFont.Weight.DemiBold))
 
 
 def page_title(text: str) -> StrongBodyLabel:
     """页面主标题：整页最大最重的一行，卡片标题与正文都要明显弱于它。"""
-    return theme_font(StrongBodyLabel(text), 26, int(QFont.Weight.Bold))
+    return theme_font(StrongBodyLabel(text), P.FONT["page"], int(QFont.Weight.Bold))
 
 
 class PageBanner(QWidget):
@@ -235,8 +235,8 @@ class PageBanner(QWidget):
     ROW_H = 33          # 按钮行高
     PAD_X = 32
     PAD_BOTTOM = 16     # 按钮行距底边
-    TITLE_SIZE = 36
-    DESC_SIZE = 14
+    TITLE_SIZE = P.FONT["page"]
+    DESC_SIZE = P.FONT["body"]
     DESC_GAP = 8        # 标题与说明之间
 
     def __init__(self, title: str = "", desc: str = "", parent=None):
@@ -422,7 +422,7 @@ class PageHeader(QWidget):
 
 def sub_title(text: str) -> StrongBodyLabel:
     """卡片内分组小标题：15px 加粗，弱于卡片标题一级。"""
-    return theme_font(StrongBodyLabel(text), 15, int(QFont.Weight.DemiBold))
+    return theme_font(StrongBodyLabel(text), P.FONT["body"], int(QFont.Weight.DemiBold))
 
 
 class CardRow(QWidget):
@@ -469,7 +469,7 @@ class SettingRow(CardRow):
         text_lay = QVBoxLayout()
         text_lay.setContentsMargins(0, 0, 0, 0)
         text_lay.setSpacing(2)
-        text_lay.addWidget(theme_font(StrongBodyLabel(title), 14, int(QFont.Weight.DemiBold)))
+        text_lay.addWidget(theme_font(StrongBodyLabel(title), P.FONT["body"], int(QFont.Weight.DemiBold)))
         self._text_lay = text_lay
         self.desc_label = None
         if desc:
@@ -528,7 +528,7 @@ class CollapsibleCard(CardWidget):
                  desc: str = ""):
         super().__init__(parent)
         # 圆角与窗口圆角一致（约 10px），卡片四角与窗口四角同心，视觉更整
-        self.setBorderRadius(10)
+        self.setBorderRadius(P.RADIUS["card"])
         self._expanded = bool(expanded)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 12, 20, 12)

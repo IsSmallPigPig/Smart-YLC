@@ -84,11 +84,12 @@ def _pill(text: str, color: str) -> BodyLabel:
     c = QColor(color)
     fg = c.lighter(150).name() if isDarkTheme() else c.darker(115).name()
     lbl = BodyLabel(text)
-    theme_font(lbl, 12, int(QFont.Weight.Medium))
+    theme_font(lbl, P.FONT["caption"], int(QFont.Weight.Medium))
     lbl.setStyleSheet(
         f"background-color: {_tint(color, 40 if isDarkTheme() else 24)};"
         f"color: {fg}; border-radius: 9px; padding: 2px 10px;")
     return lbl
+
 
 
 class BranchCard(CardWidget):
@@ -103,7 +104,7 @@ class BranchCard(CardWidget):
         self.role = role
         self._hover = 0.0
         self.setClickEnabled(True)
-        self.setBorderRadius(8)
+        self.setBorderRadius(P.RADIUS["control"])
         self._arrow = FIF.CHEVRON_RIGHT_MED.icon().pixmap(14, 14)
 
     def _animate_hover(self, target: float):
@@ -737,7 +738,7 @@ class OrgManagePage(FluentPage):
 
         text = QVBoxLayout()
         text.setSpacing(3)
-        title = theme_font(StrongBodyLabel(b.label), 15, int(QFont.Weight.DemiBold))
+        title = theme_font(StrongBodyLabel(b.label), P.FONT["body"], int(QFont.Weight.DemiBold))
         text.addWidget(title)
         meta = b.secretary_text + (f" {b.grade}" if b.grade else "")
         text.addWidget(note_label(meta or "暂无团支书信息"))
@@ -766,7 +767,7 @@ class OrgManagePage(FluentPage):
         col = QVBoxLayout()
         col.setSpacing(1)
         col.setContentsMargins(12, 0, 12, 0)
-        num = theme_font(BodyLabel(value), 19, int(QFont.Weight.DemiBold))
+        num = theme_font(BodyLabel(value), P.FONT["title"], int(QFont.Weight.DemiBold))
         c = P.fg(role)
         num.setTextColor(c, c)
         col.addWidget(num, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -841,7 +842,7 @@ class OrgManagePage(FluentPage):
         head_lay.setSpacing(4)
         title_row = QHBoxLayout()
         title_row.setSpacing(12)
-        title_row.addWidget(theme_font(StrongBodyLabel(b.label), 22, int(QFont.Weight.DemiBold)))
+        title_row.addWidget(theme_font(StrongBodyLabel(b.label), P.FONT["metric"], int(QFont.Weight.DemiBold)))
         title_row.addStretch(1)
         # 访问支部：高亮主按钮 + 浏览器图标，进入内置浏览器打开该支部账号
         self.visit_btn = PrimaryPushButton(FIF.GLOBE, "访问支部")
@@ -855,7 +856,7 @@ class OrgManagePage(FluentPage):
 
         # 概览：三列数字 + 细分隔竖线，数值首次打开时从零滚动
         stat_card = CardWidget()
-        stat_card.setBorderRadius(8)
+        stat_card.setBorderRadius(P.RADIUS["control"])
         sv = QVBoxLayout(stat_card)
         sv.setContentsMargins(20, 16, 20, 16)
         sv.setSpacing(12)
@@ -875,7 +876,7 @@ class OrgManagePage(FluentPage):
                 nums.addWidget(line)
             block = QVBoxLayout()
             block.setSpacing(2)
-            n_lbl = theme_font(BodyLabel("0"), 28, int(QFont.Weight.DemiBold))
+            n_lbl = theme_font(BodyLabel("0"), P.FONT["metric"], int(QFont.Weight.DemiBold))
             c = P.fg(role)
             n_lbl.setTextColor(c, c)
             block.addWidget(n_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -912,7 +913,7 @@ class OrgManagePage(FluentPage):
             self.detail_lay.addWidget(self._empty_state("这个支部暂时没有团员"))
             return
         list_card = CardWidget()
-        list_card.setBorderRadius(8)
+        list_card.setBorderRadius(P.RADIUS["control"])
         lv = QVBoxLayout(list_card)
         lv.setContentsMargins(14, 4, 14, 4)
         lv.setSpacing(0)
@@ -972,7 +973,7 @@ class OrgManagePage(FluentPage):
         h.setContentsMargins(10, 9, 10, 9)
         h.setSpacing(12)
 
-        name = theme_font(BodyLabel(m.name), 13, int(QFont.Weight.DemiBold))
+        name = theme_font(BodyLabel(m.name), P.FONT["caption"], int(QFont.Weight.DemiBold))
         h.addWidget(name)
         h.addWidget(BodyLabel(m.mobile))
         if m.cls:

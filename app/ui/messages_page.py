@@ -598,7 +598,7 @@ class MessagesPage(FluentPage):
         卡片圆角放大到 12，整行铺满内容宽度（与首页/组织页共用 FluentPage
         的 32px 页边距），小间距分隔，恢复以前那种成组卡片的观感。"""
         card = CardWidget()
-        card.setBorderRadius(12)
+        card.setBorderRadius(P.RADIUS["panel"])
         card.setCursor(Qt.CursorShape.PointingHandCursor)
         outer = QVBoxLayout(card)
         outer.setContentsMargins(18, 10, 18, 10)
@@ -609,7 +609,7 @@ class MessagesPage(FluentPage):
         name = guess_member_name(v.mobile, v.content, self._name_index)
         tag_title = clean_title(v.title)
         title_text = name or tag_title or KIND_LABEL[v.kind]
-        title = theme_font(StrongBodyLabel(title_text), 14, int(QFont.Weight.DemiBold))
+        title = theme_font(StrongBodyLabel(title_text), P.FONT["body"], int(QFont.Weight.DemiBold))
         # 姓名、类别、未读各占一列固定宽度，否则每行标签起点都不一样，看着参差不齐
         title.setFixedWidth(84)
         head.addWidget(title, 0)

@@ -153,7 +153,7 @@ class StatusRow(CardWidget):
 
     def __init__(self, item: dict, parent=None):
         super().__init__(parent)
-        self.setBorderRadius(6)
+        self.setBorderRadius(P.RADIUS["control"] - 2)   # 嵌在卡片里的小控件再收一档
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 9, 14, 9)
         lay.setSpacing(10)
@@ -259,7 +259,7 @@ class StatTile(CardWidget):
     def __init__(self, title: str, value: str = "0", note: str = "",
                  icon: str = "", tone: str = "info", parent=None):
         super().__init__(parent)
-        self.setBorderRadius(10)
+        self.setBorderRadius(P.RADIUS["card"])
         self.setClickEnabled(True)
         self._tone = tone
         lay = QVBoxLayout(self)
@@ -272,11 +272,11 @@ class StatTile(CardWidget):
         if icon:
             self.icon_box = BadgeIcon(icon)
             head.addWidget(self.icon_box, 0, Qt.AlignmentFlag.AlignVCenter)
-        head.addWidget(theme_font(BodyLabel(title), 14, int(QFont.Weight.DemiBold)))
+        head.addWidget(theme_font(BodyLabel(title), P.FONT["body"], int(QFont.Weight.DemiBold)))
         head.addStretch(1)
         lay.addLayout(head)
 
-        self.value_lbl = theme_font(TitleLabel(value), 28, int(QFont.Weight.Bold))
+        self.value_lbl = theme_font(TitleLabel(value), P.FONT["metric"], int(QFont.Weight.Bold))
         lay.addWidget(self.value_lbl)
         self.note_lbl = note_label(note)
         lay.addWidget(self.note_lbl)
@@ -376,7 +376,8 @@ class ProgressToast(QWidget):
         lay.setContentsMargins(self.PAD + 12, self.PAD + 4,
                                self.PAD + 8, self.PAD + 16)
         lay.setSpacing(8)
-        self._label = BodyLabel(title, self)
+        # 进度文本会高频跳数（42/260（16%）），等宽字族避免宽度抖动
+        self._label = tabular_label(BodyLabel(title, self))
         lay.addWidget(self._label, 1)
         from qfluentwidgets import TransparentToolButton
 
@@ -512,3 +513,22 @@ class ProgressToast(QWidget):
                 fill.setWidth(max(6.0, track.width() * ratio))
                 painter.setBrush(QColor(P.BRAND))
                 painter.drawRoundedRect(fill, 1.5, 1.5)
+
+
+def tabular_label(label):
+    """给会跳数的标签套等宽字族，避免数字变化时左右抖。
+
+    规范要求动态数值用 tabular-nums；PyQt5 5.15 没有 QFont.setFeature，
+    开不了 OpenType 的 tnum，只能换等宽字族达到同样效果（每个字形等宽）。
+    只用在进度、耗时这类会连续变的数字上——静态统计值保持界面默认字体。
+    """
+    from PyQt5.QtGui import QFontDatabase
+
+    f = label.font()
+    families = QFontDatabase().families()
+    for name in ("Consolas", "Menlo", "DejaVu Sans Mono", "Courier New"):
+        if name in families:
+            f.setFamily(name)
+            break
+    label.setFont(f)
+    return label

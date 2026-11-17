@@ -73,7 +73,7 @@ class _DropZone(QWidget):
         # 这是空态的主文案，不能跟说明一样灰：毛玻璃上会整行消失
         title.setTextColor(QColor("#20242b"), QColor("#e6e9ee"))
         lay.addWidget(title, 0, Qt.AlignmentFlag.AlignHCenter)
-        hint = note_label("支持多选 · 自动扫描子文件夹")
+        hint = note_label("支持多选，自动扫描子文件夹")
         hint.setWordWrap(False)   # 居中单行，折行会把这个框撑成两截
         lay.addWidget(hint, 0, Qt.AlignmentFlag.AlignHCenter)
 
@@ -158,7 +158,7 @@ class _FolderCard(CardWidget):
     def __init__(self, name: str, path: str, tags: list[tuple[str, str]],
                  on_remove=None, parent=None):
         super().__init__(parent)
-        self.setBorderRadius(8)
+        self.setBorderRadius(P.RADIUS["control"])
         row = QHBoxLayout(self)
         row.setContentsMargins(16, 10, 10, 10)
         row.setSpacing(12)
@@ -460,7 +460,7 @@ class UploadPage(FluentPage):
         # 概览卡：把「共 N 份：正常…，异常…」那句话换成四个数字。
         # 用户先看数字，再决定要不要往下看清单；说明文字能省就省。
         self.summary_card = CardWidget()
-        self.summary_card.setBorderRadius(10)
+        self.summary_card.setBorderRadius(P.RADIUS["card"])
         summary_lay = QHBoxLayout(self.summary_card)
         summary_lay.setContentsMargins(20, 12, 20, 12)
         summary_lay.setSpacing(0)
@@ -798,7 +798,7 @@ class UploadPage(FluentPage):
             notes.append(f"另有 {ignored} 个 PDF 已忽略")
         if missing_dirs:
             notes.append(f"{len(missing_dirs)} 个目录已不存在")
-        self._set_status(" · ".join(notes))
+        self._set_status("，".join(notes))
 
         self._empty_text = "还没有可上传的档案"
         self.upload_btn.setEnabled(any(s.usable for s in statuses))

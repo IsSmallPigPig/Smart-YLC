@@ -319,8 +319,9 @@ class MainWindow(MSFluentWindow):
                 label = HEALTH_LABEL.get(status, "状态异常").split("（")[0]
                 buckets[label] = buckets.get(label, 0) + 1
             bad = sum(buckets.values()) or len(notices)
-            detail = " · ".join(f"{k} {v}" for k, v in
-                                sorted(buckets.items(), key=lambda kv: -kv[1]))
+            # 不用中点分隔：不同系统字体下中点基线不一致，改用逗号 + 空格
+            detail = "，".join(f"{k} {v}" for k, v in
+                              sorted(buckets.items(), key=lambda kv: -kv[1]))
             content = f"{bad} 个账号异常" + (f"：{detail}" if detail else "")
             bar = self._show_notice_bar(Notice(
                 key="accounts", title="", detail=content, brief=content,

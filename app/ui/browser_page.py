@@ -1056,7 +1056,7 @@ class BrowserWindow(FluentWindowBase):
         bar = InfoBar(
             icon=InfoBarIcon.SUCCESS,
             title="已截图",
-            content=f"已复制到剪贴板 · {os.path.basename(path)}",
+            content=f"已复制到剪贴板：{os.path.basename(path)}",
             orient=Qt.Horizontal,
             isClosable=True,
             position=InfoBarPosition.BOTTOM_RIGHT,

@@ -331,7 +331,7 @@ class OrgPage(FluentPage):
         lay.setSpacing(8)
         head = QHBoxLayout()
         head.setSpacing(6)
-        head.addWidget(theme_font(StrongBodyLabel(title), 14, int(QFont.Weight.DemiBold)))
+        head.addWidget(theme_font(StrongBodyLabel(title), P.FONT["title"], int(QFont.Weight.DemiBold)))
         head.addStretch(1)
         lay.addLayout(head)
         if hint:
@@ -341,7 +341,7 @@ class OrgPage(FluentPage):
 
     def _build_overview_card(self) -> CardWidget:
         """团员概览：多段圆环，圆心是总团员数，环上按类别分色。"""
-        card, lay = self._card_shell("团员概览", "环上按异常类别分段")
+        card, lay = self._card_shell("团员概览")
         row = QHBoxLayout()
         row.setSpacing(14)
         self.ring = SegmentedDonut()
@@ -361,7 +361,7 @@ class OrgPage(FluentPage):
             name.setTextColor(*P.text_colors("fg2"))
             line.addWidget(name)
             line.addStretch(1)
-            value = theme_font(StrongBodyLabel("0"), 13, int(QFont.Weight.DemiBold))
+            value = theme_font(StrongBodyLabel("0"), P.FONT["caption"], int(QFont.Weight.DemiBold))
             line.addWidget(value)
             self._legend_rows[key] = (dot, value)
             self.ring_legend.addLayout(line)
@@ -382,14 +382,14 @@ class OrgPage(FluentPage):
 
         head = QHBoxLayout()
         head.setSpacing(6)
-        head.addWidget(theme_font(StrongBodyLabel("异常团员"), 14, int(QFont.Weight.DemiBold)))
+        head.addWidget(theme_font(StrongBodyLabel("异常团员"), P.FONT["title"], int(QFont.Weight.DemiBold)))
         head.addStretch(1)
         arrow = CaptionLabel("查看 ›")
         arrow.setTextColor(*P.text_colors("brand"))
         head.addWidget(arrow)
         lay.addLayout(head)
 
-        self.abnormal_value = theme_font(StrongBodyLabel("0"), 30, int(QFont.Weight.Bold))
+        self.abnormal_value = theme_font(StrongBodyLabel("0"), P.FONT["metric"], int(QFont.Weight.Bold))
         lay.addWidget(self.abnormal_value)
         self.abnormal_sub = note_label("存在异常项，点卡片查看名单")
         lay.addWidget(self.abnormal_sub)
@@ -410,10 +410,10 @@ class OrgPage(FluentPage):
 
     def _build_fees_card(self) -> CardWidget:
         """欠缴团费：展示总计要补缴的金额。"""
-        card, lay = self._card_shell("欠缴团费", "需补缴金额合计")
+        card, lay = self._card_shell("欠缴团费")
         row = QHBoxLayout()
         row.setSpacing(4)
-        self.fees_amount = theme_font(StrongBodyLabel("0"), 30, int(QFont.Weight.Bold))
+        self.fees_amount = theme_font(StrongBodyLabel("0"), P.FONT["metric"], int(QFont.Weight.Bold))
         self.fees_amount.setTextColor(*P.text_colors("danger"))
         row.addWidget(self.fees_amount)
         unit = CaptionLabel("元")
@@ -428,8 +428,8 @@ class OrgPage(FluentPage):
 
     def _build_archive_card(self) -> CardWidget:
         """没有档案：只缺电子志愿书档案的人数。"""
-        card, lay = self._card_shell("没有档案", "已报到但缺电子志愿书")
-        self.archive_value = theme_font(StrongBodyLabel("0"), 30, int(QFont.Weight.Bold))
+        card, lay = self._card_shell("没有档案")
+        self.archive_value = theme_font(StrongBodyLabel("0"), P.FONT["metric"], int(QFont.Weight.Bold))
         lay.addWidget(self.archive_value)
         self.archive_sub = note_label("0 人缺少电子志愿书档案")
         lay.addWidget(self.archive_sub)
@@ -907,7 +907,7 @@ class OrgPage(FluentPage):
         v.setSpacing(5)
 
         head = QHBoxLayout()
-        title = theme_font(StrongBodyLabel(name or ""), 15, int(QFont.Weight.DemiBold))
+        title = theme_font(StrongBodyLabel(name or ""), P.FONT["body"], int(QFont.Weight.DemiBold))
         head.addWidget(title)
         if mobile and mobile != "—":
             head.addSpacing(8)

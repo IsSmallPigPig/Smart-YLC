@@ -202,7 +202,7 @@ class HomePage(FluentPage):
             grid.addWidget(tile, 0, index)
 
         chart = CardWidget()
-        chart.setBorderRadius(10)
+        chart.setBorderRadius(P.RADIUS["card"])
         chart_lay = QHBoxLayout(chart)
         chart_lay.setContentsMargins(18, 12, 18, 12)
         chart_lay.setSpacing(24)
