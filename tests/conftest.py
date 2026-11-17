@@ -30,6 +30,21 @@ def qapp_session():
     # 应用入口 app/main.py 里也是这么做的，测试少了这一步会撞在 QtWebEngine 初始化上
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     _APP = QApplication.instance() or QApplication([])
+    # PyQt5 在 GC 期间动态加载 Qt 扩展模块会段错误（表现为随机 abort，
+    # 栈顶固定是 Garbage-collecting → importlib → 某个 PyQt5 子模块）。
+    # 两条一起做：
+    #   1) 把用到的 Qt 子模块在这里预先导入，之后不再触发「GC 中途加载扩展」；
+    #   2) 冻结当前对象，减少需要扫描的总量。
+    import gc
+
+    for _mod in ("PyQt5.QtNetwork", "PyQt5.QtSvg", "PyQt5.QtXml",
+                 "PyQt5.QtTest", "PyQt5.QtWebEngineWidgets"):
+        try:
+            __import__(_mod)
+        except Exception:
+            pass
+    gc.collect()
+    gc.freeze()
     yield _APP
     # 不 quit：Qt 在解释器退出时自行收尾，提前 quit 会让残留的 QTimer 依次报错
 

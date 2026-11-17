@@ -462,10 +462,16 @@ class SettingRow(CardRow):
         # 仍保持 2px 的紧行距——那是文字行距，和这张外边距是两回事。
         lay.setContentsMargins(0, 12, 0, 12)
         lay.setSpacing(14)
+        # 图标位固定占位：没有图标的行留同样宽的空位，否则同一张卡里
+        # 有的行文字从图标后开始、有的行从卡片左缘开始，左缘参差（实测差 32px）
         if icon is not None:
             ic = IconWidget(icon)
             ic.setFixedSize(18, 18)
             lay.addWidget(ic, 0, Qt.AlignmentFlag.AlignVCenter)
+        else:
+            spacer = QWidget(self)
+            spacer.setFixedSize(18, 18)
+            lay.addWidget(spacer, 0, Qt.AlignmentFlag.AlignVCenter)
         text_lay = QVBoxLayout()
         text_lay.setContentsMargins(0, 0, 0, 0)
         text_lay.setSpacing(2)

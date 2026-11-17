@@ -20,12 +20,51 @@ def apply_theme_mode(mode: str) -> Theme:
     return theme
 
 
-# 平台字体栈：Windows 用 Segoe UI + Microsoft YaHei UI（后者是为界面字号调过
-# hinting 的那一版，小字比旧 Microsoft YaHei 干净）；macOS 用苹方。
+# 内置字体：Maple Mono CN（OFL 许可，随程序打包）。
+#
+# 选它的三个理由：中英文与数字**全部等宽**（中文恰为西文 2 倍宽），
+# 界面里数字跳动、表头对齐、代码风格文案都不会左右抖；一套字族覆盖全站，
+# 不必在中英混排时切换字体；文件自带中文，不依赖系统装了什么。
+#
+# FONTS 保留成「首选内置，回退系统」，字体文件缺失时界面仍然可读。
+INTERNAL_FONT = "Maple Mono CN"
 FONTS = {
-    "darwin": ["PingFang SC"],
-    "win32": ["Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei"],
+    "darwin": [INTERNAL_FONT, "PingFang SC"],
+    "win32": [INTERNAL_FONT, "Microsoft YaHei UI", "Microsoft YaHei"],
 }
+FONT_FILE = "MapleMono-CN-Regular.ttf"
+
+_UNSET = object()
+_REGISTERED_FAMILY = _UNSET
+
+
+def register_fonts() -> str | None:
+    """注册内置字体，返回实际族名；失败返回 None（调用方回退系统字体）。
+
+    只注册一次：QFontDatabase 会累积，重复注册同一个文件会占内存。
+    """
+    global _REGISTERED_FAMILY
+    if _REGISTERED_FAMILY is not _UNSET:
+        return _REGISTERED_FAMILY or None
+    _REGISTERED_FAMILY = ""
+    try:
+        from PyQt5.QtGui import QFontDatabase
+
+        from app.ui.brand import assets_dir
+
+        path = assets_dir() / "fonts" / FONT_FILE
+        if not path.is_file():
+            return None
+        fid = QFontDatabase.addApplicationFont(str(path))
+        if fid == -1:
+            return None
+        families = QFontDatabase.applicationFontFamilies(fid)
+        if families:
+            _REGISTERED_FAMILY = families[0]
+            return _REGISTERED_FAMILY
+    except Exception:
+        pass
+    return None
 
 
 def _apply_font(families: list[str] | None) -> None:
@@ -42,14 +81,21 @@ def _apply_font(families: list[str] | None) -> None:
 
     font = QApplication.font()
     if families:
-        font.setFamilies(families)
+        # 用 setFamily 而不是 setFamilies：Qt5 在 macOS 上 setFamilies 对
+        # QApplication.setFont 不生效（读回来还是 .AppleSystemUIFont），
+        # 只有单族名才会真正换掉界面字体；族栈仍交给 setFontFamilies 兜底。
+        font.setFamily(families[0])
     font.setStyleStrategy(font.styleStrategy() | QFont.StyleStrategy.PreferAntialias)
     QApplication.setFont(font)
 
 
 def setup_app() -> None:
-    """按平台设置组件字体栈，并按配置应用明暗模式（默认跟随系统）。"""
-    families = FONTS.get(sys.platform)
+    """注册内置字体、套用字体栈，并按配置应用明暗模式（默认跟随系统）。"""
+    # 先注册：注册成功时把实际族名放到字体栈最前，setFontFamilies 才认得到
+    internal = register_fonts()
+    families = list(FONTS.get(sys.platform) or [])
+    if internal:
+        families = [internal] + [f for f in families if f != internal]
     if families:
         setFontFamilies(families)
     _apply_font(families)

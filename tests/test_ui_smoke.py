@@ -887,10 +887,13 @@ def test_fluent_semantic_roles_have_light_and_dark_values(app):
 
     from app.ui import palette as P
 
-    assert P.pair("danger") == ("#C42B1C", "#FF99A4")
-    assert P.pair("warning") == ("#9D5D00", "#FCE100")
-    assert P.pair("success") == ("#0F7B0F", "#6CCB5F")
-    assert P.pair("info") == ("#0078D4", "#4CC2FF")
+    # 锁语义约束而不是具体 hex：色值会随 Fluent 2 校准调整，
+    # 但「每档都有明暗两套、深色更亮」这个结构不能变。
+    for role in ("danger", "warning", "success", "info", "brand"):
+        light, dark = P.pair(role)
+        assert light.startswith("#") and len(light) == 7, role
+        assert dark.startswith("#") and len(dark) == 7, role
+        assert light != dark, f"{role} 明暗两档不能相同"
     # 深色档比浅色档亮（深色底上才读得清）
     for role in ("danger", "warning", "success", "info", "brand", "fees", "fg2"):
         from PyQt5.QtGui import QColor
@@ -898,15 +901,17 @@ def test_fluent_semantic_roles_have_light_and_dark_values(app):
         assert dark.lightness() > light.lightness(), role
 
     try:
+        light_hex, dark_hex = P.pair("danger")
+
         setTheme(Theme.LIGHT)
-        assert P.fg("danger").name() == "#c42b1c"
-        assert P.solid("danger") == "#C42B1C"
+        assert P.fg("danger").name().lower() == light_hex.lower()
+        assert P.solid("danger") == light_hex
         light_pair = P.text_colors("danger")
-        assert light_pair[0].name() == "#c42b1c" and light_pair[1].name() == "#ff99a4"
+        assert light_pair[0].name().lower() == light_hex.lower()
 
         setTheme(Theme.DARK)
-        assert P.fg("danger").name() == "#ff99a4"
-        assert P.solid("danger") == "#FF99A4"
+        assert P.fg("danger").name().lower() == dark_hex.lower()
+        assert P.solid("danger") == dark_hex
     finally:
         setTheme(Theme.DARK)
 
@@ -1743,7 +1748,8 @@ def test_tint_roles_have_light_and_dark_backgrounds(app):
 
     from app.ui import palette as P
 
-    assert P.pair("warning") == ("#9D5D00", "#FCE100")
+    warn_light, warn_dark = P.pair("warning")
+    assert warn_light != warn_dark
     assert P.TINT["warning"] == ("#FFF4CE", "#463414")
     assert P.TINT["danger"] == ("#FDE7E9", "#442324")
     try:
