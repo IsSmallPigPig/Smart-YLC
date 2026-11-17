@@ -2,6 +2,13 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.0.1
+
+- [ac8d63b] fix(ci): Windows x86 构建钉 PyMuPDF 1.24.11，避免源码编译卡死
+- [f05c605] feat(org): 欠缴团费与没有档案卡可点进对应名单
+
+@AnkoQAQ
+
 ## v1.0.0
 
 - [6c9baa5] feat: 运行日志与崩溃报告、Qt 性能优化、死代码清理（版本重置 v1.0.0）
