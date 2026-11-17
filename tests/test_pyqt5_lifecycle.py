@@ -77,3 +77,31 @@ def test_health_worker_parented_to_page(app):
     w.start()
     w.wait(1000)
     assert isinstance(w, QThread)
+
+
+def test_smoke_result_file_is_written(tmp_path, monkeypatch):
+    """--smoke-result 把结论写进文件。
+
+    Windows 的 --windowed 产物没有控制台，CI 从管道既拿不到 stdout 也拿不到
+    可靠退出码，只能靠这个文件判断冒烟是否通过；这一步没写成功，CI 就会在
+    冒烟环节红掉（曾因此连挂三个 Windows 变体）。"""
+    import sys as _sys
+
+    from app import main as main_mod
+
+    out = tmp_path / "smoke.txt"
+    monkeypatch.setattr(_sys, "argv", ["main.py", "--smoke-test",
+                                       "--smoke-result", str(out)])
+    main_mod._write_smoke_result("SMOKE OK")
+    assert out.read_text(encoding="utf-8").strip() == "SMOKE OK"
+
+
+def test_smoke_result_absent_without_flag(tmp_path, monkeypatch):
+    """没传 --smoke-result 时不落任何文件：正常启动不该在磁盘上留垃圾。"""
+    import sys as _sys
+
+    from app import main as main_mod
+
+    monkeypatch.setattr(_sys, "argv", ["main.py"])
+    main_mod._write_smoke_result("SMOKE OK")
+    assert not any(tmp_path.iterdir())

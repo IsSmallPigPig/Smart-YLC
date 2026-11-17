@@ -107,7 +107,8 @@ jobs:
     # 它们的依赖组合完全不同（老解释器、老 PyInstaller），分开跑不会互相拖累。
     runs-on: windows-latest
     env:
-      ARTIFACT_SUFFIX: Win-x64
+      # 与已发布版本一致的产物名（Windows-x64），legacy 那些沿用同一套命名前缀
+      ARTIFACT_SUFFIX: Windows-x64
       PYTHON_BIT: "64"
     steps:
       - uses: actions/checkout@v5
@@ -129,6 +130,27 @@ jobs:
         # 脚本输出固定为 dist/SmartYouth/智慧团委.exe，签名与 Inno Setup 都按这个路径取件
         run: python scripts/build.py
         shell: pwsh
+
+      - name: 冒烟检查（冻结产物真能起窗口）
+        # 分析期 import 通过不代表能跑：缺 DLL、缺 Qt 插件都在这一步暴露。
+        # 产物是 --windowed（无控制台），从管道拿不到 stdout 与退出码，
+        # 让程序把结论写进文件，这里读文件判断。
+        shell: pwsh
+        run: |
+          $env:HOME = Join-Path $env:TEMP "smoke-x64"
+          $env:USERPROFILE = $env:HOME
+          $result = Join-Path $env:TEMP "smoke-result-x64.txt"
+          Remove-Item $result -ErrorAction SilentlyContinue
+          $exe = "dist\SmartYouth\$($env:APP_DISPLAY_NAME).exe"
+          if (-not (Test-Path $exe)) { throw "找不到打包产物 $exe" }
+          # 单行写，不用反引号续行：YAML 块里行尾空格会让续行悄悄失效
+          $p = Start-Process -FilePath $exe -PassThru -Wait -ArgumentList "--smoke-test", "--smoke-result", $result
+          Write-Host "退出码: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "冻结产物冒烟失败（退出码 $($p.ExitCode)）" }
+          if (-not (Test-Path $result)) { throw "冒烟没有写出结果文件 $result" }
+          $text = Get-Content $result -Raw
+          Write-Host $text
+          if ($text -notmatch "SMOKE OK") { throw "冒烟结果里没有 SMOKE OK" }
 
       - name: 准备代码签名证书
         id: cert
@@ -304,7 +326,7 @@ jobs:
       matrix:
         include:
           # Windows 10+ 32 位：解释器仍是 3.11，只是 32 位，用新版 PyInstaller
-          - suffix: Win-x86
+          - suffix: Windows-x86
             bit: "32"
             python: "3.11"
             pyinstaller: "pyinstaller"
@@ -352,15 +374,24 @@ jobs:
 
       - name: 冒烟检查（冻结产物真能起窗口）
         # 分析期 import 通过不代表能跑：缺 DLL、缺 Qt 插件都在这一步暴露。
-        # --smoke-test 会构造主窗口后自行退出，HOME 指到临时目录不碰真实配置。
+        # 产物是 --windowed（无控制台），从管道既拿不到 stdout 也拿不到退出码，
+        # 所以让程序把结论写进文件，这里读文件判断。
         shell: pwsh
         run: |
           $env:HOME = Join-Path $env:TEMP "smoke-${{ matrix.suffix }}"
           $env:USERPROFILE = $env:HOME
-          $out = & "dist\SmartYouth\$($env:APP_DISPLAY_NAME).exe" --smoke-test 2>&1
-          $out | Write-Host
-          if ($LASTEXITCODE -ne 0) { throw "冻结产物冒烟失败（退出码 $LASTEXITCODE）" }
-          if (-not ($out -match "SMOKE OK")) { throw "冒烟输出里没有 SMOKE OK" }
+          $result = Join-Path $env:TEMP "smoke-result-${{ matrix.suffix }}.txt"
+          Remove-Item $result -ErrorAction SilentlyContinue
+          $exe = "dist\SmartYouth\$($env:APP_DISPLAY_NAME).exe"
+          if (-not (Test-Path $exe)) { throw "找不到打包产物 $exe" }
+          # 单行写，不用反引号续行：YAML 块里行尾空格会让续行悄悄失效
+          $p = Start-Process -FilePath $exe -PassThru -Wait -ArgumentList "--smoke-test", "--smoke-result", $result
+          Write-Host "退出码: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "冻结产物冒烟失败（退出码 $($p.ExitCode)）" }
+          if (-not (Test-Path $result)) { throw "冒烟没有写出结果文件 $result" }
+          $text = Get-Content $result -Raw
+          Write-Host $text
+          if ($text -notmatch "SMOKE OK") { throw "冒烟结果里没有 SMOKE OK" }
 
       - name: 安装 Inno Setup
         run: choco install innosetup --no-progress -y
@@ -372,8 +403,10 @@ jobs:
           if (-not $ver -or $ver -eq 'workflow_dispatch') { $ver = "1.0.0" }
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "找不到 ISCC.exe（Inno Setup 未装好）" }
-          & $iscc "/DAppVersion=$ver" "/DArtifactSuffix=$env:ARTIFACT_SUFFIX" `
-                  "/DBitWidth=$env:PYTHON_BIT" "installer.iss"
+          # 参数用数组传，不靠反引号续行
+          $defs = @("/DAppVersion=$ver", "/DArtifactSuffix=$env:ARTIFACT_SUFFIX",
+                    "/DBitWidth=$env:PYTHON_BIT")
+          & $iscc @defs "installer.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译安装包失败" }
           Get-Item "dist\installer\SmartYouth-$($env:ARTIFACT_SUFFIX)-setup.exe" |
             Select-Object Name, Length
@@ -486,12 +519,12 @@ jobs:
             echo "## 下载"
             echo "- **macOS（Apple Silicon / M 系列）**：\`SmartYouth-macOS-arm64.dmg\`（挂载后是「智慧团委.app」）"
             echo "- **Windows 10/11（64 位）**：\`SmartYouth-Windows-x64-setup.exe\`（每用户安装，不需要管理员权限、不弹 UAC）"
-            echo "- **Windows 10/11（32 位）**：\`SmartYouth-Win-x86-setup.exe\`"
+            echo "- **Windows 10/11（32 位）**：\`SmartYouth-Windows-x86-setup.exe\`"
             echo "- **Windows 7（64 位）**：\`SmartYouth-Win7-x64-setup.exe\`"
             echo "- **Windows 7（32 位）**：\`SmartYouth-Win7-x86-setup.exe\`"
             echo "- **Linux（x86_64）**：\`SmartYouth-Linux-x64.deb\`（装好后命令 \`smartyouth\` 或应用列表里的「智慧团委」；面向 Ubuntu 22.04+/Debian 12+）"
             echo
-            echo "> macOS 仅支持 Apple Silicon。Windows 按系统与位数选包：Win10/11 用 Win-x64 或 Win-x86，Windows 7 用 Win7-x64 或 Win7-x86（Win7 包基于 Python 3.8，无法使用 Win10/11 包）。安装包用英文名（GitHub 下载文件名不支持中文），装好后的应用名是「智慧团委」。"
+            echo "> macOS 仅支持 Apple Silicon。Windows 按系统与位数选包：Win10/11 用 Windows-x64 或 Windows-x86，Windows 7 用 Win7-x64 或 Win7-x86（Win7 包基于 Python 3.8，无法使用 Win10/11 包）。安装包用英文名（GitHub 下载文件名不支持中文），装好后的应用名是「智慧团委」。"
             echo
             echo "首次运行：macOS 若提示「无法验证开发者」，右键 → 打开，或执行 \`xattr -cr /Applications/智慧团委.app\`；"
             echo "Windows 双击安装包，SmartScreen 提示时点「更多信息 → 仍要运行」。"

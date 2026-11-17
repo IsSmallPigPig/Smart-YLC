@@ -39,6 +39,24 @@ def _enter_demo_home() -> str:
     return home
 
 
+def _write_smoke_result(text: str) -> None:
+    """冒烟结论落盘：`--smoke-result <路径>` 指定位置，默认不写。
+
+    不写死路径——打包产物在 CI 里读写仓库目录之外的位置更安全，也便于本地排查。
+    """
+    argv = sys.argv
+    if "--smoke-result" not in argv:
+        return
+    index = argv.index("--smoke-result")
+    if index + 1 >= len(argv):
+        return
+    try:
+        with open(argv[index + 1], "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except OSError:
+        pass
+
+
 def _smoke_test() -> int:
     """构造 QApplication + MainWindow 走一遍真实启动链路，然后退出。
 
@@ -79,6 +97,9 @@ def _smoke_test() -> int:
     w.close()
     app.processEvents()
     print("SMOKE OK", flush=True)
+    # Windows 的 --windowed 产物没有控制台：调用方从管道拿不到 stdout，也拿不到
+    # 可靠的退出码。把结论同时写一份文件，CI 读文件判断，两边都成立。
+    _write_smoke_result("SMOKE OK")
     # 主窗口带后台线程（批量构建、定时器），走 Qt 正常退出会撞在线程析构顺序上；
     # 冒烟只要「构造成功」这个结论，输出后直接硬退，退出码照常 0
     import os

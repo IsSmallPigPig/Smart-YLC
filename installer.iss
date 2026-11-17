@@ -29,13 +29,14 @@
 #ifndef SelfSigned
   #define SelfSigned 0
 #endif
-; 产物后缀与位宽：workflow 按矩阵传入（Win-x64 / Win-x86 / Win7-x64 / Win7-x86）。
-; 本地直接双击编译时不带这些，落回原来的 x64 命名，行为不变。
+; 产物后缀与位宽：workflow 按矩阵传入（Windows-x64 / Windows-x86 / Win7-x64 / Win7-x86）。
+; 本地直接双击编译时不带这些，落回原有的 64 位命名，行为不变。
 #ifndef ArtifactSuffix
-  #define ArtifactSuffix "Win-x64"
+  #define ArtifactSuffix "Windows-x64"
 #endif
+; 位宽用数值而不是字符串：ISPP 的 #if 按数值比较最稳，不依赖字符串比较的支持
 #ifndef BitWidth
-  #define BitWidth "64"
+  #define BitWidth 64
 #endif
 
 [Setup]
@@ -57,7 +58,7 @@ UninstallDisplayIcon={app}\{#AppName}.exe
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-#if BitWidth == "64"
+#if BitWidth == 64
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 #else
