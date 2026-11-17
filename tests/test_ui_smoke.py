@@ -281,23 +281,92 @@ def test_autostart_does_not_require_accounts(app, isolated_store, monkeypatch):
     assert calls == ["install"]
 
 
-def test_rounded_corners_are_cross_platform(app):
-    """窗口圆角三档都能落地，不再只有 Windows 11 有。
+def test_rounded_corners_dispatch_by_platform(app):
+    """窗口圆角按平台分派，策略与副作用都要对。
 
-    macOS 系统自带圆角；Win11 走 DWM 偏好；Win10/其它用 setMask 自切。
-    之前 Win10 与 Linux 直接返回 False，等于那些平台上所有圆角卡片都顶在
-    一张方角窗户上。
+    macOS 系统自带；Win11 只写 DWM 圆角偏好；Win10 退到 setMask；
+    Linux 不进 setMask（Wayland 不支持窗口遮罩，X11 上会把阴影一起裁掉，
+    而桌面环境本来就有圆角）。
     """
-    from app.services.materials import apply_rounded_corners, apply_mask_corners
+    import sys
+
+    from app.services.materials import (
+        apply_mask_corners,
+        clear_corners,
+        set_corners,
+        win11_build,
+    )
 
     widget = QWidget()
     widget.resize(400, 300)
-    # 遮罩式圆角在任何平台都能切（不依赖系统接口），且切完确实有遮罩
+
+    # 遮罩实现本身在任何平台都能切（不依赖系统接口）
     assert apply_mask_corners(widget, 10) is True
     assert not widget.mask().isEmpty()
+    clear_corners(widget)
+    assert widget.mask().isEmpty(), "clear_corners 必须把遮罩撤掉"
 
-    # 统一入口按平台分派：无论哪个平台，都不该出现「有圆角能力却返回 False」
-    assert apply_rounded_corners(widget) is True
+    # 统一入口在当前平台上的预期结果
+    if sys.platform == "darwin":
+        assert set_corners(widget, 10) is True
+    elif sys.platform == "win32":
+        assert set_corners(widget, 10) is (win11_build() >= 0)
+    else:
+        # Linux / 其它：不切遮罩，避免 Wayland 不支持、X11 裁掉阴影
+        assert set_corners(widget, 10) is False
+        assert widget.mask().isEmpty(), "非 Windows 平台不该留遮罩"
+
+
+def test_corner_setting_is_idempotent(app):
+    """同尺寸重复调用不再碰系统接口。
+
+    resizeEvent 会连发，Win10 那条路是 SetWindowRgn——每帧调一次会掉帧，
+    更糟的是它可能触发新的尺寸确认，形成自激。这里锁住「尺寸没变就跳过」。
+    """
+    import sys
+
+    from app.services import materials
+
+    widget = QWidget()
+    widget.resize(640, 480)
+    # macOS 走系统圆角，压根不调实现；那条路上「幂等」由系统保证，
+    # 这里只验会真正调用系统接口的平台
+    if sys.platform == "darwin":
+        from app.services.materials import set_corners
+
+        assert set_corners(widget, 10) is True
+        return
+
+    calls = []
+    orig = materials.apply_mask_corners
+    orig_dwm = materials.apply_dwm_round_corners
+
+    def spy_mask(w, r=10):
+        calls.append(("mask", r))
+        return orig(w, r)
+
+    def spy_dwm(w):
+        calls.append(("dwm", 0))
+        return orig_dwm(w)
+
+    materials.apply_mask_corners = spy_mask
+    materials.apply_dwm_round_corners = spy_dwm
+    try:
+        materials.clear_corners(widget)
+        materials.set_corners(widget, 10)
+        first = len(calls)
+        # 同尺寸再调三次：不应再产生任何系统调用
+        for _ in range(3):
+            materials.set_corners(widget, 10)
+        assert len(calls) == first, f"同尺寸重复切圆角了：{calls}"
+
+        # 尺寸变了才应该重切
+        widget.resize(700, 500)
+        materials.set_corners(widget, 10)
+        assert len(calls) > first, "尺寸变化后应重新切圆角"
+    finally:
+        materials.apply_mask_corners = orig
+        materials.apply_dwm_round_corners = orig_dwm
 
 
 def test_material_default_is_mica(app, isolated_store):
@@ -2059,3 +2128,82 @@ def test_donut_segments_are_rounded_and_concentric(app):
         edge = (cols[xs[0]] + cols[xs[-1]]) / 2
         # 圆头两端比最厚处薄，平头则三处基本一样
         assert edge < thickest * 0.75, "分段两端应圆角收窄，不像平头切面"
+
+
+def test_resize_path_never_touches_window_frame():
+    """resizeEvent 的同步路径里不许改窗口 frame。
+
+    `addShadowEffect` 内部是 `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`，
+    它会让 DWM 重算 frame 并发出新的 WM_SIZE；在 resize 回调里调它就成了
+    「resize → 改 frame → resize」自激循环——Windows 上表现为启动后 CPU 打满、
+    进主界面即闪退。
+
+    只检查真实调用（去掉注释与 docstring），否则解释这条坑的注释本身会把
+    测试判红。
+    """
+    import io
+    import inspect
+    import tokenize
+
+    from app.ui.main_window import MainWindow
+
+    def calls_only(fn) -> str:
+        """去掉注释/docstring，只留真实执行的代码。"""
+        src = inspect.getsource(fn)
+        out = []
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type in (tokenize.COMMENT, tokenize.STRING):
+                continue
+            out.append(tok.string)
+        return " ".join(out)
+
+    resize_code = calls_only(MainWindow.resizeEvent)
+    assert "apply_rounded_corners" not in resize_code, \
+        "resizeEvent 里不能调 apply_rounded_corners（它包含 addShadowEffect）"
+    assert "addShadowEffect" not in resize_code
+    assert "_corner_timer" in resize_code, "resizeEvent 应通过定时器去抖"
+
+    radius_code = calls_only(MainWindow._apply_window_radius)
+    assert "addShadowEffect" not in radius_code, \
+        "_apply_window_radius 会被 resize 调用，不能碰投影"
+    assert "set_corners" in radius_code, "_apply_window_radius 应走幂等的 set_corners"
+
+
+def test_corner_dispatch_windows_and_linux(app, monkeypatch):
+    """按注入的平台/版本验证分派：Win11 只写 DWM、Win10 用 mask、Linux 不做。
+
+    这些分支平时在 macOS 上跑不到，靠平台参数注入覆盖——闪退就出在
+    Win10 / Win11 两条分支的取值上，不能只靠「本机不崩」判断。
+    """
+    from app.services import materials
+
+    widget = QWidget()
+    widget.resize(500, 400)
+
+    calls = []
+    monkeypatch.setattr(materials, "apply_dwm_round_corners",
+                        lambda w: calls.append("dwm") or True)
+    monkeypatch.setattr(materials, "apply_mask_corners",
+                        lambda w, r=10: calls.append("mask") or True)
+
+    # Win11：只写 DWM，绝不 setMask（会和玻璃边框打架）
+    materials.clear_corners(widget)
+    assert materials.set_corners(widget, 10, platform="win32", build=22631) is True
+    assert calls == ["dwm"], f"Win11 应只走 DWM：{calls}"
+
+    # Win10：没有系统接口，退到 mask
+    calls.clear()
+    materials.clear_corners(widget)
+    assert materials.set_corners(widget, 10, platform="win32", build=19045) is True
+    assert calls == ["mask"], f"Win10 应走 mask：{calls}"
+
+    # Linux：Wayland 不支持窗口遮罩、X11 会把阴影裁掉，不做
+    calls.clear()
+    materials.clear_corners(widget)
+    assert materials.set_corners(widget, 10, platform="linux", build=0) is False
+    assert calls == [], f"Linux 不该动窗口区域：{calls}"
+
+    # macOS：系统自带，什么都不做
+    materials.clear_corners(widget)
+    assert materials.set_corners(widget, 10, platform="darwin", build=0) is True
+    assert calls == []

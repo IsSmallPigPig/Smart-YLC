@@ -114,6 +114,11 @@ class MainWindow(MSFluentWindow):
         self._translucent = False
         self._material = "none"
         self._material_applied = False
+        # 圆角去抖：拖拽缩放时 resizeEvent 会连发，攒到停手再改窗口区域
+        self._corner_timer = QTimer(self)
+        self._corner_timer.setSingleShot(True)
+        self._corner_timer.setInterval(120)
+        self._corner_timer.timeout.connect(self._apply_window_radius)
         self.setStyleSheet("MainWindow{background: transparent}")
 
         # 通知中心：问题清单的唯一持有者，公告面板与浮层提示都读它
@@ -889,10 +894,11 @@ class MainWindow(MSFluentWindow):
         super().resizeEvent(e)
         self._place_search()
         self._sync_logo_gap()
-        # 遮罩式圆角是按当前尺寸算的位图，尺寸一变就得重切，
-        # 否则缩放窗口后四角会残留上一尺寸的弧线
+        # 圆角：set_corners 内部按尺寸幂等，尺寸没变不碰系统接口。
+        # 拖拽缩放时尺寸一直在变，所以再压一道定时器去抖——Win10 那条路是
+        # SetWindowRgn，拖拽中每帧调一次会明显掉帧。
         if sys.platform != "darwin":
-            self._apply_window_radius()
+            self._corner_timer.start()
         splash = getattr(self, "splash", None)
         if splash is not None and not self._splash_done:
             splash.setGeometry(self.rect())
@@ -952,8 +958,15 @@ class MainWindow(MSFluentWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
-        # 无边框窗口不会自动获得系统圆角（Windows 11 靠 DWM，其他平台自切）
-        self._apply_window_radius()
+        # 无边框窗口不会自动获得系统圆角（Windows 11 靠 DWM，其他平台自切）。
+        # 这里用 apply_rounded_corners 而不是 _apply_window_radius：刚显示时窗口
+        # 几何已经稳定，可以顺手把 Win11 的投影补上（投影会改 frame，只能在
+        # 这种「几何已定」的时机做，不能进 resizeEvent）。
+        if sys.platform != "darwin":
+            from app.services.materials import apply_rounded_corners
+            from app.ui import palette as P
+
+            apply_rounded_corners(self, P.RADIUS["window"])
         splash = getattr(self, "splash", None)
         if splash is not None and not self._splash_done:
             splash.setGeometry(self.rect())
@@ -970,15 +983,22 @@ class MainWindow(MSFluentWindow):
             QTimer.singleShot(150, _apply)
 
     def _apply_window_radius(self):
-        """按平台切窗口圆角：macOS 系统自带，Win11 走 DWM，其余用遮罩。
+        """给窗口贴圆角：幂等，尺寸没变就不碰系统接口。
 
-        半径统一取 `P.RADIUS["window"]`：界面里所有卡片圆角都是从这张窗边
-        往里推的，窗口圆角一旦比卡片大或小，视觉上就不是一套语言。
+        只在非 macOS 上做事——macOS 的无边框窗口本来就有系统圆角。
+
+        绝不能在这里调 `addShadowEffect`：那是
+        `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`，会改变窗口 frame 并触发新的
+        WM_SIZE，在 resizeEvent 里调它就成了「resize → 改 frame → resize」自激
+        循环，CPU 打满、栈深到崩溃。`set_corners` 里已经按平台分派好，
+        Win11 只写圆角偏好（纯属性），Win10/Linux 才用遮罩。
         """
-        from app.services.materials import apply_rounded_corners
+        if sys.platform == "darwin":
+            return
+        from app.services.materials import set_corners
         from app.ui import palette as P
 
-        apply_rounded_corners(self, P.RADIUS["window"])
+        set_corners(self, P.RADIUS["window"])
 
     def _normalBackgroundColor(self):
         """材质挂上后窗口底色给系统混合层让路，Qt 不再铺一层不透明底。
@@ -1026,9 +1046,11 @@ class MainWindow(MSFluentWindow):
         from app.services.materials import (
             apply_rounded_corners,
             apply_windows_effect,
+            clear_corners,
             normalize,
             windows_material_available,
         )
+        from app.ui import palette as P
 
         material = normalize(material)
         self._material = material
@@ -1051,7 +1073,8 @@ class MainWindow(MSFluentWindow):
         elif sys.platform == "win32" and self._translucent:
             # 圆角与投影先设：addShadowEffect 会重设 frame 扩展（DwmExtendFrameIntoClientArea），
             # 放在材质之后会把 Mica 自己的客户区 margins 顶掉，效果就没了。
-            apply_rounded_corners(self)
+            # force=True：窗口 frame 刚被系统重设过，幂等缓存里的尺寸对不上实际状态。
+            apply_rounded_corners(self, P.RADIUS["window"])
             self._material_applied = apply_windows_effect(self, material)
             if not self._material_applied:
                 # 更老的系统挂不上，回退纯色底，不让窗口裸透明发黑
@@ -1059,4 +1082,8 @@ class MainWindow(MSFluentWindow):
                 self._apply_window_background()
         else:
             self._material_applied = True
+        # Win10 关掉材质后要撤掉遮罩式圆角：遮罩与「DWM 玻璃边框」互斥，
+        # 留着旧遮罩会在下次开材质时把系统合成的圆角切掉一块
+        if sys.platform == "win32" and not self._translucent:
+            clear_corners(self)
         self.update()

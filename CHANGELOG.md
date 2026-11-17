@@ -2,6 +2,41 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.7.5
+
+### 修复（Windows 启动 CPU 打满后闪退）
+v1.7.4 引入的窗口圆角处理在 Windows 上会自激：
+
+- `resizeEvent` 里同步调 `apply_rounded_corners`，它内部包含
+  `addShadowEffect` = `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`。这个调用会让
+  DWM 重算窗口 frame 并发一次 `WM_SIZE`，于是「resize → 改 frame → resize」形成
+  死循环。表现就是启动后 CPU 打满、主界面刚出来就闪退。
+- macOS 上不触发：那条路径直接返回，所以本地测不出来。
+
+修法是把「圆角偏好」与「窗口投影」拆开：
+
+- `apply_dwm_round_corners` 只写圆角偏好，纯属性、不改几何，可以随尺寸重设。
+- 新增 `add_dwm_shadow`，只允许在 `showEvent` / 切材质这类几何已稳的时机调。
+- `set_corners` 统一入口并按 (窗口, 宽, 高, 半径) 幂等：尺寸没变直接返回，
+  完全不碰系统接口。
+- 主窗口 `resizeEvent` 改用 120ms 单次定时器去抖，拖拽缩放不逐帧改窗口区域。
+
+### 修复（Linux 圆角）
+- **Linux 不再用 `setMask` 切窗口圆角**：Qt 在 Wayland 上不支持窗口遮罩，X11 上
+  遮罩会把系统阴影一起裁掉；而主流桌面环境对无边框窗口本来就有圆角。
+  之前会把窗口变成直角并丢阴影。
+- **Win11 不再混用 `setMask`**：遮罩与「客户区扩展成玻璃边框」互斥，
+  同时生效会在圆角处切掉一块系统合成的像素。
+- 关掉透明材质时调 `clear_corners` 撤掉遮罩并清缓存，否则下次开材质会残留上次
+  尺寸的弧线。
+
+### 变更（测试）
+- 圆角分派支持平台注入（`platform` / `build` 参数），Windows 两条分支现在能在
+  macOS 上覆盖——闪退恰恰出在这两条上，只靠「本机不崩」判断不出来。
+- 新增一条防自激回归测试：断言 `resizeEvent` 的真实调用里不出现
+  `apply_rounded_corners` / `addShadowEffect`（剥掉注释再匹配，否则解释这条坑的
+  注释本身会把测试判红）。已用「把 bug 塞回去」验证过它确实会红。
+
 ## v1.7.4
 
 ### 修复（圆环）
