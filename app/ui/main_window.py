@@ -165,9 +165,18 @@ class MainWindow(MSFluentWindow):
         )
         # 底部那组导航与窗口底边的距离在 _sync_nav_bottom 里对齐到侧边栏左右留白，
         # 那里能读到布局后的真实几何（构造期导航项的 x 还都是 0）。
-        # 内置切页动画会把整页从下方 76px 滑上来（PopUpAniStackedWidget 的默认
-        # deltaY），刚进入页面时内容整体往上跳；关掉它，过渡交给下面的淡入。
-        self.stackedWidget.setAnimationEnabled(False)
+        #
+        # 切页动画：开，但不搬用库默认的 76px 竖直滑入——那是给弹窗式页面设计的，
+        # 整页内容从下方冲上来，观感像页面在跳。这里改成 12px 的轻微上浮，
+        # 配合透明度淡入（见 _fade_in_page），是 Fluent 的「进入」节奏：
+        # 位移小到只提供方向感，视觉重心仍然稳在原地。
+        # 动画容器是 stackedWidget.view（PopUpAniStackedWidget），
+        # 外层 StackedWidget 只是壳。
+        for info in self.stackedWidget.view.aniInfos:
+            info.deltaY = 12
+            info.deltaX = 0
+        self.stackedWidget.setAnimationEnabled(True)
+        self.stackedWidget.currentChanged.connect(self._fade_in_page)
 
         # 标题栏返回按钮：默认无背景，中心位于窗口外框左上角(0,0)与
         # 主页面背景左上角(侧边栏右缘, 标题栏下沿48)连线的中点
@@ -759,10 +768,11 @@ class MainWindow(MSFluentWindow):
         self.back_btn.clicked.connect(self._on_back_clicked)
         QTimer.singleShot(0, self._place_back_button)
 
-        # 标题栏居中搜索框：只有组织管理与系统消息用，切页时换提示并显隐
+        # 标题栏居中搜索框：只有组织管理、系统消息、上传档案用。
+        # 其他页面不隐藏它，只置灰禁用（见 _sync_search）——藏起来会让标题栏
+        # 中间的视觉重心随切页左右跳
         self.search_edit = SearchLineEdit(self.titleBar)
         self.search_edit.setFixedHeight(30)
-        self.search_edit.setVisible(False)
         self.search_edit.textChanged.connect(self._on_search_changed)
         self.stackedWidget.currentChanged.connect(self._sync_search)
 
@@ -774,6 +784,24 @@ class MainWindow(MSFluentWindow):
         self._sync_back_state()
         self._sync_search()
         QTimer.singleShot(0, self._place_search)
+
+    def _fade_in_page(self, index: int):
+        """切页时新页面淡入。
+
+        库里那套动画只做位移（pos），没有透明度过渡，页首那一帧是硬出现的；
+        这里给内容区补一段淡入，位移与透明度同时进行，观感才连贯。
+
+        只淡入内容滚动区，不淡入整页：整页带 QGraphicsEffect 会让整块离屏渲染，
+        Qt 里那等于每帧重新合成整个窗口，很贵。内容区本来就小得多。
+        上一页的动效还没跑完就再次切页时，旧动画会被 fade_in 内部 stop 掉。
+        """
+        from app.ui.anim import fade_in
+
+        page = self.stackedWidget.widget(index)
+        content = getattr(page, "scrollWidget", None)
+        if content is None:
+            return
+        fade_in(content, duration=180, dy=0)
 
     def _restyle_back_icon(self, *_):
         """主题切换后重烘焙返回键图标：图标是位图旋转来的，颜色生成时定死。
@@ -813,9 +841,17 @@ class MainWindow(MSFluentWindow):
     SEARCH_PAGES = (("org_manage_page", "搜索团员姓名或手机号"),
                     ("messages_page", "搜索姓名或消息内容"),
                     ("upload_page", "搜索档案文件名或支部"))
+    # 当前页没有搜索功能时搜索框显示的灰色提示：说明是这页不支持，
+    # 不是坏了
+    SEARCH_DISABLED_HINT = "当前页面没有可搜索的内容"
 
     def _sync_search(self, *_):
-        """搜索框随页面切换：换提示语、清空关键词，不在用的页面把过滤词复位。"""
+        """搜索框随页面切换：换提示语、清空关键词，没有搜索的页面置灰禁用。
+
+        没有搜索的页面不隐藏搜索框：整块消失会让标题栏中间的视觉重心左右跳，
+        用户也看不出「这页不能搜」和「搜索框坏了」的区别。禁用保留原位，
+        提示语换成一句说明，一眼能看出是当前页不支持。
+        """
         page = self.stackedWidget.currentWidget()
         for attr, _hint in self.SEARCH_PAGES:
             target = getattr(self, attr, None)
@@ -826,11 +862,8 @@ class MainWindow(MSFluentWindow):
         self.search_edit.blockSignals(False)
         hint = next((h for attr, h in self.SEARCH_PAGES
                      if getattr(self, attr, None) is page), None)
-        if hint:
-            self.search_edit.setPlaceholderText(hint)
-            self.search_edit.show()
-        else:
-            self.search_edit.hide()
+        self.search_edit.setEnabled(hint is not None)
+        self.search_edit.setPlaceholderText(hint or self.SEARCH_DISABLED_HINT)
         self._place_search()
 
     def _on_search_changed(self, text: str):
@@ -856,6 +889,10 @@ class MainWindow(MSFluentWindow):
         super().resizeEvent(e)
         self._place_search()
         self._sync_logo_gap()
+        # 遮罩式圆角是按当前尺寸算的位图，尺寸一变就得重切，
+        # 否则缩放窗口后四角会残留上一尺寸的弧线
+        if sys.platform != "darwin":
+            self._apply_window_radius()
         splash = getattr(self, "splash", None)
         if splash is not None and not self._splash_done:
             splash.setGeometry(self.rect())
@@ -915,10 +952,8 @@ class MainWindow(MSFluentWindow):
 
     def showEvent(self, e):
         super().showEvent(e)
-        # 无边框窗口不会自动获得 DWM 圆角（Windows 11），补一次
-        from app.services.materials import apply_rounded_corners
-
-        apply_rounded_corners(self)
+        # 无边框窗口不会自动获得系统圆角（Windows 11 靠 DWM，其他平台自切）
+        self._apply_window_radius()
         splash = getattr(self, "splash", None)
         if splash is not None and not self._splash_done:
             splash.setGeometry(self.rect())
@@ -933,6 +968,17 @@ class MainWindow(MSFluentWindow):
                     QTimer.singleShot(200, lambda: _apply(False))
 
             QTimer.singleShot(150, _apply)
+
+    def _apply_window_radius(self):
+        """按平台切窗口圆角：macOS 系统自带，Win11 走 DWM，其余用遮罩。
+
+        半径统一取 `P.RADIUS["window"]`：界面里所有卡片圆角都是从这张窗边
+        往里推的，窗口圆角一旦比卡片大或小，视觉上就不是一套语言。
+        """
+        from app.services.materials import apply_rounded_corners
+        from app.ui import palette as P
+
+        apply_rounded_corners(self, P.RADIUS["window"])
 
     def _normalBackgroundColor(self):
         """材质挂上后窗口底色给系统混合层让路，Qt 不再铺一层不透明底。

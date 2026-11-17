@@ -331,13 +331,14 @@ class OrgPage(FluentPage):
         grid.addWidget(self.extra_strip, 1, 3, 1, 1)        # 右下
         grid.addWidget(self.rank_card, 2, 0, 1, 2)          # 第三行：支部排行
         grid.addWidget(self.health_card, 2, 2, 1, 2)        # 第三行：账号状态
-        # 列宽：圆环卡固定窄一些，中间两列等宽铺开，最右一列收窄
-        # 列宽比例：圆环卡按内容定宽，中间两列等分剩余，右列给一份固定权重
-        # （原来右列 stretch=0，全靠内容撑，两张窄卡显得局促、数字挤在一起）
-        grid.setColumnStretch(0, 0)
-        grid.setColumnStretch(1, 10)
-        grid.setColumnStretch(2, 10)
-        grid.setColumnStretch(3, 7)
+        # 列宽全部按比例分配：任何一列都不许 stretch=0。
+        # stretch=0 的列宽由内容决定，窗口变宽时它纹丝不动、只把余量全让给邻居，
+        # 看起来就是「只有中间在变，左边那张卡钉死了」。四列都给权重，
+        # 窗口一变宽四张卡一起长。
+        # 比例 30:32:32:22 是照内容配的：圆环卡装得下 150px 圆环 + 图例，
+        # 中间两列等宽放异常卡并排的两张，右列窄一点留给两行数字。
+        for col, weight in enumerate((30, 32, 32, 22)):
+            grid.setColumnStretch(col, weight)
         grid.setRowStretch(2, 1)
 
         # 概览区整体（四张卡 + 下方转接说明）一起显隐，进名单视图时整块收起
@@ -719,23 +720,28 @@ class OrgPage(FluentPage):
 
     def _open_detail(self, *_):
         """点异常团员卡：切到名单视图，面包屑可点回概览。"""
+        from app.ui.anim import switch_with_fade
+
         self._add_crumb()
         self._detail_open = True
         self._set_nav(True)
         self.detail_changed.emit(True)
         self.detail_box.setVisible(True)
-        self.overview_group.setVisible(False)
         self.error_title.setText(f"异常团员 {len(self._error_rows)}")
+        # 两个视图在同一位置、同一尺寸，直接换会硬切；淡出→淡入让点击有回应
+        switch_with_fade(self.overview_group, self.detail_box)
 
     def back_to_overview(self, *_):
         """返回概览：面包屑与主窗口返回键共用。"""
         if not self._detail_open:
             return False
+        from app.ui.anim import switch_with_fade
+
         self._detail_open = False
         self._set_nav(False)
         self.detail_changed.emit(False)
-        self.detail_box.setVisible(False)
-        self.overview_group.setVisible(True)
+        # 从名单回概览是「返回」，用同样时长的反向过渡，方向感一致
+        switch_with_fade(self.detail_box, self.overview_group)
         return True
 
     def _add_crumb(self):

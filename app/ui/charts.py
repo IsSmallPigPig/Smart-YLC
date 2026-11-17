@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QRect, Qt
+import math
+
+from PyQt5.QtCore import QPointF, QRect, QRectF, Qt
 from PyQt5.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import QWidget
 
 from qfluentwidgets import isDarkTheme, qconfig
 
 from app.ui import palette as P
+
+
+def degrees(radians: float) -> float:
+    return radians * 180.0 / math.pi
 
 
 def _bind_theme(widget: QWidget) -> None:
@@ -173,7 +179,7 @@ class SegmentedDonut(QWidget):
     的占比铺开，段间留缝以便分辨；`missing` 用中性灰占位，表示总数里这部分没有报道。
     """
 
-    GAP_DEGREES = 2.0   # 段间缝：不留缝时纯色相接分界看不清，留太多又会吃掉细段
+    GAP_DEGREES = 2.6   # 段间缝：圆头端会自己吃掉一点视觉长度，缝给得比平头略宽
     MIN_SPAN = 3.5      # 非零段的最小可见角度
     # 260 人基数下 4 人的段只有 5.5°，读者几乎看不出来；给每个非零段一个
     # 可见下限，占比仍然按真实人数算（圆心与图例给准确数字）
@@ -212,41 +218,89 @@ class SegmentedDonut(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         dark = isDarkTheme()
 
-        # 环身给厚一些：细环上分段的颜色几乎读不出来
-        ring = self.rect().adjusted(8, 8, -8, -8)
-        width = 17
+        # 环宽 14：17 的时候环身吃掉卡片太多横向空间。
+        # 底环窄一档（11）且与彩色段同心：彩色段压在底环上略粗一点，
+        # 分段因此看得到边界，也不会从缝里透出一道深色的底环。
+        width = 14
+        track_w = width - 3
 
-        pen = QPen(QColor(255, 255, 255, 26) if dark else QColor(0, 0, 0, 14), width)
-        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
-        p.setPen(pen)
-        p.drawArc(ring, 0, 360 * 16)
+        # 几何一律用「圆心 + 半径」算，不给两种画法不同的矩形基准——
+        # drawArc 的矩形是笔画的**中心线**，QPainterPath.arcTo 的矩形是弧的
+        # **边界**；两者混用时彩色段会整体向内偏，看着就是环上的分段错位。
+        cx, cy = self.width() / 2, self.height() / 2
+        outer_r = min(self.width(), self.height()) / 2 - 8
+        mid_r = outer_r - width / 2          # 底环的中心线半径：与彩色段同心
+
+        def arc_rect(r: float) -> QRectF:
+            return QRectF(cx - r, cy - r, r * 2, r * 2)
+
+        track = QPen(QColor(255, 255, 255, 26) if dark else QColor(0, 0, 0, 14), track_w)
+        track.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(track)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawArc(arc_rect(mid_r), 0, 360 * 16)
 
         # 分母用总数（缺口也占位），扇段长度才能直接读作占比
         denom = max(self._total, 1)
         gap = self.GAP_DEGREES
         start = 90.0                      # 12 点方向起步，顺时针
+
+        def sector(color: QColor, span: float, begin_deg: float):
+            """一段两端倒圆的扇环。
+
+            弧长严格等于数值（分段长度要能读作占比），圆角靠两件事保证：
+            扇环本体两端各内缩半个环宽，再用两个半径 = 半个环宽的圆点封头。
+            这比「圆头描边」稳：描边的圆头会让每端多出半宽的弧长，
+            短段（260 人里 5 个人只有 6.9°）装不下两个圆头，只能退化成圆点，
+            长度就读不出来了。这里短段也只画一个圆点，但中心位置仍然准确。
+            """
+            if span <= 0:
+                return
+            half = width / 2
+            cap = degrees(half / max(mid_r, 1.0))
+
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            if span <= cap * 2:
+                a = math.radians(begin_deg - span / 2)
+                p.drawEllipse(QPointF(cx + math.cos(a) * mid_r,
+                                      cy - math.sin(a) * mid_r), half, half)
+                return
+
+            body = span - cap * 2
+            head_in, head_out = begin_deg - cap, begin_deg - span + cap
+            outer_rect = arc_rect(outer_r)
+            path = QPainterPath()
+            path.arcMoveTo(outer_rect, head_in)
+            path.arcTo(outer_rect, head_in, -body)
+            path.arcTo(arc_rect(outer_r - width), head_out, body)
+            path.closeSubpath()
+            p.drawPath(path)
+
+            # 封头圆心落在本体两端（已经内缩了半个环宽），落在原始端点上
+            # 会外凸一圈、还和本体断开
+            for end in (head_in, head_out):
+                a = math.radians(end)
+                p.drawEllipse(QPointF(cx + math.cos(a) * mid_r,
+                                      cy - math.sin(a) * mid_r), half, half)
+
         for _name, value, color in self._segments:
             if value <= 0:
                 continue
             span = 360.0 * value / denom * self._progress
             if span <= 0:
                 continue
-            # 非零段不低于可见下限；极细的段不缩缝，否则 1 个人会被缝隙吃没
-            span = max(span, self.MIN_SPAN * self._progress) if value > 0 else span
+            # 非零段不低于可见下限；否则 1 个人会在环上消失
+            span = max(span, self.MIN_SPAN * self._progress)
             shrink = gap if span > gap * 2 else 0.0
-            pen = QPen(color, width)
-            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
-            p.setPen(pen)
-            p.drawArc(ring, int((start - shrink / 2) * 16), int(-(span - shrink) * 16))
+            sector(color, span - shrink, start - shrink / 2)
             start -= span
 
         if self._missing > 0:
             span = 360.0 * self._missing / denom * self._progress
-            pen = QPen(QColor(255, 255, 255, 46) if dark else QColor(0, 0, 0, 30), width)
-            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
-            p.setPen(pen)
-            if span > gap * 2:
-                p.drawArc(ring, int((start - gap / 2) * 16), int(-(span - gap) * 16))
+            color = QColor(255, 255, 255, 46) if dark else QColor(0, 0, 0, 30)
+            if span > gap:
+                sector(color, span - gap, start - gap / 2)
 
         self._draw_center(p)
 

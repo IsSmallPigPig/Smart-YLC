@@ -153,7 +153,9 @@ class StatusRow(CardWidget):
 
     def __init__(self, item: dict, parent=None):
         super().__init__(parent)
-        self.setBorderRadius(P.RADIUS["control"] - 2)   # 嵌在卡片里的小控件再收一档
+        # 嵌在卡片里的小控件：半径按同心圆从卡片半径推出来，
+        # 不是随手减 2——卡片内边距一变，这里会自动跟上
+        self.setBorderRadius(P.inner_radius(P.RADIUS["card"], 8))
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 9, 14, 9)
         lay.setSpacing(10)

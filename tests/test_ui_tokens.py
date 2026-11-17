@@ -177,3 +177,19 @@ def test_every_bundled_weight_resolves(app):
         font.setWeight(weight)
         widths.add(round(QFontMetricsF(font).horizontalAdvance("9"), 2))
     assert len(widths) == 4, f"字重没有真正生效：{sorted(widths)}"
+
+
+def test_inner_radius_is_concentric():
+    """嵌套圆角按同心圆推导，不是随手减一个数。
+
+    两个圆角的圆心重合时才是同一套语言；把外层半径直接抄给内层，内层弧线
+    比外层更靠内、四角看着不平行。内层小到装不下圆角时返回 0。
+    """
+    from app.ui import palette as P
+
+    assert P.inner_radius(10, 0) == 10
+    assert P.inner_radius(10, 4) == 6
+    assert P.inner_radius(10, 8) == 2
+    # 内边距超过外层半径：装不下，直接直角，别挤出畸形弧
+    assert P.inner_radius(10, 18) == 0
+    assert P.RADIUS["window"] >= P.RADIUS["card"], "窗口圆角不该小于卡片圆角"

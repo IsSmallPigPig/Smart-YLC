@@ -163,25 +163,58 @@ def _apply_mica(window) -> bool:
         return False
 
 
-def apply_rounded_corners(window) -> bool:
-    """让无边框窗口也拿到系统圆角与投影（Windows 11）。
+def apply_rounded_corners(window, radius: int = 10) -> bool:
+    """让无边框窗口拿到圆角与投影，跨平台各自走最合适的那条路。
 
-    无边框窗口不会被 DWM 自动切圆角，界面里所有圆角卡片就顶在一张方角窗户上。
-    这里把窗口的圆角偏好设成 ROUND，并由 DWM 补一层窗口投影。
-    macOS 的窗口原本就是圆角；Windows 10 没有这个接口，返回 False。"""
-    if win11_build() < WINDOWS_MICA_BUILD:
-        return False
-    try:
-        from ctypes import byref, c_int, sizeof
+    三档实现，按系统能力从优到劣：
 
-        effect = _window_effect(window)
-        hwnd = int(window.winId())
-        if hwnd == 0:
+    * **macOS**：系统给无边框窗口切圆角（NSWindow 自带），什么都不用做。
+    * **Windows 11**：DWM 有圆角偏好，设成 ROUND 并由 DWM 补窗口投影。
+      半径由系统定（约 8px），传进来的 radius 不参与——这是系统级的圆角，
+      和界面内自绘的卡片圆角本来就该按系统那一档走。
+    * **Windows 10 / 其它**：没有系统接口，用 `setMask` 自己切。遮罩切出来的
+      边缘没有抗锯齿，但总比一张方角窗户顶着一堆圆角卡片强；窗口透明材质在
+      Win10 上本来就退回纯色底，边缘锯齿不明显。
+
+    返回是否真的切了圆角（macOS 返回 True，因为系统本来就有）。
+    """
+    if sys.platform == "darwin":
+        return True
+    if win11_build() >= WINDOWS_MICA_BUILD:
+        try:
+            from ctypes import byref, c_int, sizeof
+
+            effect = _window_effect(window)
+            hwnd = int(window.winId())
+            if hwnd == 0:
+                return False
+            pref = c_int(DWMWCP_ROUND)
+            effect.DwmSetWindowAttribute(
+                hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, byref(pref), sizeof(pref))
+            effect.addShadowEffect(hwnd)
+            return True
+        except Exception:
             return False
-        pref = c_int(DWMWCP_ROUND)
-        effect.DwmSetWindowAttribute(
-            hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, byref(pref), sizeof(pref))
-        effect.addShadowEffect(hwnd)
+    return apply_mask_corners(window, radius)
+
+
+def apply_mask_corners(window, radius: int = 10) -> bool:
+    """用 setMask 把窗口切成圆角（没有系统圆角接口时用）。
+
+    遮罩是按位图走的：边缘没有抗锯齿，半径给小一点更干净——10px 在这个窗口
+    尺度上看着是「轻微倒角」，不像大圆角那样把锯齿暴露出来。
+
+    尺寸变了要重新切，所以方法挂在窗口上、由调用方在 resizeEvent 里再喊一次。
+    """
+    try:
+        from PyQt5.QtGui import QPainterPath, QRegion
+
+        w, h = window.width(), window.height()
+        if w <= 0 or h <= 0:
+            return False
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, w, h, radius, radius)
+        window.setMask(QRegion(path.toFillPolygon().toPolygon()))
         return True
     except Exception:
         return False

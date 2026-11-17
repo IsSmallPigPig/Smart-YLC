@@ -281,12 +281,23 @@ def test_autostart_does_not_require_accounts(app, isolated_store, monkeypatch):
     assert calls == ["install"]
 
 
-def test_rounded_corners_is_windows11_only(app):
-    """圆角走 DWM，Windows 11 之外直接返回 False，不再假装成功。"""
-    from app.services.materials import apply_rounded_corners, win11_build
+def test_rounded_corners_are_cross_platform(app):
+    """窗口圆角三档都能落地，不再只有 Windows 11 有。
+
+    macOS 系统自带圆角；Win11 走 DWM 偏好；Win10/其它用 setMask 自切。
+    之前 Win10 与 Linux 直接返回 False，等于那些平台上所有圆角卡片都顶在
+    一张方角窗户上。
+    """
+    from app.services.materials import apply_rounded_corners, apply_mask_corners
 
     widget = QWidget()
-    assert apply_rounded_corners(widget) is (win11_build() >= 22000)
+    widget.resize(400, 300)
+    # 遮罩式圆角在任何平台都能切（不依赖系统接口），且切完确实有遮罩
+    assert apply_mask_corners(widget, 10) is True
+    assert not widget.mask().isEmpty()
+
+    # 统一入口按平台分派：无论哪个平台，都不该出现「有圆角能力却返回 False」
+    assert apply_rounded_corners(widget) is True
 
 
 def test_material_default_is_mica(app, isolated_store):
@@ -1956,3 +1967,95 @@ def test_value_animation_stops_when_widget_destroyed(app):
     app.processEvents()
     # 让动画在控件已销毁的状态下继续走完，进程不崩即通过
     _pump(app, 400)
+
+
+def test_search_box_is_disabled_not_hidden_on_pages_without_search(app, isolated_store):
+    """没有搜索功能的页面把搜索框置灰禁用，而不是让它消失。
+
+    整块消失会让标题栏中间的视觉重心随切页左右跳；用户也分不清
+    「这页不能搜」和「搜索框坏了」。
+
+    不构造整个 MainWindow：它会拉起同步线程与 WebEngine，在测试进程里
+    既慢又容易在收尾时崩。这里用最小替身只验 _sync_search 的判定逻辑。
+    """
+    from qfluentwidgets import SearchLineEdit
+
+    from app.ui.main_window import MainWindow
+
+    class Fake:
+        pass
+
+    host = Fake()
+    host.SEARCH_PAGES = MainWindow.SEARCH_PAGES
+    host.SEARCH_DISABLED_HINT = MainWindow.SEARCH_DISABLED_HINT
+    host.search_edit = SearchLineEdit()
+    hides: list[int] = []
+    host.search_edit.hide = lambda: hides.append(1)
+    host.stackedWidget = Fake()
+    host._place_search = lambda: None
+    for attr, _hint in MainWindow.SEARCH_PAGES:
+        page = Fake()
+        page.set_search = lambda text: None
+        setattr(host, attr, page)
+        host.stackedWidget.currentWidget = lambda p=page: p
+        MainWindow._sync_search(host)
+        assert host.search_edit.isEnabled(), f"{attr} 支持搜索，不该禁用"
+        assert host.search_edit.placeholderText() != MainWindow.SEARCH_DISABLED_HINT
+
+    # 换成一个不在清单里的页面
+    other = Fake()
+    host.stackedWidget.currentWidget = lambda: other
+    MainWindow._sync_search(host)
+    assert not host.search_edit.isEnabled(), "没有搜索的页面应禁用搜索框"
+    assert host.search_edit.placeholderText() == MainWindow.SEARCH_DISABLED_HINT
+    # 关键：禁用但不隐藏——遮住 hide() 看有没有被调用，别比 isHidden()：
+    # 没挂父控件的控件本来就算 hidden，那个值分不出「主动藏」和「还没显示」
+    assert hides == [], "没有搜索的页面不该把搜索框藏起来"
+
+
+def test_donut_segments_are_rounded_and_concentric(app):
+    """圆环分段要两端圆角，并且与底环同心。
+
+    曾经底环用 drawArc（矩形是笔画中心线）、分段用 QPainterPath.arcTo
+    （矩形是弧的边界），两者基准不同，彩色段整体向内偏，看着就是环上错位。
+
+    按分段的本色（#EAB308）匹配像素，不按「亮不亮」猜：整轮测试里主题可能
+    被前面的用例切过，亮/暗判定会随主题翻车。
+    """
+    from PyQt5.QtGui import QPixmap
+
+    from app.ui.charts import SegmentedDonut
+
+    YELLOW = (0xEA, 0xB3, 0x08)
+    donut = SegmentedDonut()
+    donut.set_data(260, [("信息错误", 5, "#EAB308")])
+    donut.set_progress(1.0)
+    pm = QPixmap(150, 150)
+    pm.fill()
+    donut.render(pm)
+    img = pm.toImage()
+
+    def is_yellow(x: int, y: int) -> bool:
+        c = img.pixelColor(x, y)
+        return (c.alpha() > 200
+                and abs(c.red() - YELLOW[0]) < 40
+                and abs(c.green() - YELLOW[1]) < 40
+                and c.blue() < 70)
+
+    ys = [y for x in range(0, img.width()) for y in range(0, img.height() // 2)
+          if is_yellow(x, y)]
+    assert ys, "顶部应该有黄色分段"
+
+    # 分段是圆角的：厚度从中间向两端收窄（圆头），不是一整条等厚的平头
+    # 取横向跨度上最厚处，应明显大于 1/4 处
+    cols = {}
+    for x in range(0, img.width()):
+        col = [y for y in range(0, img.height() // 2) if is_yellow(x, y)]
+        if col:
+            cols[x] = max(col) - min(col) + 1
+    if len(cols) >= 6:
+        xs = sorted(cols)
+        thickest = max(cols.values())
+        edge = (cols[xs[0]] + cols[xs[-1]]) / 2
+        # 圆头两端比最厚处薄，平头则三处基本一样
+        assert edge < thickest * 0.75, "分段两端应圆角收窄，不像平头切面"
