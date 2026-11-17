@@ -2,6 +2,17 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.6.10
+
+### 修复
+- **账号网页窗口的拖动改回系统接管**：标题栏与标签条空白处的拖窗，原先自己记按下点、
+  移动时 `move()` 窗口。这样做能避开 macOS 日志里那条
+  `Window move completed without beginning`，但丢掉了系统侧行为——多屏不同缩放的
+  坐标换算、窗口吸附、触控板手势都不生效，跨屏拖动会错位。现在改为调用
+  `qframelesswindow.utils.startSystemMove()`，按平台分派到系统接口
+  （macOS `performWindowDragWithEvent:`、Windows `ReleaseCapture` + `WM_NCLBUTTONDOWN`）。
+  自绘拖动类 `_WindowDragger` 一并移除。
+
 ## v1.6.9
 
 ### 新增（组织状况概览扩展）
