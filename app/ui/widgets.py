@@ -519,12 +519,11 @@ _MONO_FAMILY: str | None = None
 
 
 def mono_family() -> str:
-    """界面等宽字族名。
+    """数字等宽所需的字族名。
 
-    全站字体本身就是等宽的（`Maple Mono CN`，随程序打包），所以这里直接取
-    app.setup 注册到的族名；注册失败时才回退到系统等宽，保证仍有可读字体。
-    不枚举系统字体列表——没装等宽字体的机器会静默回退成比例字体，
-    数字宽度照旧不等，而且各机器结果不同，等于没修。
+    内置字体 `MiSans` 的数字本来就是等宽字形（打包时把 cmap 的 0–9 指到 `.tf`），
+    中文与字母仍是比例字形，所以界面正常运行时不需要换字族。这个函数只用于
+    兜底：字体文件缺失时界面会落回系统比例字体，数字又会变宽变窄。
     """
     try:
         from app.setup import register_fonts
@@ -538,13 +537,16 @@ def mono_family() -> str:
 
 
 def tabular_label(label):
-    """给会跳数的标签套等宽字族，避免数字变化时左右抖。
+    """给会跳数的标签钉住数字等宽。
 
-    规范要求动态数值用 tabular-nums；PyQt5 5.15 没有 QFont.setFeature，
-    开不了 OpenType 的 tnum，只能换等宽字族达到同样效果（每个字形等宽）。
-    只用在进度、耗时这类会连续变的数字上——静态统计值保持界面默认字体。
+    规范要求动态数值用 tabular-nums。PyQt5 5.15 没有 `QFont.setFeature`，开不了
+    OpenType 的 `tnum`，所以换成打包时就烧进 cmap 的等宽数字字形——效果等同于
+    开 tnum，且不依赖运行时特性开关。正常运行时标签已经是内置字体，这里不做改动；
+    只有字体没注册上（文件缺失）才换系统等宽族，避免数字照旧抖。
     """
     f = label.font()
-    f.setFamily(mono_family())
-    label.setFont(f)
+    family = mono_family()
+    if family and f.family() != family:
+        f.setFamily(family)
+        label.setFont(f)
     return label

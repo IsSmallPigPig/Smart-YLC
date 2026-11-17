@@ -237,7 +237,13 @@ def animate_expand(widget: QWidget, show: bool, duration: int = 210, on_done=Non
 
 def value_animation(widget: QWidget, start: float, end: float,
                     on_value, duration: int = 520) -> QVariantAnimation:
-    """数值补间；用于统计数字、条形图、hover 强调条。"""
+    """数值补间；用于统计数字、条形图、hover 强调条。
+
+    回调会被包一层存活检查：页面在这 520ms 里被销毁时（切页、关窗、测试收尾），
+    动画仍会继续发 `valueChanged`，而回调闭包里抓的是已销毁的控件——PyQt5
+    遇到悬空对象直接 abort，没有 Python 异常可捕。QPropertyAnimation 绑在自己的
+    父控件上，Qt 会随控件一起删；回调不是，得自己看住。
+    """
     prev = getattr(widget, "_value_ani", None)
     if prev is not None:
         prev.stop()
@@ -246,7 +252,16 @@ def value_animation(widget: QWidget, start: float, end: float,
     ani.setStartValue(start)
     ani.setEndValue(end)
     ani.setEasingCurve(QEasingCurve.Type.OutCubic)
-    ani.valueChanged.connect(on_value)
+
+    def _emit(value):
+        from PyQt5 import sip
+
+        if sip.isdeleted(widget):
+            ani.stop()
+            return
+        on_value(value)
+
+    ani.valueChanged.connect(_emit)
 
     def _done():
         widget._value_ani = None
