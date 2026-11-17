@@ -72,7 +72,7 @@ class BarRowWidget(QWidget):
 
         p.setPen(QPen(fg, 1))
         f = p.font()
-        f.setPixelSize(12)
+        f.setPixelSize(P.FONT["caption"])
         p.setFont(f)
         p.drawText(0, 0, label_w - 8, self.height(), Qt.AlignmentFlag.AlignVCenter, self._label)
 
@@ -144,12 +144,12 @@ class ProgressDonut(QWidget):
 
         # 两行文字作为一个整体在圆环内水平垂直居中
         f = p.font()
-        f.setPixelSize(20)
+        f.setPixelSize(P.FONT["title"])
         f.setBold(True)
         p.setFont(f)
         fm_num = p.fontMetrics()
         sub_font = p.font()
-        sub_font.setPixelSize(11)
+        sub_font.setPixelSize(P.FONT["caption"])
         sub_font.setBold(False)
         fm_sub = QFontMetrics(sub_font)
         gap = 4
@@ -252,10 +252,10 @@ class SegmentedDonut(QWidget):
 
     def _draw_center(self, p: QPainter):
         num_font = p.font()
-        num_font.setPixelSize(26)
+        num_font.setPixelSize(P.FONT["metric"])
         num_font.setBold(True)
         cap_font = p.font()
-        cap_font.setPixelSize(11)
+        cap_font.setPixelSize(P.FONT["caption"])
 
         fm_num = QFontMetrics(num_font)
         fm_cap = QFontMetrics(cap_font)

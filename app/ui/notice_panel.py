@@ -26,6 +26,7 @@ from qfluentwidgets import (
 )
 
 from app.services.notices import LEVEL_ISSUE, Notice
+from app.ui import palette as P
 from app.ui.page import chevron_icon, note_label, paint_tinted_card, set_tip, theme_font
 
 HEADER_H = 48
@@ -78,7 +79,7 @@ class _NoticeRow(QWidget):
         text = QVBoxLayout()
         text.setContentsMargins(0, 0, 0, 0)
         text.setSpacing(1)
-        self.title_lbl = theme_font(BodyLabel(notice.title), 13, int(QFont.Weight.DemiBold))
+        self.title_lbl = theme_font(BodyLabel(notice.title), P.FONT["caption"], int(QFont.Weight.DemiBold))
         self.title_lbl.setWordWrap(False)
         text.addWidget(self.title_lbl)
         self.detail_lbl = note_label(notice.detail)
@@ -161,7 +162,7 @@ class NoticePanel(QWidget):
         self._icon = IconWidget(FIF.INFO, self._header)
         self._icon.setFixedSize(18, 18)
         hl.addWidget(self._icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        self._summary = theme_font(BodyLabel(""), 14, int(QFont.Weight.DemiBold))
+        self._summary = theme_font(BodyLabel(""), P.FONT["body"], int(QFont.Weight.DemiBold))
         hl.addWidget(self._summary, 1)
         self._toggle_btn = TransparentToolButton(self._header)
         self._toggle_btn.setFixedSize(28, 28)

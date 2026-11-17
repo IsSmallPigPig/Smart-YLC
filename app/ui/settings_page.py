@@ -283,7 +283,7 @@ class SettingsPage(FluentPage):
         # 账号表：勾选框 + 账号 + 密码 + 备注 + 届别 + 状态 + 健康状态 + 最近检查
         self.table = TableWidget()
         self.table.setBorderVisible(True)
-        self.table.setBorderRadius(10)  # 与卡片、窗口圆角同心
+        self.table.setBorderRadius(P.RADIUS["card"])  # 与卡片、窗口圆角同心
         # 隐藏左侧行号列：表格自带 1、2、3… 的序号，和勾选框并排太挤且没有信息量
         self.table.verticalHeader().hide()
         self.table.setColumnCount(8)
@@ -360,7 +360,7 @@ class SettingsPage(FluentPage):
         self.roster_table = TableWidget()
         self.roster_table.verticalHeader().hide()
         self.roster_table.setColumnCount(3)
-        self.roster_table.setBorderRadius(10)  # 与卡片、窗口圆角同心
+        self.roster_table.setBorderRadius(P.RADIUS["card"])  # 与卡片、窗口圆角同心
         self.roster_table.setHorizontalHeaderLabels(["名单", "人数", "名单文件"])
         self.roster_table.setEditTriggers(self.roster_table.EditTrigger.NoEditTriggers)
         header = self.roster_table.horizontalHeader()
@@ -390,7 +390,7 @@ class SettingsPage(FluentPage):
         self.sec_table = TableWidget()
         self.sec_table.verticalHeader().hide()
         self.sec_table.setColumnCount(3)
-        self.sec_table.setBorderRadius(10)  # 与卡片、窗口圆角同心
+        self.sec_table.setBorderRadius(P.RADIUS["card"])  # 与卡片、窗口圆角同心
         self.sec_table.setHorizontalHeaderLabels(["支部", "团支书", "手机号码"])
         self.sec_table.setEditTriggers(self.sec_table.EditTrigger.NoEditTriggers)
         self._bind_secretary_table_menu()
@@ -1723,8 +1723,8 @@ class SettingsPage(FluentPage):
                             duration=4000, parent=self)
             return
         bad = sum(buckets.values())
-        detail = " · ".join(f"{k} {v}" for k, v in
-                            sorted(buckets.items(), key=lambda kv: -kv[1]))
+        detail = "，".join(f"{k} {v}" for k, v in
+                          sorted(buckets.items(), key=lambda kv: -kv[1]))
         InfoBar.warning(f"{bad} 个账号异常",
                         f"{detail}；点账号行的健康状态可打开网页端重新登录",
                         duration=9000, parent=self)
