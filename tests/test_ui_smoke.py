@@ -465,6 +465,29 @@ def test_about_card_has_clean_handle(app, isolated_store):
     assert "尚未检查" in card.update_row.desc_label.text()
 
 
+def test_about_card_exports_logs_to_chosen_path(app, isolated_store, monkeypatch, tmp_path):
+    """导出日志按钮就在反馈旁边，路径由用户选，内容交给 app_log 汇总。"""
+    from PyQt5.QtWidgets import QFileDialog
+
+    from app.services import app_log
+    from app.ui.about_card import AboutCard
+    from app.ui.page import CONTROL_WIDTH
+
+    dest = tmp_path / "crash-report.txt"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a, **k: (str(dest), "文本文件 (*.txt)"))
+    calls = []
+    monkeypatch.setattr(app_log, "export_logs", lambda path: calls.append(path) or 2)
+
+    card = AboutCard()
+    buttons = [b for b in card.findChildren(type(card.check_btn)) if b.text() in ("导出日志", "提交反馈")]
+    assert [b.text() for b in buttons] == ["导出日志", "提交反馈"]
+    assert all(b.width() == CONTROL_WIDTH for b in buttons)
+    export_btn = next(b for b in buttons if b.text() == "导出日志")
+    export_btn.click()
+    assert calls == [str(dest)]
+
+
 def _pump(app, ms: int = 60):
     """跑一小段事件循环：分批建卡与淡入淡出都靠事件驱动，需要让它走完。"""
     from PyQt5.QtCore import QEventLoop, QTimer

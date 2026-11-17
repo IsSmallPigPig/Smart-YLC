@@ -114,13 +114,19 @@ def run() -> int:
     if demo:
         _enter_demo_home()
 
+    if "--smoke-test" in sys.argv:
+        return _smoke_test()
+
+    # 日志最早初始化：Qt 导入、QApplication 构造、插件加载都可能原生崩溃。
+    # --demo 已经把 HOME 指到临时目录，这里建出的日志目录也跟着走。
+    from app.services.app_log import setup_logging
+
+    setup_logging()
+
     if "--tray" in sys.argv:
         from app.tray import run_tray
 
         return run_tray()
-
-    if "--smoke-test" in sys.argv:
-        return _smoke_test()
 
     if "--silent-install" in sys.argv:
         from app.services.silent_update import install_and_notify
@@ -166,6 +172,10 @@ def run() -> int:
 
     log_info("单实例锁已获取，开始构造界面")
 
+    # 原生崩溃不会经过 excepthook，最后一条阶段日志就是定位现场的唯一线索。
+    log_info("启动阶段：QApplication 已创建")
+    log_info("启动阶段：准备显示启动画面")
+
     # 先放启动画面，再做后面那些慢的事（导入 qfluentwidgets 约 0.4s、构造主窗口
     # 与六个页面约 0.3s，Windows 冷启动还要叠上运行时加载与杀毒扫描）。
     # 这一步只用到 PyQt5；顺序反了就又回到「双击后几秒黑屏」。
@@ -201,6 +211,7 @@ def run() -> int:
 
         w = MainWindow()
         log_info("主窗口构造完成")
+        log_info("启动阶段：准备展示主窗口")
 
         def _show_existing(_command: str = ""):
             w.showNormal()
@@ -213,6 +224,7 @@ def run() -> int:
         # 换手看不到接缝；统计快照回来时由 MainWindow 负责淡出那一层。
         _pump()
         boot.finish()
+        log_info("启动阶段：主窗口已展示")
     except BaseException:
         boot.close()
         raise
@@ -221,17 +233,20 @@ def run() -> int:
     from app.services.announcement_check import check_on_login
 
     check_on_login(w, delay_ms=4000)
+    log_info("启动阶段：公告检查已安排")
 
     # 更新检查要联网、建窗口，等界面真的立起来再问，别跟启动抢那几百毫秒
     from app.services.update_check import check_on_startup
 
     QTimer.singleShot(1200, lambda: check_on_startup(parent=w))
+    log_info("启动阶段：更新检查已安排")
     # macOS：界面立起来就主动弹系统授权框，不等第一条提醒再问。
     # 提醒只走原生通道（没有应用内浮窗兜底），没授权就没有任何后台提醒。
     if sys.platform == "darwin":
         from app.services import macos_notify
 
         QTimer.singleShot(1500, macos_notify.request_permission)
+    log_info("启动阶段：进入事件循环")
     return app.exec()
 
 

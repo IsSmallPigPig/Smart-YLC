@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 import traceback
 from datetime import datetime
 
@@ -28,6 +29,9 @@ _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
 _logger: logging.Logger | None = None
 _original_excepthook = None
+_original_thread_excepthook = None
+_fault_file = None
+_qt_handler_installed = False
 _started = datetime.now()
 
 
@@ -42,6 +46,44 @@ def _log_dir() -> str:
 
 def _log_file() -> str:
     return os.path.join(_log_dir(), "app.log")
+
+
+def _fault_file_path() -> str:
+    return os.path.join(_log_dir(), "fatal.log")
+
+
+def _read_text(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError as e:
+        return f"（读取 {os.path.basename(path)} 失败：{e}）\n"
+
+
+def export_logs(destination: str) -> int:
+    """把滚动日志与原生崩溃记录合并写到用户指定的文件，返回写入的文件数。
+
+    只导出日志目录里的既有文件，不导出 config.json：里面可能有账号密码。
+    """
+    files = [
+        os.path.join(_log_dir(), name)
+        for name in sorted(os.listdir(_log_dir()))
+        if name == "app.log" or name.startswith("app.log.")
+    ] if os.path.isdir(_log_dir()) else []
+    fatal = _fault_file_path()
+    if os.path.isfile(fatal):
+        files.append(fatal)
+
+    header = (f"智慧团建管理员辅助 运行日志导出\n"
+              f"{_environment_line()}\n"
+              f"导出时间 {datetime.now():%Y-%m-%d %H:%M:%S}\n"
+              f"以下按文件名排序，app.log 为最新一份。\n\n")
+    with open(destination, "w", encoding="utf-8") as out:
+        out.write(header)
+        for path in files:
+            out.write(f"\n===== {os.path.basename(path)} =====\n")
+            out.write(_read_text(path))
+    return len(files)
 
 
 def _environment_line() -> str:
@@ -87,7 +129,26 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     logger.info("=" * 60)
     logger.info("启动 | %s", _environment_line())
     logger.info("日志目录 %s", _log_dir())
+    _enable_fault_dump()
     return logger
+
+
+def _enable_fault_dump() -> None:
+    """把原生崩溃（Qt abort / 段错误）的 Python 栈落到独立文件。
+
+    --windowed 产品在 Windows 上没有控制台，sys.excepthook 也接不到 C++ 层 abort；
+    faulthandler 是这类崩溃唯一能在用户机器上留下的栈。文件全程持有，别用 with。
+    """
+    global _fault_file
+    try:
+        import faulthandler
+
+        if _fault_file is None:
+            _fault_file = open(_fault_file_path(), "a", encoding="utf-8", buffering=1)
+            _fault_file.write(f"\n=== {datetime.now():%Y-%m-%d %H:%M:%S} 进程启动 ===\n")
+        faulthandler.enable(file=_fault_file, all_threads=True)
+    except Exception:
+        pass  # 诊断不能反过来影响启动
 
 
 def log(level: int, message: str, *args, **kwargs) -> None:
@@ -205,15 +266,61 @@ def _crash_hook(exc_type, exc_value, tb) -> None:
         _original_excepthook(exc_type, exc_value, tb)
 
 
+def _thread_excepthook(args) -> None:
+    """Python 后台线程里的未处理异常也要落盘。
+
+    sys.excepthook 只接主线程；QThread 的 run() 抛异常时它不会触发，日志里就只剩
+    「线程没了」，和原生崩溃一样无从判断。这里补一份栈并交给原 hook。
+    """
+    if args.exc_type is SystemExit:
+        return
+    stack = "".join(traceback.format_exception(
+        args.exc_type, args.exc_value, args.exc_traceback))
+    error("后台线程未处理异常（%s）：\n%s", args.thread.name, stack)
+    if _original_thread_excepthook is not None:
+        _original_thread_excepthook(args)
+
+
+def _qt_message_handler(mode, context, message) -> None:
+    """把 Qt 自己的 qWarning/qFatal 收进日志。
+
+    「QThread: Destroyed while thread is still running」这类原生 abort 前的关键行是
+    Qt 直接输出的，不走 Python 异常，也不进 --windowed 产品看不到的 stderr。
+    """
+    from PyQt5.QtCore import QtMsgType
+
+    if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+        level = logging.ERROR
+    elif mode == QtMsgType.QtWarningMsg:
+        level = logging.WARNING
+    else:
+        return
+    where = ""
+    if getattr(context, "file", ""):
+        where = f" ({context.file}:{context.line})"
+    log(level, "Qt%s：%s", where, message)
+
+
 def install_crash_handler() -> None:
     """接管未处理异常。在 QApplication 创建之后调用，崩溃时才弹得出窗口。
 
     只装一次：Qt 的事件循环里重复安装 excepthook 没有意义，还会让原 hook 链越
     套越深。保留原 hook 以便交回默认行为（打印到 stderr、设置退出码）。
     """
-    global _original_excepthook
+    global _original_excepthook, _original_thread_excepthook, _qt_handler_installed
     setup_logging()
     if _original_excepthook is None:
         _original_excepthook = sys.excepthook
         sys.excepthook = _crash_hook
-        info("已安装崩溃处理器")
+    if _original_thread_excepthook is None and hasattr(threading, "excepthook"):
+        _original_thread_excepthook = threading.excepthook
+        threading.excepthook = _thread_excepthook
+    if not _qt_handler_installed:
+        try:
+            from PyQt5.QtCore import qInstallMessageHandler
+
+            qInstallMessageHandler(_qt_message_handler)
+            _qt_handler_installed = True
+        except ImportError:
+            pass
+    info("已安装崩溃处理器")
