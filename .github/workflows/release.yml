@@ -103,250 +103,50 @@ jobs:
           if-no-files-found: error
 
   build-windows:
-    # Windows 10+ 64 位。32 位与 Win7 在下面的 build-windows-legacy 里，
-    # 它们的依赖组合完全不同（老解释器、老 PyInstaller），分开跑不会互相拖累。
-    runs-on: windows-latest
-    env:
-      # 与已发布版本一致的产物名（Windows-x64），legacy 那些沿用同一套命名前缀
-      ARTIFACT_SUFFIX: Windows-x64
-      PYTHON_BIT: "64"
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: 确认解释器架构
-        run: python -c "import platform; print('python:', platform.architecture()[0], platform.machine()); assert platform.architecture()[0] == '64bit'"
-
-      - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install "PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf
-
-      - name: PyInstaller 打包（onedir）
-        # 脚本输出固定为 dist/SmartYouth/智慧团委.exe，签名与 Inno Setup 都按这个路径取件
-        run: python scripts/build.py
-        shell: pwsh
-
-      - name: 冒烟检查（冻结产物真能起窗口）
-        # 分析期 import 通过不代表能跑：缺 DLL、缺 Qt 插件都在这一步暴露。
-        # 产物是 --windowed（无控制台），从管道拿不到 stdout 与退出码，
-        # 让程序把结论写进文件，这里读文件判断。
-        shell: pwsh
-        run: |
-          $env:HOME = Join-Path $env:TEMP "smoke-x64"
-          $env:USERPROFILE = $env:HOME
-          $result = Join-Path $env:TEMP "smoke-result-x64.txt"
-          Remove-Item $result -ErrorAction SilentlyContinue
-          $exe = "dist\SmartYouth\$($env:APP_DISPLAY_NAME).exe"
-          if (-not (Test-Path $exe)) { throw "找不到打包产物 $exe" }
-          # 单行写，不用反引号续行：YAML 块里行尾空格会让续行悄悄失效
-          $p = Start-Process -FilePath $exe -PassThru -Wait -ArgumentList "--smoke-test", "--smoke-result", $result
-          Write-Host "退出码: $($p.ExitCode)"
-          if ($p.ExitCode -ne 0) { throw "冻结产物冒烟失败（退出码 $($p.ExitCode)）" }
-          if (-not (Test-Path $result)) { throw "冒烟没有写出结果文件 $result" }
-          $text = Get-Content $result -Raw
-          Write-Host $text
-          if ($text -notmatch "SMOKE OK") { throw "冒烟结果里没有 SMOKE OK" }
-
-      - name: 准备代码签名证书
-        id: cert
-        shell: pwsh
-        env:
-          WIN_CERT_PFX_B64: ${{ secrets.WIN_CERT_PFX_B64 }}
-          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          if ($env:SIGNPATH_API_TOKEN) {
-            # SignPath 模式：私钥在 SignPath 的 HSM 里，CI 不碰证书文件。
-            # 本地 signtool 全部跳过，安装包整件交 signpath 步骤云端签名。
-            "mode=signpath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "signtool=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "password=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            Write-Host "使用 SignPath 云端签名（正式 CA 证书，无需本地私钥）"
-            exit 0
-          }
-          $pwd = ""
-          if ($env:WIN_CERT_PFX_B64) {
-            $bytes = [Convert]::FromBase64String($env:WIN_CERT_PFX_B64)
-            [IO.File]::WriteAllBytes("cert.pfx", $bytes)
-            $pwd = $env:WIN_CERT_PASSWORD
-            $xc = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("cert.pfx", $pwd)
-            "mode=secret" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            Write-Host "使用仓库 Secrets 中的证书签名（真实证书，终端不再提示未知发布者）"
-          } else {
-            $pwd = "LocalSign!" + ([guid]::NewGuid().ToString('N').Substring(0, 10))
-            $xc = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=智慧团委 (SmartYouth)" `
-              -KeyUsage DigitalSignature -FriendlyName "SmartYouth Code Signing" `
-              -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable `
-              -NotAfter (Get-Date).AddYears(3) `
-              -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
-            $sp = ConvertTo-SecureString -String $pwd -Force -AsPlainText
-            Export-PfxCertificate -Cert $xc -FilePath "cert.pfx" -Password $sp | Out-Null
-            "mode=selfsigned" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            Write-Host "未配置证书 Secrets，已生成本次自签名证书"
-          }
-          # 导出公钥证书随包分发：内部分发时把它装进「受信任的根证书颁发机构」即可消除未知发布者。
-          # 放在 dist/installer 里，与安装包同目录——upload-artifact 多路径时按公共父目录保留
-          # 结构，分开放会让产物在 artifact 里多一层 installer/，Release 的 files 就对不上。
-          New-Item -ItemType Directory -Force "dist/installer" | Out-Null
-          Export-Certificate -Cert $xc -FilePath "dist/installer/SmartYouth-CodeSigning.cer" | Out-Null
-          "password=$pwd" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-          $candidates = @(
-            "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe",
-            "C:\Program Files (x86)\Windows Kits\10\bin\*\x86\signtool.exe"
-          )
-          $signtool = $null
-          foreach ($pat in $candidates) {
-            $found = Get-ChildItem $pat -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
-            if ($found) { $signtool = $found.FullName; break }
-          }
-          if ($signtool) {
-            "signtool=$signtool" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            Write-Host "signtool: $signtool"
-          } else {
-            "signtool=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            Write-Warning "找不到 signtool，跳过签名（安装包照常产出，但为未签名）"
-          }
-
-      - name: 签名主程序（本地证书）
-        if: steps.cert.outputs.signtool != ''
-        shell: pwsh
-        env:
-          SIGN_PWD: ${{ steps.cert.outputs.password }}
-        run: |
-          $st = "${{ steps.cert.outputs.signtool }}"
-          $exe = "dist\SmartYouth\$($env:APP_DISPLAY_NAME).exe"
-          & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
-          if ($LASTEXITCODE -ne 0) {
-            Write-Warning "带时间戳签名失败，改试不带时间戳"
-            & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 $exe
-          }
-          if ($LASTEXITCODE -ne 0) { Write-Warning "主程序签名失败，产物未签名" } else { Write-Host "主程序已签名" }
-
-      - name: 安装 Inno Setup
-        run: choco install innosetup --no-progress -y
-
-      - name: 编译安装包
-        shell: pwsh
-        run: |
-          $ver = "${{ github.ref_name }}".TrimStart('v')
-          if (-not $ver -or $ver -eq 'workflow_dispatch') { $ver = "1.0.0" }
-          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { throw "找不到 ISCC.exe（Inno Setup 未装好）" }
-          # 自签名时多给安装包一个「信任证书」选项（安装时可选择提权把证书装进根存储）
-          $defs = @("/DAppVersion=$ver", "/DArtifactSuffix=$env:ARTIFACT_SUFFIX",
-                    "/DBitWidth=$env:PYTHON_BIT")
-          if ('${{ steps.cert.outputs.mode }}' -eq 'selfsigned') { $defs += "/DSelfSigned=1" }
-          & $iscc @defs "installer.iss"
-          if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译安装包失败" }
-          Get-Item "dist\installer\SmartYouth-Windows-x64-setup.exe" | Select-Object Name, Length
-
-      # SignPath 模式：整件安装包交云端签名（主 exe 不单独签——SmartScreen 看
-      # 的是下载文件 setup.exe 的签名与信誉）。先传成 artifact 拿 id，再原地签回。
-      - name: 上传待签名安装包
-        id: unsigned-art
-        if: steps.cert.outputs.mode == 'signpath'
-        uses: actions/upload-artifact@v6
-        with:
-          name: unsigned-windows-setup
-          path: dist/installer/SmartYouth-Windows-x64-setup.exe
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: SignPath 云端签名
-        if: steps.cert.outputs.mode == 'signpath'
-        uses: SignPath/github-action-submit-signing-request@v2
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.unsigned-art.outputs.artifact-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-for-completion: true
-          # 默认会解包：签好的 exe 直接落在 output-artifact-directory 下
-          output-artifact-directory: dist/signed
-
-      - name: 校验并落位签名结果
-        if: steps.cert.outputs.mode == 'signpath'
-        shell: pwsh
-        run: |
-          $signed = Get-ChildItem "dist/signed" -Filter "*.exe" -Recurse | Select-Object -First 1
-          if (-not $signed) { throw "SignPath 返回目录里没有签好的 exe" }
-          Move-Item -Force $signed.FullName "dist/installer/SmartYouth-Windows-x64-setup.exe"
-          $sig = Get-AuthenticodeSignature "dist/installer/SmartYouth-Windows-x64-setup.exe"
-          Write-Host "签名状态: $($sig.Status) / 签名者: $($sig.SignerCertificate.Subject)"
-          if ($sig.Status -ne "Valid") { throw "签名状态异常: $($sig.Status)（$($sig.StatusMessage)）" }
-
-      - name: 上传安装包（SignPath 已签名）
-        if: steps.cert.outputs.mode == 'signpath'
-        uses: actions/upload-artifact@v6
-        with:
-          name: ${{ env.APP_NAME }}-Windows
-          path: dist/installer/SmartYouth-Windows-x64-setup.exe
-          if-no-files-found: error
-
-      - name: 签名安装包（本地证书）
-        if: steps.cert.outputs.mode != 'signpath' && steps.cert.outputs.signtool != ''
-        shell: pwsh
-        env:
-          SIGN_PWD: ${{ steps.cert.outputs.password }}
-        run: |
-          $st = "${{ steps.cert.outputs.signtool }}"
-          $setup = "dist\installer\SmartYouth-Windows-x64-setup.exe"
-          & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $setup
-          if ($LASTEXITCODE -ne 0) { & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 $setup }
-          if ($LASTEXITCODE -ne 0) { Write-Warning "安装包签名失败，产物未签名" } else { Write-Host "安装包已签名" }
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: ${{ env.APP_NAME }}-Windows
-          path: |
-            dist/installer/SmartYouth-Windows-x64-setup.exe
-            dist/installer/SmartYouth-CodeSigning.cer
-          if-no-files-found: error
-
-  build-windows-legacy:
-    # 32 位与 Windows 7 专用。两条硬约束决定了这里的版本组合：
-    #   1. Windows 7 上 CPython 只支持到 3.8（3.9 起要求 Win8+），所以 Win7 必须 3.8；
-    #   2. PyInstaller 官方只保证 Win8+，5.x 的引导程序仍能在 Win7 上跑，
-    #      6.x 起不再验证，因此 Win7 这组钉 5.13.2（最后支持 3.8 的 5.x）。
-    # PyQt5 / PyQtWebEngine / PyMuPDF / numpy / Pillow 都有对应 win32 与 cp38 轮子，
-    # 32 位产物的依赖是齐的。
+    # Windows 四种组合统一跑这一个 job：Win10/11 与 Win7、64 位与 32 位。
+    # 产物命名与系统、位数一一对应，下载列表一眼能分清：
+    #   SmartYouth-Windows10-x64-setup.exe   Win10/11 64 位（Python 3.11）
+    #   SmartYouth-Windows10-x86-setup.exe   Win10/11 32 位（Python 3.11）
+    #   SmartYouth-Windows7-x64-setup.exe    Windows 7 64 位（Python 3.8）
+    #   SmartYouth-Windows7-x86-setup.exe    Windows 7 32 位（Python 3.8）
+    #
+    # 为什么 Win7 必须用 Python 3.8：CPython 3.9 起要求 Windows 8+。
+    # 为什么 Win7 组钉 PyInstaller 5.13.2：官方只保证 Win8+，5.x 的引导程序
+    # 仍能在 Win7 上跑，6.x 起不再验证。
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Windows 10+ 32 位：解释器仍是 3.11，只是 32 位，用新版 PyInstaller
-          - suffix: Windows-x86
+          - name: Windows10-x64
+            os: Windows10
+            bit: "64"
+            python: "3.11"
+            pyinstaller: "pyinstaller"
+            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf'
+          - name: Windows10-x86
+            os: Windows10
             bit: "32"
             python: "3.11"
             pyinstaller: "pyinstaller"
-            pip: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf'
-          # Windows 7 64 位
-          - suffix: Win7-x64
+            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf'
+          - name: Windows7-x64
+            os: Windows7
             bit: "64"
             python: "3.8"
             pyinstaller: "pyinstaller==5.13.2"
-            # 3.8 上必须钉版本：新版 PyMuPDF 要 >=3.10、numpy 2.x 要 >=3.9
-            pip: '"PyQt5==5.15.11" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine==5.15.7" pypdf "pillow<11" openpyxl requests "pymupdf==1.24.11" "numpy<1.25"'
-          # Windows 7 32 位
-          - suffix: Win7-x86
+            # 3.8 必须钉版本：新版 PyMuPDF 要 >=3.10、numpy 2.x 要 >=3.9
+            deps: '"PyQt5==5.15.11" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine==5.15.7" pypdf "pillow<11" openpyxl requests "pymupdf==1.24.11" "numpy<1.25"'
+          - name: Windows7-x86
+            os: Windows7
             bit: "32"
             python: "3.8"
             pyinstaller: "pyinstaller==5.13.2"
-            pip: '"PyQt5==5.15.11" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine==5.15.7" pypdf "pillow<11" openpyxl requests "pymupdf==1.24.11" "numpy<1.25"'
+            deps: '"PyQt5==5.15.11" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine==5.15.7" pypdf "pillow<11" openpyxl requests "pymupdf==1.24.11" "numpy<1.25"'
     env:
-      ARTIFACT_SUFFIX: ${{ matrix.suffix }}
-      PYTHON_BIT: ${{ matrix.bit }}
+      PKG_NAME: SmartYouth-${{ matrix.name }}-setup
+      TARGET_OS: ${{ matrix.os }}
+      IS_64: ${{ matrix.bit == '64' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -365,8 +165,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install ${{ matrix.pyinstaller }}
-          python -m pip install ${{ matrix.pip }}
-          python -m pip list
+          python -m pip install ${{ matrix.deps }}
 
       - name: PyInstaller 打包（onedir）
         run: python scripts/build.py
@@ -374,13 +173,13 @@ jobs:
 
       - name: 冒烟检查（冻结产物真能起窗口）
         # 分析期 import 通过不代表能跑：缺 DLL、缺 Qt 插件都在这一步暴露。
-        # 产物是 --windowed（无控制台），从管道既拿不到 stdout 也拿不到退出码，
-        # 所以让程序把结论写进文件，这里读文件判断。
+        # 产物是 --windowed（无控制台），从管道拿不到 stdout 与退出码，
+        # 让程序把结论写进文件，这里读文件判断。
         shell: pwsh
         run: |
-          $env:HOME = Join-Path $env:TEMP "smoke-${{ matrix.suffix }}"
+          $env:HOME = Join-Path $env:TEMP "smoke-${{ matrix.name }}"
           $env:USERPROFILE = $env:HOME
-          $result = Join-Path $env:TEMP "smoke-result-${{ matrix.suffix }}.txt"
+          $result = Join-Path $env:TEMP "smoke-result-${{ matrix.name }}.txt"
           Remove-Item $result -ErrorAction SilentlyContinue
           $exe = "dist\SmartYouth\$($env:APP_DISPLAY_NAME).exe"
           if (-not (Test-Path $exe)) { throw "找不到打包产物 $exe" }
@@ -403,18 +202,19 @@ jobs:
           if (-not $ver -or $ver -eq 'workflow_dispatch') { $ver = "1.0.0" }
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "找不到 ISCC.exe（Inno Setup 未装好）" }
-          # 参数用数组传，不靠反引号续行
-          $defs = @("/DAppVersion=$ver", "/DArtifactSuffix=$env:ARTIFACT_SUFFIX",
-                    "/DBitWidth=$env:PYTHON_BIT")
+          # 参数用数组传，不靠反引号续行。产物名整体传入，安装脚本不再自己拼后缀
+          $defs = @("/DAppVersion=$ver", "/DOutputName=$env:PKG_NAME",
+                    "/DTargetOS=$env:TARGET_OS", "/DIs64=$env:IS_64")
           & $iscc @defs "installer.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译安装包失败" }
-          Get-Item "dist\installer\SmartYouth-$($env:ARTIFACT_SUFFIX)-setup.exe" |
-            Select-Object Name, Length
+          $out = "dist\installer\$($env:PKG_NAME).exe"
+          if (-not (Test-Path $out)) { throw "安装包没有生成：$out" }
+          Get-Item $out | Select-Object Name, Length
 
       - uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.APP_NAME }}-${{ matrix.suffix }}
-          path: dist/installer/SmartYouth-${{ matrix.suffix }}-setup.exe
+          name: SmartYouth-${{ matrix.name }}
+          path: dist/installer/${{ env.PKG_NAME }}.exe
           if-no-files-found: error
 
   build-linux:
@@ -503,7 +303,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [build-macos, build-windows, build-windows-legacy, build-linux]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -518,13 +318,13 @@ jobs:
           {
             echo "## 下载"
             echo "- **macOS（Apple Silicon / M 系列）**：\`SmartYouth-macOS-arm64.dmg\`（挂载后是「智慧团委.app」）"
-            echo "- **Windows 10/11（64 位）**：\`SmartYouth-Windows-x64-setup.exe\`（每用户安装，不需要管理员权限、不弹 UAC）"
-            echo "- **Windows 10/11（32 位）**：\`SmartYouth-Windows-x86-setup.exe\`"
-            echo "- **Windows 7（64 位）**：\`SmartYouth-Win7-x64-setup.exe\`"
-            echo "- **Windows 7（32 位）**：\`SmartYouth-Win7-x86-setup.exe\`"
+            echo "- **Windows 10 / 11（64 位）**：\`SmartYouth-Windows10-x64-setup.exe\`（每用户安装，不需要管理员权限、不弹 UAC）"
+            echo "- **Windows 10 / 11（32 位）**：\`SmartYouth-Windows10-x86-setup.exe\`"
+            echo "- **Windows 7（64 位）**：\`SmartYouth-Windows7-x64-setup.exe\`"
+            echo "- **Windows 7（32 位）**：\`SmartYouth-Windows7-x86-setup.exe\`"
             echo "- **Linux（x86_64）**：\`SmartYouth-Linux-x64.deb\`（装好后命令 \`smartyouth\` 或应用列表里的「智慧团委」；面向 Ubuntu 22.04+/Debian 12+）"
             echo
-            echo "> macOS 仅支持 Apple Silicon。Windows 按系统与位数选包：Win10/11 用 Windows-x64 或 Windows-x86，Windows 7 用 Win7-x64 或 Win7-x86（Win7 包基于 Python 3.8，无法使用 Win10/11 包）。安装包用英文名（GitHub 下载文件名不支持中文），装好后的应用名是「智慧团委」。"
+            echo "> macOS 仅支持 Apple Silicon。Windows 按系统与位数选包：Win10/11 用 Windows10-x64 或 Windows10-x86，Windows 7 用 Windows7-x64 或 Windows7-x86（Win7 包基于 Python 3.8，无法使用 Win10/11 包）。安装包用英文名（GitHub 下载文件名不支持中文），装好后的应用名是「智慧团委」。"
             echo
             echo "首次运行：macOS 若提示「无法验证开发者」，右键 → 打开，或执行 \`xattr -cr /Applications/智慧团委.app\`；"
             echo "Windows 双击安装包，SmartScreen 提示时点「更多信息 → 仍要运行」。"

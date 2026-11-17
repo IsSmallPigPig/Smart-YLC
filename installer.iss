@@ -29,14 +29,23 @@
 #ifndef SelfSigned
   #define SelfSigned 0
 #endif
-; 产物后缀与位宽：workflow 按矩阵传入（Windows-x64 / Windows-x86 / Win7-x64 / Win7-x86）。
-; 本地直接双击编译时不带这些，落回原有的 64 位命名，行为不变。
-#ifndef ArtifactSuffix
-  #define ArtifactSuffix "Windows-x64"
+; 产物名与目标系统：workflow 按矩阵传入，例如
+;   /DOutputName=SmartYouth-Windows10-x86-setup
+;   /DTargetOS=Windows10  /DIs64=1
+; 本地直接双击编译时不带这些，落回 Windows 10 / 64 位那套默认值。
+;
+; 注意 /D 传进来的值是**字符串**，比较时必须带引号；写成无引号的数字会让
+; ISPP 把字符串和整数相比较、直接编译失败（这次四个 Windows 变体全挂在这）。
+#ifndef OutputName
+  #define OutputName "SmartYouth-Windows10-x64-setup"
 #endif
-; 位宽用数值而不是字符串：ISPP 的 #if 按数值比较最稳，不依赖字符串比较的支持
-#ifndef BitWidth
-  #define BitWidth 64
+; "Windows10" 或 "Windows7"，仅用于安装包里显示的最低系统要求
+#ifndef TargetOS
+  #define TargetOS "Windows10"
+#endif
+; 位宽："1" 表示 64 位。用字符串而不是数字，和 /D 的类型保持一致
+#ifndef Is64
+  #define Is64 "1"
 #endif
 
 [Setup]
@@ -52,19 +61,19 @@ DisableProgramGroupPage=yes
 ; 每用户安装：不需要管理员、不弹 UAC，从根上避开「未知发布者」的提权提示
 PrivilegesRequired=lowest
 OutputDir={#OutputDir}
-OutputBaseFilename=SmartYouth-{#ArtifactSuffix}-setup
+OutputBaseFilename={#OutputName}
 SetupIconFile=app\assets\smart-ylc.ico
 UninstallDisplayIcon={app}\{#AppName}.exe
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-#if BitWidth == 64
+#if Is64 == "1"
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 #else
 ; 32 位安装包能装进任何 Windows（x86 处理器与 x64 处理器都跑得下 32 位程序），
-; 所以不设 ArchitecturesAllowed 门槛；安装模式保持 32 位，WOA-on-ARM 除外
-ArchitecturesAllowed=x86 x64 arm64
+; 所以不设 ArchitecturesAllowed 门槛
+ArchitecturesAllowed=x86 x64
 #endif
 DisableWelcomePage=no
 
