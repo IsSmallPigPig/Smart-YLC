@@ -105,14 +105,44 @@ def test_mono_font_is_bundled_and_registered(app):
     from app.ui.widgets import mono_family, tabular_label
     from PyQt5.QtWidgets import QLabel
 
-    font_file = assets_dir() / "fonts" / "JetBrainsMono-Regular.ttf"
+    from app.setup import FONT_FILE
+
+    font_file = assets_dir() / "fonts" / FONT_FILE
     assert font_file.is_file(), f"打包缺字体文件：{font_file}"
-    assert (assets_dir() / "fonts" / "OFL.txt").is_file(), "字体许可证要随包分发"
+    assert (assets_dir() / "fonts" / "LICENSE-MapleMono.txt").is_file(), \
+        "字体许可证要随包分发"
 
     from PyQt5.QtGui import QFontDatabase
 
     family = mono_family()
-    # 只比名字不够：注册失败时代码会回落成同名默认值，这里确认字体真在库里
+    # 只比名字不够：注册失败时代码会回落成系统族名，这里确认字体真在库里
     assert family in QFontDatabase().families(), f"字体未注册到 Qt：{family}"
     lbl = tabular_label(QLabel("42/260（16%）"))
     assert lbl.font().family() == family
+
+
+def test_bundled_font_is_monospaced_for_cjk_and_latin(app):
+    """内置字体对英文、数字、中文必须等宽。
+
+    这是选它的唯一理由：数字跳动不抖、中英混排不换字体。
+    用字体度量实测，而不是信字体名字里带不带 Mono——名字不可靠。
+    """
+    from PyQt5.QtGui import QFont, QFontMetricsF
+
+    from app.ui.widgets import mono_family
+
+    font = QFont(mono_family())
+    font.setPixelSize(14)
+    fm = QFontMetricsF(font)
+
+    def width(ch: str) -> float:
+        return fm.horizontalAdvance(ch)
+
+    # 西文与数字完全等宽
+    latin = [width(c) for c in "0123456789ABCXYZacxyz"]
+    assert max(latin) - min(latin) < 0.5, f"西文不齐：{latin}"
+
+    # 中文彼此等宽，且恰好是西文的 2 倍（CJK 等宽的惯例）
+    cjk = [width(c) for c in "团员状况信息错误欠缴"]
+    assert max(cjk) - min(cjk) < 0.5, f"中文不齐：{cjk}"
+    assert abs(max(cjk) - min(latin) * 2) < 1.0, "中文宽度应为西文 2 倍"

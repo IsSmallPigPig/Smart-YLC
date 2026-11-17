@@ -23,13 +23,22 @@ from qfluentwidgets import isDarkTheme
 # 语义色 / 中性文字色 / 品牌色：(浅色, 深色)
 # 中性色对应 Fluent 的 Neutral Foreground 1/2/3。
 # fees 沿用原钢蓝分类色的亮版，保证深色主题下欠缴数字读得清。
+# 取值对齐 Fluent 2 官方色阶（https://fluent2.microsoft.design/color）：
+#   浅色用深饱和档（在浅底上够暗、够对比）；深色用同色相的**亮柔档**，
+#   不是把浅色值加亮——Fluent 2 的深色语义色是降低饱和度、抬高明度，
+#   避免深底上刺眼（这也是 warning 从纯黄 #FCE100 改掉的原因）。
 ROLES: dict[str, tuple[str, str]] = {
-    "success": ("#0F7B0F", "#6CCB5F"),
-    "warning": ("#9D5D00", "#FCE100"),
-    "danger": ("#C42B1C", "#FF99A4"),
-    "info": ("#0078D4", "#4CC2FF"),
-    "brand": ("#2563EB", "#8AB4FF"),
+    # Fluent 2 green：浅 #0D5F31 / 深 #38A762
+    "success": ("#0D5F31", "#38A762"),
+    # Fluent 2 orange：浅 #A52D01 / 深 #F9955C（原来深色用纯黄，刺眼且偏离色相）
+    "warning": ("#A52D01", "#F9955C"),
+    # Fluent 2 magenta：浅 #901434 / 深 #ED6F9A（原来深色 #FF99A4 偏粉、明度过高）
+    "danger": ("#901434", "#ED6F9A"),
+    # Fluent 2 blue：浅 #045B99 / 深 #3CA0F3
+    "info": ("#045B99", "#3CA0F3"),
+    "brand": ("#0A78D5", "#3CA0F3"),
     "fees": ("#4F7CAC", "#9DC6EF"),
+    # 中性色按 Fluent 2 Neutral Foreground 1/2/3
     "fg": ("#242424", "#FFFFFF"),
     "fg2": ("#424242", "#C8C8C8"),
     "fg3": ("#616161", "#8A8A8A"),
@@ -57,8 +66,8 @@ KIND = {
 # 组织状况概览圆环的分色：信息错误=黄（待核对）、欠缴团费=红（需补缴），
 # 这两类是用户要动手处理的；没有报道/没有档案用中性灰，只占位不抢注意力。
 RING = {
-    "identity": "#EAB308",   # 黄
-    "fees": "#DC2626",       # 红
+    "identity": "#EAB308",   # 黄（Fluent 2 无对应黄，取中性可辨的琥珀）
+    "fees": "#BC1947",       # 红（Fluent 2 magenta 中饱和档）
     "report": "#64748B",     # 灰（线上多出、还没报到）
     "archive": "#94A3B8",    # 浅灰
 }

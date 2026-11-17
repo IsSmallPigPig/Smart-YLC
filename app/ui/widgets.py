@@ -519,31 +519,22 @@ _MONO_FAMILY: str | None = None
 
 
 def mono_family() -> str:
-    """内置等宽字族的名字（首次调用时注册字体文件）。
+    """界面等宽字族名。
 
-    字体随程序打包（`app/assets/fonts/JetBrainsMono-Regular.ttf`，OFL 许可），
-    不枚举系统字体——系统没装等宽字体时会静默回退成比例字体，数字宽度照旧不等，
-    而且各机器结果不同，等于没修。
+    全站字体本身就是等宽的（`Maple Mono CN`，随程序打包），所以这里直接取
+    app.setup 注册到的族名；注册失败时才回退到系统等宽，保证仍有可读字体。
+    不枚举系统字体列表——没装等宽字体的机器会静默回退成比例字体，
+    数字宽度照旧不等，而且各机器结果不同，等于没修。
     """
-    global _MONO_FAMILY
-    if _MONO_FAMILY is not None:
-        return _MONO_FAMILY
-    _MONO_FAMILY = "JetBrains Mono"
     try:
-        from PyQt5.QtGui import QFontDatabase
+        from app.setup import register_fonts
 
-        from app.ui.brand import assets_dir
-
-        path = assets_dir() / "fonts" / "JetBrainsMono-Regular.ttf"
-        if path.is_file():
-            fid = QFontDatabase.addApplicationFont(str(path))
-            if fid != -1:
-                families = QFontDatabase.applicationFontFamilies(fid)
-                if families:
-                    _MONO_FAMILY = families[0]
+        family = register_fonts()
+        if family:
+            return family
     except Exception:
         pass
-    return _MONO_FAMILY
+    return "Courier New"
 
 
 def tabular_label(label):

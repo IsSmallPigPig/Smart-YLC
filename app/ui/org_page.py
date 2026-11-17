@@ -332,10 +332,12 @@ class OrgPage(FluentPage):
         grid.addWidget(self.rank_card, 2, 0, 1, 2)          # 第三行：支部排行
         grid.addWidget(self.health_card, 2, 2, 1, 2)        # 第三行：账号状态
         # 列宽：圆环卡固定窄一些，中间两列等宽铺开，最右一列收窄
+        # 列宽比例：圆环卡按内容定宽，中间两列等分剩余，右列给一份固定权重
+        # （原来右列 stretch=0，全靠内容撑，两张窄卡显得局促、数字挤在一起）
         grid.setColumnStretch(0, 0)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
-        grid.setColumnStretch(3, 0)
+        grid.setColumnStretch(1, 10)
+        grid.setColumnStretch(2, 10)
+        grid.setColumnStretch(3, 7)
         grid.setRowStretch(2, 1)
 
         # 概览区整体（四张卡 + 下方转接说明）一起显隐，进名单视图时整块收起

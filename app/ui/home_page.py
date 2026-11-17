@@ -388,10 +388,12 @@ class HomePage(FluentPage):
         title_px = max(34, int(vh * 0.115))
         hello_px = max(26, int(vh * 0.085))
 
+        # 两行用同一个字距：AbsoluteSpacing 会在每个字形**之前**也加一份间隙，
+        # 两行字距不同的话首字左缘的偏移量也不同，_align_hero_ink 的补偿永远差一截
         f = self.title_label.font()
         f.setPixelSize(title_px)
         f.setWeight(QFont.Weight.Bold)
-        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.0)
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
         self.title_label.setFont(f)
 
         f2 = self.hello_label.font()
@@ -399,6 +401,8 @@ class HomePage(FluentPage):
         f2.setWeight(QFont.Weight.Medium)
         f2.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
         self.hello_label.setFont(f2)
+        # 字号变了要重算墨迹对齐（showEvent 里那次是按旧字号算的）
+        self._align_hero_ink()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
