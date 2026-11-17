@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QObject, Signal
+from PyQt5.QtCore import QObject, pyqtSignal as Signal
 
 LEVEL_ISSUE = "issue"
 LEVEL_INFO = "info"

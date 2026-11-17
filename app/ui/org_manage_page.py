@@ -12,9 +12,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 
-from PySide6.QtCore import QSize, Qt, QRectF, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtCore import QSize, Qt, QRectF, QThread, pyqtSignal as Signal
+from PyQt5.QtGui import QColor, QFont, QPainter
+from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
@@ -186,7 +186,9 @@ class CrumbBar(BreadcrumbBar):
         if routeKey in self.itemMap:
             return
         if not getattr(self, "_theme_hooked", False):
-            qconfig.themeChanged.connect(lambda *_: self._repaint_items())
+            # 绑定方法而非 lambda：面包屑销毁后 qconfig 仍会发信号，
+            # lambda 会让它打进悬空对象（PyQt5 里直接 abort）
+            qconfig.themeChanged.connect(self._repaint_items)
             self._theme_hooked = True
         item = _CrumbItem(routeKey, text, len(self.items), self)
         item.setFont(self.font())
@@ -390,7 +392,14 @@ class OrgManagePage(FluentPage):
         lay.addWidget(self.detail_box, 1)
         lay.addStretch(1)
         self._set_nav(False)
-        qconfig.themeChanged.connect(lambda *_: self._rebuild() if self.isVisible() else None)
+        # 绑定方法而非 lambda：页面销毁后 qconfig 仍会发信号，
+        # lambda 会让它打进悬空对象（PyQt5 里直接 abort）
+        qconfig.themeChanged.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self, *_):
+        """切主题：可见才重建（卡片颜色烘焙在构建时定死），藏着的等下次进入再说。"""
+        if self.isVisible():
+            self._rebuild()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

@@ -5,9 +5,9 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 
-from PySide6.QtCore import QObject, QTimer, QThread, Signal, Qt
-from PySide6.QtGui import QGuiApplication, QIcon
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+from PyQt5.QtCore import QObject, QTimer, QThread, pyqtSignal as Signal, Qt
+from PyQt5.QtGui import QGuiApplication, QIcon
+from PyQt5.QtWidgets import QApplication, QSystemTrayIcon
 
 from qfluentwidgets import Action, FluentIcon as FIF, RoundMenu
 
@@ -122,7 +122,7 @@ class TrayDaemon(QObject):
 
 
 def run_tray() -> int:
-    from PySide6.QtCore import Qt
+    from PyQt5.QtCore import Qt
 
     # 托盘里也能打开主窗口，内嵌网页同样要求共享 OpenGL 上下文
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)

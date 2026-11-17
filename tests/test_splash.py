@@ -10,7 +10,7 @@ import types
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication, QWidget
+from PyQt5.QtWidgets import QApplication, QWidget
 
 
 @pytest.fixture(scope="module")

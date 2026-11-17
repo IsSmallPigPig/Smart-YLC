@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import json
 
-from PySide6.QtCore import QObject, Signal
-from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QWidget
+from PyQt5.QtCore import QObject, pyqtSignal as Signal
+from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QWidget
 
 from qfluentwidgets import CaptionLabel, LineEdit, PushButton, SubtitleLabel, TextEdit
 

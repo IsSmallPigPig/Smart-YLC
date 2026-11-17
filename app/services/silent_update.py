@@ -144,8 +144,8 @@ def install(path: str) -> None:
 
 def _notify(title: str, body: str) -> None:
     """完成通知走系统通道；Windows 的托盘气泡要事件循环才能送达。"""
-    from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication
+    from PyQt5.QtCore import QTimer
+    from PyQt5.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
     from app.services.notify import send

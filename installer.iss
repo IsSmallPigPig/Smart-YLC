@@ -29,6 +29,14 @@
 #ifndef SelfSigned
   #define SelfSigned 0
 #endif
+; 产物后缀与位宽：workflow 按矩阵传入（Win-x64 / Win-x86 / Win7-x64 / Win7-x86）。
+; 本地直接双击编译时不带这些，落回原来的 x64 命名，行为不变。
+#ifndef ArtifactSuffix
+  #define ArtifactSuffix "Win-x64"
+#endif
+#ifndef BitWidth
+  #define BitWidth "64"
+#endif
 
 [Setup]
 ; 固定的 AppId：升级时靠它识别「这是同一个应用」，不要改
@@ -43,15 +51,20 @@ DisableProgramGroupPage=yes
 ; 每用户安装：不需要管理员、不弹 UAC，从根上避开「未知发布者」的提权提示
 PrivilegesRequired=lowest
 OutputDir={#OutputDir}
-OutputBaseFilename=SmartYouth-Windows-x64-setup
+OutputBaseFilename=SmartYouth-{#ArtifactSuffix}-setup
 SetupIconFile=app\assets\smart-ylc.ico
 UninstallDisplayIcon={app}\{#AppName}.exe
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-; 只出 64 位：PySide6 6.x 没有 32 位轮子
+#if BitWidth == "64"
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
+#else
+; 32 位安装包能装进任何 Windows（x86 处理器与 x64 处理器都跑得下 32 位程序），
+; 所以不设 ArchitecturesAllowed 门槛；安装模式保持 32 位，WOA-on-ARM 除外
+ArchitecturesAllowed=x86 x64 arm64
+#endif
 DisableWelcomePage=no
 
 [Languages]

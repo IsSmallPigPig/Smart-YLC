@@ -13,7 +13,7 @@ import tempfile
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication, QWidget
+from PyQt5.QtWidgets import QApplication, QWidget
 
 
 @pytest.fixture(scope="module")
@@ -141,7 +141,7 @@ def test_export_dialog_builds(app, isolated_store):
 
 def test_home_reopen_keeps_page_instead_of_covering_it(app, isolated_store):
     """从托盘回来、切回首页时不再铺白色过渡页：概览已经在屏幕上，盖一层只会整页闪白。"""
-    from PySide6.QtGui import QShowEvent
+    from PyQt5.QtGui import QShowEvent
 
     from app.ui.home_page import HomePage
 
@@ -232,7 +232,7 @@ def test_system_backup_covers_every_setting(app, isolated_store, tmp_path, monke
     """系统备份必须是全部软件设置的快照，不能只导出支部账号。"""
     import json
 
-    from PySide6.QtWidgets import QFileDialog
+    from PyQt5.QtWidgets import QFileDialog
 
     from app.services import store
     from app.ui.settings_page import SettingsPage
@@ -387,7 +387,7 @@ def test_about_card_has_clean_handle(app, isolated_store):
 
 def _pump(app, ms: int = 60):
     """跑一小段事件循环：分批建卡与淡入淡出都靠事件驱动，需要让它走完。"""
-    from PySide6.QtCore import QEventLoop, QTimer
+    from PyQt5.QtCore import QEventLoop, QTimer
 
     loop = QEventLoop()
     QTimer.singleShot(ms, loop.quit)
@@ -442,7 +442,7 @@ def test_messages_same_digest_skips_rebuild(app, isolated_store):
 
 def test_messages_first_show_uses_loading_page(app, isolated_store, monkeypatch):
     """系统消息首次显示先铺加载页，列表分批建完再收；失败路径也不能卡在加载态。"""
-    from PySide6.QtGui import QShowEvent
+    from PyQt5.QtGui import QShowEvent
 
     from app.ui.messages_page import MessagesPage
     from app.ui.page import PageBanner
@@ -468,7 +468,7 @@ def test_messages_first_show_uses_loading_page(app, isolated_store, monkeypatch)
 
 
 def test_messages_reopen_does_not_repeat_loading_page(app, isolated_store, monkeypatch):
-    from PySide6.QtGui import QShowEvent
+    from PyQt5.QtGui import QShowEvent
 
     from app.ui.messages_page import MessagesPage
 
@@ -498,8 +498,8 @@ def test_repeated_expand_restores_layout(app, isolated_store):
     旧实现结束时只恢复 maximumHeight，外层布局仍拿着动画中途的尺寸提示，
     结果卡片越点越矮、下面的卡片跟着上移。这里用真实设置页那种不等高的行来锁住。
     """
-    from PySide6.QtCore import QSize
-    from PySide6.QtWidgets import QVBoxLayout
+    from PyQt5.QtCore import QSize
+    from PyQt5.QtWidgets import QVBoxLayout
 
     from app.ui.anim import animate_expand
 
@@ -596,7 +596,7 @@ def test_health_summary_merges_reasons(app, isolated_store):
 
 def test_branch_picker_lists_only_normal_accounts(app):
     """只列状态正常的账号，并在弹窗里说明隐藏了多少异常账号。"""
-    from PySide6.QtWidgets import QWidget
+    from PyQt5.QtWidgets import QWidget
 
     from app.ui.branch_picker import BranchPickerDialog, pick_branch
 
@@ -688,8 +688,8 @@ def test_browser_tab_row_drags_window_itself(app):
     """拖窗自己算位移，不把 mouseDown 交给 AppKit 的系统拖动。"""
     from types import SimpleNamespace
 
-    from PySide6.QtCore import QPointF, Qt
-    from PySide6.QtWidgets import QWidget
+    from PyQt5.QtCore import QPoint, Qt
+    from PyQt5.QtWidgets import QWidget
 
     from app.ui.browser_page import ChromeRow, _WindowDragger
 
@@ -700,9 +700,10 @@ def test_browser_tab_row_drags_window_itself(app):
     host.move(100, 100)
     app.processEvents()
     drag = _WindowDragger(host)
+    # PyQt5 用 globalPos()（Qt6 的 globalPosition().toPoint() 在 Qt5 没有）
     event = lambda x: SimpleNamespace(
         button=lambda: Qt.MouseButton.LeftButton,
-        globalPosition=lambda: QPointF(x, 120))
+        globalPos=lambda: QPoint(x, 120))
     try:
         assert drag.press(event(200))
         assert drag.move(event(260))
@@ -876,7 +877,7 @@ def test_fluent_semantic_roles_have_light_and_dark_values(app):
     assert P.pair("info") == ("#0078D4", "#4CC2FF")
     # 深色档比浅色档亮（深色底上才读得清）
     for role in ("danger", "warning", "success", "info", "brand", "fees", "fg2"):
-        from PySide6.QtGui import QColor
+        from PyQt5.QtGui import QColor
         light, dark = (QColor(v) for v in P.pair(role))
         assert dark.lightness() > light.lightness(), role
 
@@ -975,7 +976,7 @@ def test_upload_remove_dir_keeps_others(app, isolated_store, tmp_path):
 
 def test_upload_drop_payload_takes_folders_and_pdf_parents(app, isolated_store, tmp_path):
     """拖进来的文件夹直接加；拖的是 PDF 就用它所在的文件夹。"""
-    from PySide6.QtCore import QMimeData, QUrl
+    from PyQt5.QtCore import QMimeData, QUrl
 
     from app.ui.upload_page import UploadPage
 
@@ -1023,7 +1024,7 @@ def test_upload_folder_card_is_plain_card(app, isolated_store, tmp_path):
 
 def test_update_download_failure_clears_progress(app, isolated_store):
     """下载失败必须收掉「正在下载」浮层，按钮回到可重试的状态。"""
-    from PySide6.QtWidgets import QVBoxLayout
+    from PyQt5.QtWidgets import QVBoxLayout
 
     from app.ui.about_card import AboutCard
 
@@ -1047,7 +1048,7 @@ def test_update_download_failure_clears_progress(app, isolated_store):
 
 def _instant_card_timers(monkeypatch, card_holder):
     """测试里把卡片自己的延时立刻执行，别的 QTimer 保持原样。"""
-    from PySide6.QtCore import QTimer
+    from PyQt5.QtCore import QTimer
 
     original = QTimer.singleShot
 
@@ -1062,7 +1063,7 @@ def _instant_card_timers(monkeypatch, card_holder):
 
 def test_download_starts_silent_install(app, isolated_store, tmp_path, monkeypatch):
     """下载完就交给独立进程静默安装，不再弹出安装窗口。"""
-    from PySide6.QtWidgets import QVBoxLayout
+    from PyQt5.QtWidgets import QVBoxLayout
 
     from app.services import silent_update
     from app.ui.about_card import AboutCard
@@ -1093,7 +1094,7 @@ def test_download_starts_silent_install(app, isolated_store, tmp_path, monkeypat
 
 def test_silent_install_failure_keeps_downloaded_package(app, isolated_store, tmp_path, monkeypatch):
     """助手拉不起来时保留更新包，并让按钮回到「打开目录」手动安装。"""
-    from PySide6.QtWidgets import QVBoxLayout
+    from PyQt5.QtWidgets import QVBoxLayout
 
     from app.services import silent_update
     from app.ui.about_card import AboutCard
@@ -1127,7 +1128,7 @@ def test_silent_install_failure_keeps_downloaded_package(app, isolated_store, tm
 
 def test_update_check_latest_finishes_progress(app, isolated_store):
     """已是最新：浮层收掉并把结论留在浮层文案上，不再另弹信息条。"""
-    from PySide6.QtWidgets import QVBoxLayout
+    from PyQt5.QtWidgets import QVBoxLayout
 
     from app.ui.about_card import AboutCard
 
@@ -1147,7 +1148,7 @@ def test_update_check_latest_finishes_progress(app, isolated_store):
 
 def test_update_found_moves_action_into_row(app, isolated_store):
     """发现新版本：动作落在行内按钮上，不再往信息条里加控件（那会撑出窗口）。"""
-    from PySide6.QtWidgets import QVBoxLayout
+    from PyQt5.QtWidgets import QVBoxLayout
 
     from app.ui.about_card import AboutCard
 
@@ -1251,7 +1252,7 @@ def test_notify_dialog_fresh_per_open_and_writeback(app, isolated_store):
 
     旧实现复用页面上的持久 time_edit/interval 控件，两次打开会重复 reparent
     导致渲染错位；且改动不会落回 _save_config 读取的属性。"""
-    from PySide6.QtWidgets import QApplication
+    from PyQt5.QtWidgets import QApplication
 
     from qfluentwidgets import ComboBox
 
@@ -1294,7 +1295,7 @@ def test_settings_has_no_orphan_top_level_widgets(app, isolated_store):
     下拉框）曾既没进布局，又被按通知模式 setVisible——「每天」弹出前者，
     「按间隔」弹出后者；ws_edit（工作目录框）也是隐藏的游离窗口。现在三者
     都只是普通值属性。"""
-    from PySide6.QtWidgets import QApplication, QMenu
+    from PyQt5.QtWidgets import QApplication, QMenu
 
     from app.ui.settings_page import SettingsPage
 
@@ -1541,7 +1542,7 @@ def test_org_manage_first_show_uses_loading_page(app, isolated_store, monkeypatc
     """组织管理首次显示先铺加载页，支部卡片分批建完才收，失败也会撤掉。"""
     import time
 
-    from PySide6.QtGui import QShowEvent
+    from PyQt5.QtGui import QShowEvent
 
     from app.domain.org_manage import BranchNode
     from app.ui.org_manage_page import OrgManagePage
@@ -1566,8 +1567,8 @@ def test_org_manage_first_show_uses_loading_page(app, isolated_store, monkeypatc
 
 
 def test_org_manage_loading_page_hides_on_failure(app, isolated_store, monkeypatch):
-    from PySide6.QtCore import QObject, QTimer, Signal
-    from PySide6.QtGui import QShowEvent
+    from PyQt5.QtCore import QObject, QTimer, pyqtSignal as Signal
+    from PyQt5.QtGui import QShowEvent
 
     from app.ui import page as page_mod
     from app.ui.org_manage_page import OrgManagePage
@@ -1627,8 +1628,8 @@ def test_org_page_statistics_cover_layout_changes(app, isolated_store):
 
 def test_member_card_click_emits(app, isolated_store):
     """错误团员卡片点击发射信号，交给页面做跳转。"""
-    from PySide6.QtCore import QPoint, Qt
-    from PySide6.QtTest import QTest
+    from PyQt5.QtCore import QPoint, Qt
+    from PyQt5.QtTest import QTest
 
     from app.ui.org_page import MemberCard
 
@@ -1767,7 +1768,7 @@ def test_branch_card_abnormal_uses_warning_background(app, isolated_store):
 
 def test_tables_bind_fluent_context_menus(app, isolated_store):
     """三张表都挂上 Fluent 右键菜单，且菜单不是系统原生 QMenu。"""
-    from PySide6.QtCore import Qt
+    from PyQt5.QtCore import Qt
     from qfluentwidgets import RoundMenu
 
     from app.ui.settings_page import SettingsPage
@@ -1778,7 +1779,7 @@ def test_tables_bind_fluent_context_menus(app, isolated_store):
         assert table.customContextMenuRequested is not None
     # 绑定的辅助函数产生的菜单必须是 RoundMenu
     from app.ui.page import bind_table_context_menu
-    from PySide6.QtWidgets import QTableWidget
+    from PyQt5.QtWidgets import QTableWidget
 
     probe = QTableWidget(1, 1)
     menus = []
@@ -1790,7 +1791,7 @@ def test_tables_bind_fluent_context_menus(app, isolated_store):
 
     RoundMenu.exec = fake_exec
     try:
-        from PySide6.QtCore import QPoint
+        from PyQt5.QtCore import QPoint
         from qfluentwidgets import Action, FluentIcon as FIF
         bind_table_context_menu(
             probe, lambda row: [Action(FIF.COPY, "复制")])
@@ -1882,8 +1883,8 @@ def test_browser_screenshot_wiring(app, isolated_store, monkeypatch):
     """浏览器有截图按钮；保存目录固定；提示条带查看图像与打开目录。"""
     import os
 
-    from PySide6.QtGui import QDesktopServices
-    from PySide6.QtWidgets import QPushButton, QWidget
+    from PyQt5.QtGui import QDesktopServices
+    from PyQt5.QtWidgets import QPushButton, QWidget
     from qfluentwidgets import InfoBar
 
     from app.ui import browser_page

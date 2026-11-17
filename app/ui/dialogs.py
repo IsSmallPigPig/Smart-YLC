@@ -34,7 +34,7 @@ class FluentMessageBox(MessageBox):
     def done(self, code: int) -> None:
         """跳过 MaskDialogBase 渐出动画：QGraphicsOpacityEffect finished 在部分
         环境不触发会让弹窗永远关不掉。"""
-        from PySide6.QtWidgets import QDialog
+        from PyQt5.QtWidgets import QDialog
 
         QDialog.done(self, code)
 
@@ -47,7 +47,7 @@ class FluentPanelDialog(MessageBoxBase):
         strip_center_border(self)
 
     def done(self, code: int) -> None:
-        from PySide6.QtWidgets import QDialog
+        from PyQt5.QtWidgets import QDialog
 
         QDialog.done(self, code)
 
@@ -59,7 +59,7 @@ def confirm(parent, title: str, text: str, yes: str = "确定", cancel: str = "�
     结果经 on_result(bool) 回调（True=点了 yes）。收口用 QDialog.finished 信号——
     按钮点击、Esc、代码调用 accept/reject 全部统一经过它，不会漏；回调执行后
     弹窗自清理。不传 on_result 时弹窗纯提示用，点按钮即关。"""
-    from PySide6.QtWidgets import QDialog
+    from PyQt5.QtWidgets import QDialog
 
     w = FluentMessageBox(title, text, parent)
     w.yesButton.setText(yes)
@@ -96,7 +96,7 @@ class ConfigDialog(FluentPanelDialog):
     def __init__(self, title: str, parent=None, note: str = "", width: int = 420,
                  yes_text: str = "完成"):
         super().__init__(parent)
-        from PySide6.QtWidgets import QVBoxLayout
+        from PyQt5.QtWidgets import QVBoxLayout
 
         from qfluentwidgets import SubtitleLabel
 
@@ -123,7 +123,7 @@ class ConfigDialog(FluentPanelDialog):
 
     def add_row(self, *widgets, spacing: int = 8):
         """一排并排的控件；按钮横向填满弹窗宽度。"""
-        from PySide6.QtWidgets import QHBoxLayout, QWidget
+        from PyQt5.QtWidgets import QHBoxLayout, QWidget
 
         box = QWidget(self.widget)
         lay = QHBoxLayout(box)
@@ -138,7 +138,7 @@ class ConfigDialog(FluentPanelDialog):
 
     def add_field(self, label: str, widget):
         """一个带说明的输入项：说明在上，控件在下。"""
-        from PySide6.QtWidgets import QVBoxLayout, QWidget
+        from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
         from app.ui.page import note_label
 

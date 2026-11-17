@@ -1,228 +1,23 @@
-"""后台提醒：应用在托盘里时也能看到、点一下就跳到对应页面。
+"""后台提醒：只走系统原生通道，不用应用内浮窗。
 
-macOS 打包版优先用系统原生通知，点击回调由 UNUserNotificationCenter 的 delegate
-交回应用；源码运行没有 bundle id 时回落到应用自己的浮窗——置顶、不抢焦点，
-点卡片就把主界面叫出来并切到该处理的那一页。
+macOS 走系统原生通知（UNUserNotificationCenter）：点击回调由 delegate 交回应用，
+再切到对应页面；授权在启动时由 `macos_notify.request_permission()` 主动弹出，
+不等第一条提醒。被系统关掉时不再弹自定义浮窗，返回 False 由调用方提示一次
+「去系统设置开启」。Windows / Linux 走托盘气泡（原生、支持 messageClicked）。
 
-Windows 仍用托盘气泡（原生、支持 messageClicked），点击回调在这里排队挂上；
-气泡发不出去时同样回落到浮窗，不再静默丢消息。
+浮窗与系统通知长得几乎一样，两条通道混用会让人分不清提醒是真是假，也掩盖了
+「权限没开」这个需要用户亲自解决的事实，所以整条回落路径连同 Toast 一起移除。
 """
 
 from __future__ import annotations
 
 import platform
 
-from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPainterPath
-from PySide6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout,
-                               QVBoxLayout, QWidget)
-
-from qfluentwidgets import CaptionLabel, StrongBodyLabel, TransparentToolButton, isDarkTheme
-from qfluentwidgets import FluentIcon as FIF
-
-from app.ui import palette as P
-
-WIDTH = 372
-GAP = 10
-MARGIN = 16
-PAD = 10          # 四周留给投影的空白：靠阴影分层，不画描边
-TOP = 44          # 让开菜单栏 / 任务栏
-LIFETIME = 12000  # 12 秒后自动收起
-
-_TONE = {
-    "error": P.DANGER,
-    "warning": P.WARNING,
-    "success": P.OK,
-    "info": P.BRAND,
-}
-
-
-class _Elided(CaptionLabel):
-    """一行放不下就省掉尾巴——浮窗只有一行高，折行会被切掉。"""
-
-    def __init__(self, text: str = "", parent=None):
-        super().__init__(parent)
-        self._full = text
-        self.setWordWrap(False)
-        self.setText(text)
-
-    def setText(self, text: str):  # noqa: N802 - Qt 接口
-        self._full = text
-        self._apply()
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        self._apply()
-
-    def _apply(self):
-        width = max(0, self.width() - 2)
-        if width <= 0:
-            super().setText(self._full)
-            return
-        elided = self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, width)
-        super().setText(elided)
-
-
-class Toast(QWidget):
-    """一张浮窗卡片：左侧色条按严重程度着色，点卡片执行动作，右侧可关闭。"""
-
-    clicked = Signal()
-    closed = Signal(object)
-
-    def __init__(self, title: str, body: str, tone: str, has_action: bool, parent=None):
-        super().__init__(parent, Qt.WindowType.Tool
-                         | Qt.WindowType.FramelessWindowHint
-                         | Qt.WindowType.WindowStaysOnTopHint
-                         | Qt.WindowType.NoDropShadowWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._tone = _TONE.get(tone, P.BRAND)
-        self._hover = False
-        self._card_h = 58 if body else 46
-
-        self.setFixedSize(WIDTH + PAD * 2, self._card_h + PAD * 2)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor(0, 0, 0, 110 if isDarkTheme() else 60))
-        self.setGraphicsEffect(shadow)
-
-        box = QHBoxLayout(self)
-        box.setContentsMargins(PAD + 16, PAD + 10, PAD + 8, PAD + 10)
-        box.setSpacing(10)
-
-        text = QVBoxLayout()
-        text.setSpacing(2)
-        self.title_lbl = StrongBodyLabel(title, self)
-        f = self.title_lbl.font()
-        f.setPixelSize(13)
-        f.setWeight(QFont.Weight.DemiBold)
-        self.title_lbl.setFont(f)
-        text.addWidget(self.title_lbl)
-        self.body_lbl = _Elided(body, self)
-        self.body_lbl.setTextColor(*P.text_colors("fg2"))
-        text.addWidget(self.body_lbl)
-        if not body:
-            self.body_lbl.hide()
-        box.addLayout(text, 1)
-
-        if has_action:
-            self.hint = CaptionLabel("查看", self)
-            self.hint.setTextColor(*P.text_colors("brand"))
-            box.addWidget(self.hint, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        self.close_btn = TransparentToolButton(FIF.CLOSE, self)
-        self.close_btn.setFixedSize(22, 22)
-        self.close_btn.setIconSize(self.close_btn.iconSize() * 0.7)
-        self.close_btn.clicked.connect(self.dismiss)
-        box.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
-
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.setInterval(LIFETIME)
-        self._timer.timeout.connect(self.dismiss)
-
-    # ---------- 绘制 ----------
-
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        card = QRectF(self.rect()).adjusted(PAD, PAD, -PAD, -PAD)
-        path = QPainterPath()
-        path.addRoundedRect(card, 10, 10)
-
-        # 不描边：深色桌面上 1px 浅色描边会显成一条白边，边界交给投影
-        p.setPen(Qt.PenStyle.NoPen)
-        if isDarkTheme():
-            p.setBrush(QColor(43, 43, 46, 246))
-        else:
-            p.setBrush(QColor(252, 252, 253, 250))
-        p.drawPath(path)
-
-        # 左侧色条：限制在圆角内，避免方头露在卡片外面
-        p.save()
-        p.setClipPath(path)
-        p.setBrush(QColor(self._tone))
-        p.drawRoundedRect(QRectF(card.left(), card.top(), 4, card.height()), 2, 2)
-        p.restore()
-
-    # ---------- 交互 ----------
-
-    def show_at(self, pos: QPoint):
-        self.move(pos)
-        self.show()
-        self.raise_()
-        self._timer.start()
-
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-            self.dismiss()
-        super().mouseReleaseEvent(e)
-
-    def enterEvent(self, e):
-        self._hover = True
-        self._timer.stop()
-        super().enterEvent(e)
-
-    def leaveEvent(self, e):
-        self._hover = False
-        self._timer.start()
-        super().leaveEvent(e)
-
-    def dismiss(self):
-        self._timer.stop()
-        self.closed.emit(self)
-        self.hide()
-        self.deleteLater()
-
-
-class _Host:
-    """最多同时三张，新的挤掉最旧的；按主屏右上角向下排。"""
-
-    def __init__(self):
-        self.items: list[Toast] = []
-
-    def push(self, title: str, body: str, tone: str, on_click=None) -> bool:
-        if QApplication.instance() is None:
-            return False
-        toast = Toast(title, body, tone, has_action=bool(on_click or _default_action))
-        if on_click is not None:
-            toast.clicked.connect(on_click)
-        elif _default_action is not None:
-            toast.clicked.connect(_default_action)
-        toast.closed.connect(self._remove)
-        self.items.append(toast)
-        while len(self.items) > 3:
-            self.items[0].dismiss()
-        toast.show_at(QPoint(0, 0))
-        self._reposition()
-        return True
-
-    def _remove(self, toast):
-        if toast in self.items:
-            self.items.remove(toast)
-        self._reposition()
-
-    def _reposition(self):
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:
-            return
-        area = screen.availableGeometry()
-        y = area.top() + TOP
-        for toast in self.items:
-            # 按卡片本体算右边距（widget 还含投影留白）
-            toast.move(area.right() - toast.width() + PAD - MARGIN, y)
-            y += toast._card_h + GAP
-
-
-_host: _Host | None = None
 _default_action = None
 
 
 def set_default_action(fn):
-    """没有具体动作时点卡片做什么（默认：把主界面叫出来）。"""
+    """通知被点时如果没有具体动作，做什么（默认：把主界面叫出来）。"""
     global _default_action
     _default_action = fn
 
@@ -231,24 +26,19 @@ def alert(title: str, body: str = "", tone: str = "",
           tray=None, on_click=None) -> bool:
     """发一条后台提醒，返回是否已送达。
 
-    Windows / Linux 先走托盘气泡（原生、可点击）；macOS 与发不出去时用应用内浮窗。
-    两条路径都能绑定点击，点了就执行 on_click（默认把主界面叫出来）。"""
-    global _host
-    # macOS 打包版走系统原生通知，点击能回到应用；源码运行没有 bundle id 时
-    # 直接回落浮窗，不要走 osascript（它会把点击带到脚本编辑器）。
+    tone 只为兼容旧调用点保留：原生通道自己带样式，这里用不上。
+    原生通道不可用时只返回 False，不弹任何应用内浮窗。"""
+    action = on_click or _default_action
     if platform.system() == "Darwin":
         try:
             from app.services import macos_notify
 
-            if macos_notify.send(title, body, on_click=on_click or _default_action):
-                return True
+            return bool(macos_notify.send(title, body, on_click=action))
         except Exception:
-            pass
-    else:
-        from app.services.notify import send
+            return False
+    from app.services import notify
 
-        if send(title, body, tray, on_click):
-            return True
-    if _host is None:
-        _host = _Host()
-    return _host.push(title, body, tone, on_click)
+    try:
+        return bool(notify.send(title, body, tray, action))
+    except Exception:
+        return False

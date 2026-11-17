@@ -6,10 +6,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath,
+from PyQt5.QtCore import QRectF, Qt, QTimer, pyqtSignal as Signal
+from PyQt5.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath,
                            QRadialGradient)
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
@@ -356,7 +356,7 @@ class ProgressToast(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+        from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(18)
@@ -388,7 +388,9 @@ class ProgressToast(QWidget):
         self._marquee.setInterval(16)
         self._marquee.timeout.connect(self._advance_marquee)
 
-        qconfig.themeChanged.connect(lambda *_: self.update())
+        # 绑定方法而非 lambda：浮条销毁后 qconfig 仍会发信号，
+        # lambda 会让它打进悬空对象（PyQt5 里直接 abort）
+        qconfig.themeChanged.connect(self.update)
         if parent is not None:
             parent.installEventFilter(self)
         self._reposition()
@@ -436,7 +438,7 @@ class ProgressToast(QWidget):
     # ---------- 位置与外观 ----------
 
     def eventFilter(self, obj, e):
-        from PySide6.QtCore import QEvent
+        from PyQt5.QtCore import QEvent
 
         if obj is self.parentWidget() and e.type() == QEvent.Type.Resize:
             self._reposition()

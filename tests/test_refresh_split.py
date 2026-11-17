@@ -74,6 +74,7 @@ def _health_stub(accounts):
         accounts=accounts, _worker=None, health_btn=MagicMock(), refresh_btn=MagicMock(),
         _on_account_checked=MagicMock(), _flush_health_results=MagicMock(),
         _show_health_progress=MagicMock(), _on_health_finished=MagicMock(),
+        _on_health_buttons_back=MagicMock(),
     )
 
 
@@ -83,7 +84,7 @@ def test_auto_health_check_only_refreshes_due_accounts(monkeypatch):
     made = []
 
     class FakeWorker:
-        def __init__(self, accounts):
+        def __init__(self, accounts, parent=None):
             self.accounts = accounts
             self.account_checked = MagicMock()
             self.finished = MagicMock()
@@ -148,7 +149,7 @@ def test_auto_health_check_skips_browser_session(monkeypatch, tmp_path):
     made = []
 
     class FakeWorker:
-        def __init__(self, accounts):
+        def __init__(self, accounts, parent=None):
             self.accounts = accounts
             self.account_checked = MagicMock()
             self.finished = MagicMock()
@@ -184,7 +185,7 @@ def test_refresh_selected_only_clears_its_own_browser_sessions(monkeypatch, tmp_
     made = []
 
     class FakeWorker:
-        def __init__(self, accounts):
+        def __init__(self, accounts, parent=None):
             self.accounts = accounts
             self.account_checked = MagicMock()
             self.finished = MagicMock()

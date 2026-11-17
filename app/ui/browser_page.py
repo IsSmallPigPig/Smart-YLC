@@ -27,9 +27,9 @@ import re
 import sys
 from datetime import datetime
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter
-from PySide6.QtWidgets import (
+from PyQt5.QtCore import QPoint, QRect, Qt, QTimer, QUrl, pyqtSignal as Signal
+from PyQt5.QtGui import QColor, QDesktopServices, QFont, QPainter
+from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QProgressBar,
@@ -296,7 +296,8 @@ class _WindowDragger:
     def press(self, e) -> bool:
         if e.button() != Qt.MouseButton.LeftButton:
             return False
-        self._press = e.globalPosition().toPoint()
+        # PyQt5 没有 QMouseEvent.globalPosition()（Qt6 才有），用 globalPos()
+        self._press = e.globalPos()
         self._origin = self._host.window().pos()
         self._dragging = True
         self._host.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -305,7 +306,7 @@ class _WindowDragger:
     def move(self, e) -> bool:
         if not self._dragging:
             return False
-        self._host.window().move(self._origin + e.globalPosition().toPoint() - self._press)
+        self._host.window().move(self._origin + e.globalPos() - self._press)
         return True
 
     def release(self) -> bool:
@@ -435,7 +436,9 @@ class BrowserWindow(FluentWindowBase):
         self._build_title_bar()
         self._build_body()
         self._apply_background()
-        qconfig.themeChanged.connect(lambda *_: self.update())
+        # 绑定方法而非 lambda：qconfig 是全局单例，lambda 会替它攥着已销毁窗口的
+        # 引用，下次切主题打进悬空对象，PyQt5 里直接 abort
+        qconfig.themeChanged.connect(self.update)
         self._sync_nav()
 
         # 站内会话超时会弹「登录状态已失效」，每隔一会儿看一眼当前标签，过期就自动重登
@@ -541,7 +544,7 @@ class BrowserWindow(FluentWindowBase):
         lay.setContentsMargins(24, 24, 24, 24)
         lay.setSpacing(10)
         lay.addStretch(1)
-        from PySide6.QtWidgets import QLabel
+        from PyQt5.QtWidgets import QLabel
 
         from app.ui.brand import app_pixmap
 
@@ -690,7 +693,7 @@ class BrowserWindow(FluentWindowBase):
         if self._engine_warm:
             return
         self._engine_warm = True
-        from PySide6.QtWebEngineCore import QWebEngineProfile
+        from PyQt5.QtWebEngineWidgets import QWebEngineProfile
 
         QWebEngineProfile.defaultProfile()
 
@@ -1084,14 +1087,16 @@ class BrowserWindow(FluentWindowBase):
         `webprofiles/<账号>` 目录。关掉标签立刻重开时，旧 profile 的页面还在异步
         销毁，新 profile 又要抢同一个目录——这一步卡住就是整个窗口没反应。
         存储分区本来就与页面生命周期无关，留着复用即可。"""
-        from PySide6.QtWebEngineCore import QWebEngineProfile
+        from PyQt5.QtWebEngineWidgets import QWebEngineProfile
 
         profile = self._profiles.get(user)
         if profile is not None:
             return profile
         storage = os.path.join(PROFILE_ROOT, user)
         os.makedirs(storage, exist_ok=True)
-        profile = QWebEngineProfile(f"gd-{user}", self)
+        # PyQt5 的 QWebEngineProfile 构造只接受 parent（Qt6 才有带存储名的构造），
+        # 存储路径靠下面的 setPersistentStoragePath 设置，隔离效果相同。
+        profile = QWebEngineProfile(self)
         profile.setPersistentStoragePath(storage)
         profile.setCachePath(os.path.join(storage, "cache"))
         profile.setPersistentCookiesPolicy(
@@ -1100,8 +1105,7 @@ class BrowserWindow(FluentWindowBase):
         return profile
 
     def _ensure_view(self, user: str):
-        from PySide6.QtWebEngineCore import QWebEnginePage
-        from PySide6.QtWebEngineWidgets import QWebEngineView
+        from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineView
 
         profile = self._profile(user)
         view = QWebEngineView(self.area)
@@ -1127,7 +1131,7 @@ class BrowserWindow(FluentWindowBase):
 
     def eventFilter(self, obj, event):
         """浏览区尺寸变化时把每一层跟上去；标题栏空白区自己拖动。"""
-        from PySide6.QtCore import QEvent
+        from PyQt5.QtCore import QEvent
 
         if obj is self.titleBar:
             t = event.type()

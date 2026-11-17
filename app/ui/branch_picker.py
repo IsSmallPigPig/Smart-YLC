@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, QTimer
-from PySide6.QtWidgets import QDialog
+from PyQt5.QtCore import QObject, Qt, QTimer
+from PyQt5.QtWidgets import QDialog
 
 from qfluentwidgets import CaptionLabel, SubtitleLabel
 

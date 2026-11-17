@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication, QImage, QPainter, QPixmap
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QGuiApplication, QImage, QPainter, QPixmap
 
 
 def ui_dpr() -> float:

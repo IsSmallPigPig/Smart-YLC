@@ -18,9 +18,9 @@ import os
 import shutil
 import tempfile
 
-from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtCore import QRectF, Qt, QThread, QTimer, pyqtSignal as Signal
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen
+from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,

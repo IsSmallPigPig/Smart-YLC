@@ -5,7 +5,8 @@ osascript 发出的通知归属「脚本编辑器」，点开只会跳去脚本�
 点击后由 delegate 把回调交回应用，再切到对应页面。
 
 只有带 bundle identifier 的 .app 才能用：源码里跑 python 时 bundle id 是
-空的，`available()` 返回 False，调用方回落到应用内浮窗或 osascript。
+空的，`available()` 返回 False，通知发不出去；调用方不回落应用内浮窗，
+只提示一次「去系统设置开启」。
 """
 
 from __future__ import annotations
@@ -24,8 +25,12 @@ _CALLBACKS: dict[str, object] = {}
 
 
 def available() -> bool:
-    """打包后的 .app 才有 bundle id；源码运行时返回 False。"""
-    if sys.platform != "darwin":
+    """打包后的 .app 才有归属；源码运行时返回 False。
+
+    不能只看 bundle id 有没有值：python.org 的框架版解释器本身就有
+    `org.python.python`，那样通知会挂在「Python」名下，点开也回不到主界面。
+    所以先看进程是否被 PyInstaller 冻结，再看 .app 的 bundle id。"""
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
         return False
     try:
         import Foundation
@@ -53,7 +58,7 @@ def permission_state() -> str:
     """系统通知权限：ok / denied / undetermined / unavailable。
 
     源码运行时进程的 bundle id 是 Python 自己的，权限记在「Python」名下；
-    被关掉时通知发不出去，调用方只能回落应用内浮窗，所以要把原因说清楚。"""
+    被关掉时通知发不出去，调用方要引导用户去系统设置开启。"""
     if sys.platform != "darwin":
         return "unavailable"
     if not available():
@@ -165,6 +170,28 @@ def _auth_done(granted: bool, error) -> None:
         _deliver(center, UN, payload)
 
 
+def request_permission() -> None:
+    """启动时主动弹出系统授权框（只在未决定时弹，一次为限）。
+
+    不等第一条提醒再问：提醒可能几小时后才来，那时用户已经忘了为什么弹窗。
+    已决定过的机器上系统不会重复弹，这里只是把状态读回来缓存。"""
+    global _AUTH_REQUESTED
+
+    if not available():
+        return
+    with _LOCK:
+        if _AUTH_REQUESTED:
+            return
+        _AUTH_REQUESTED = True
+    center, UN, _ = _load()
+    if center is None:
+        return
+    center.requestAuthorizationWithOptions_completionHandler_(
+        UN.UNAuthorizationOptionAlert | UN.UNAuthorizationOptionSound,
+        _auth_done,
+    )
+
+
 def _load():
     import UserNotifications as UN
     import Foundation
@@ -178,7 +205,7 @@ def _load():
 
 
 def send(title: str, body: str, on_click=None) -> bool:
-    """发一条原生通知；不可用时返回 False，由调用方回落到应用内浮窗。"""
+    """发一条原生通知；不可用时返回 False，由调用方提示用户开启系统通知。"""
     if not available():
         return False
     center, UN, _ = _load()

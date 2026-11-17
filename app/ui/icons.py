@@ -13,9 +13,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtCore import QRectF
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRectF
+from PyQt5.QtGui import QIcon, QPainter, QPixmap
 
 from app.ui.hidpi import hidpi_canvas
 
@@ -40,8 +40,8 @@ def native_pixmap(name: str, size: int = 32) -> QPixmap:
     if not path.is_file():
         return QPixmap()
 
-    from PySide6.QtCore import QByteArray
-    from PySide6.QtSvg import QSvgRenderer
+    from PyQt5.QtCore import QByteArray
+    from PyQt5.QtSvg import QSvgRenderer
 
     try:
         data = path.read_bytes()

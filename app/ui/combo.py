@@ -13,7 +13,7 @@ macOS 上稳定复现：在整窗遮罩的弹窗里选完支部（班级），�
 
 from __future__ import annotations
 
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, Qt
 
 from qfluentwidgets import ComboBox as _ComboBox
 

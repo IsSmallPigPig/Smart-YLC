@@ -12,8 +12,8 @@ updateCustomMirror，支持 "https://xxx/" 或不带协议的裸域名。
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QApplication, QDialog
+from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtWidgets import QApplication, QDialog
 
 from qfluentwidgets import InfoBar, InfoBarPosition, LineEdit
 

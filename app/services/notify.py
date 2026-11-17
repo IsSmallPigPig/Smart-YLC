@@ -2,8 +2,8 @@
 
 托盘气泡支持点击（`messageClicked`），传了 `on_click` 就在气泡被点时执行一次。
 macOS 打包成 .app 后用 UNUserNotificationCenter 发通知，点击回调能回到应用，
-再切到对应页面；源码运行时没有 bundle id，回落到 osascript，点击仍会打开
-「脚本编辑器」，所以带点击需求的提醒由 `bg_toast` 改用应用内浮窗。
+再切到对应页面；源码运行时没有 bundle id 发不出去，`send` 返回 False，
+调用方不回落应用内浮窗，只提示一次去系统设置开启。
 
 Windows 的 toast 必须挂在托盘图标上，而主界面模式本身可能还没建托盘，所以这里
 按需借一个：没有现成托盘就临时建一个（只建一次）。没有这层回落时，Windows 上的
@@ -48,7 +48,7 @@ def _fallback_tray():
     global _FALLBACK_TRAY
     if _FALLBACK_TRAY is not None:
         return _FALLBACK_TRAY
-    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+    from PyQt5.QtWidgets import QApplication, QSystemTrayIcon
 
     if QApplication.instance() is None or not QSystemTrayIcon.isSystemTrayAvailable():
         return None
@@ -69,7 +69,7 @@ def send(title: str, body: str, tray=None, on_click=None) -> bool:
     """发送系统通知。tray 可选传 QSystemTrayIcon；不传时非 macOS 按需借一个。
 
     on_click: 通知被点时执行一次的回调。macOS 打包版由原生通知 delegate 触发；
-    源码运行没有 bundle id 时返回 False，由调用方换成应用内浮窗。"""
+    源码运行没有 bundle id 时返回 False，由调用方提示开启系统通知。"""
     if platform.system() == "Darwin":
         try:
             from app.services import macos_notify
@@ -93,7 +93,7 @@ def send(title: str, body: str, tray=None, on_click=None) -> bool:
     if target is None:
         return False
     try:
-        from PySide6.QtWidgets import QSystemTrayIcon
+        from PyQt5.QtWidgets import QSystemTrayIcon
 
         # showMessage 只接受 MessageIcon 或 QIcon；传 qfluentwidgets 的
         # InfoBarIcon 会直接 TypeError，通知被静默丢掉（Windows 上就是全哑）

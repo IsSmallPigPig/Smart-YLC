@@ -1,10 +1,10 @@
 """启动画面：在导入 qfluentwidgets、构造主窗口之前先把画面放出来。
 
-双击图标到主窗口出现之间有一段什么都看不到的空档：解释器启动、PySide6 与
+双击图标到主窗口出现之间有一段什么都看不到的空档：解释器启动、PyQt5 与
 qfluentwidgets 导入、六个页面逐个构造。macOS 上量到 1.4 秒，Windows 冷启动
 还要叠上杀毒扫描与运行时解压，三四秒里屏幕上没有任何反馈，看起来就像没打开。
 
-这个模块只依赖 PySide6（不碰 qfluentwidgets、不碰 app.ui.page），所以能在
+这个模块只依赖 PyQt5（不碰 qfluentwidgets、不碰 app.ui.page），所以能在
 上面那些慢动作之前就被画出来。画面尺寸与主窗口完全一致，主窗口 show 之后它
 淡出，替换的是同一块底色的启动界面，看不到接力痕迹。
 
@@ -13,9 +13,9 @@ qfluentwidgets 导入、六个页面逐个构造。macOS 上量到 1.4 秒，Win
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QWidget
+from PyQt5.QtCore import QPointF, QRect, QRectF, Qt, QTimer
+from PyQt5.QtGui import QColor, QFont, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtWidgets import QWidget
 
 CORNER_RADIUS = 10
 LOGO = 80
@@ -43,8 +43,14 @@ def _is_dark() -> bool:
         return True
     if mode == "light":
         return False
-    hints = QGuiApplication.styleHints()
-    return hints.colorScheme() == Qt.ColorScheme.Dark
+    # PyQt5 没有 QGuiApplication.styleHints().colorScheme()（Qt6 才有），
+    # 用 darkdetect 判断系统外观（PyQt-Fluent-Widgets 的依赖，行为与 Qt6 一致）。
+    try:
+        import darkdetect
+
+        return darkdetect.isDark()
+    except Exception:
+        return False
 
 
 def page_bg() -> QColor:
@@ -107,7 +113,7 @@ class BootSplash(QWidget):
             return
         self._finished = True
         self._timer.stop()
-        from PySide6.QtCore import QEasingCurve, QPropertyAnimation
+        from PyQt5.QtCore import QEasingCurve, QPropertyAnimation
 
         anim = QPropertyAnimation(self, b"windowOpacity", self)
         anim.setDuration(180)

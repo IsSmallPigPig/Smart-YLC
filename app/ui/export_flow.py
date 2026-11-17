@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QFileDialog
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QFileDialog
 
 from qfluentwidgets import InfoBar
 

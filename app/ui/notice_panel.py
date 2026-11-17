@@ -11,9 +11,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, Qt, QTimer, QVariantAnimation
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PyQt5.QtCore import QEasingCurve, Qt, QTimer, QVariantAnimation
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen
+from PyQt5.QtWidgets import QApplication, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,

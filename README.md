@@ -52,13 +52,14 @@
 | 平台 | 要求 | 架构 |
 |:--|:--|:--|
 | **macOS** | 13.0 及以上 | arm64 / x86_64 |
-| **Windows** | 10 及以上 | x86_64 |
+| **Windows 10 / 11** | 10 及以上 | x86_64 / x86（32 位） |
+| **Windows 7** | SP1 | x86_64 / x86（32 位） |
 | **Linux** | Ubuntu 22.04+ / Debian 12+ | x86_64 |
 
 > [!WARNING]
 > 密码只保存在本机 `~/.gd12355-helper/config.json`，请自行做好磁盘加密与备份。工具只做正常登录能做的事，不会绕过站点风控；密码错误过多触发验证码时，先在网页端登录一次。
 
-> Windows 7 / x86（32 位）不支持：Qt 6 与 PySide6 6.x 没有 32 位 Windows 轮子，Windows 运行时下限也是 10。
+> Windows 7 包基于 Python 3.8（3.9 起要求 Windows 8+），与 Win10/11 包互不通用，按系统下载对应安装包。Windows 7 上的内嵌浏览器受 Chromium 版本限制，站点若已不再支持旧内核，账号网页标签可能打不开；上传、统计、导出等主流程不受影响。
 
 > 窗口透明材质分两档：**Acrylic** 需 Windows 10 1803（build 17134）及以上，实时模糊窗口后面的内容；**Mica** 需 Windows 11，取桌面壁纸的色调。Win10 上选 Mica 会按 Acrylic 呈现，设置页那一行会写明当前机器的实际效果。
 
@@ -74,9 +75,12 @@
 pip install -r requirements.txt
 python3 -m app.main          # 主窗口
 python3 -m app.main --tray   # 托盘后台：定时检查 + 系统通知
+python3 -m app.main --demo    # 演示数据：6 个支部、260 名团员，隔离在临时目录
 ```
 
-只允许一个实例：重复双击图标只会把已有窗口叫到前面，不会开第二套窗口与后台同步线程。托盘菜单同样用 Fluent 圆角菜单（打开主界面 / 立即检查并通知 / 退出），不是系统原生的方形菜单。
+`--demo` 会新建一个临时配置目录并灌入演示数据（六成合规，其余分散在「没上传档案 / 身份信息缺项 / 志愿书未审 / 团费欠缴」，另含重复手机号与超长姓名、超长支部名），用于截图与排版验收。它不读写 `~/.gd12355-helper`，退出即弃，因此正式版安装包里没有任何测试数据入口。
+
+只允许一个实例：重复双击图标只会把已有窗口叫到前面，不会开第二套窗口与后台同步线程。托盘菜单同样用 Fluent 圆角菜单（打开主界面 / 立即检查并通知 / 退出），不是系统原生的方形菜单。`--demo` 实例与正式实例各用一把单实例锁，可以同时开。
 
 ### 打包
 
@@ -277,7 +281,7 @@ python3 -m pytest tests/ -q
 [downloads-shield]: https://img.shields.io/github/downloads/IsSmallPigPig/Smart-YLC/total?style=for-the-badge
 [python-shield]: https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white
 [python-url]: https://www.python.org/
-[qt-shield]: https://img.shields.io/badge/Qt-PySide6-41cd52?style=for-the-badge&logo=qt&logoColor=white
+[qt-shield]: https://img.shields.io/badge/Qt-PyQt5-41cd52?style=for-the-badge&logo=qt&logoColor=white
 [qt-url]: https://doc.qt.io/qtforpython/
 [issues-url]: https://github.com/IsSmallPigPig/Smart-YLC/issues
 [repo-url]: https://github.com/IsSmallPigPig/Smart-YLC

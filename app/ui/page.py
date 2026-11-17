@@ -9,8 +9,8 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import (
+from PyQt5.QtCore import QRectF, Qt, QThread, QTimer, pyqtSignal as Signal
+from PyQt5.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
@@ -22,7 +22,7 @@ from PySide6.QtGui import (
     QPixmap,
     QTransform,
 )
-from PySide6.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, QWidget
 
 from app.ui.hidpi import hidpi_canvas, ui_dpr
 from app.ui import palette as P
@@ -153,8 +153,8 @@ def triangle_icon(direction: str = "right", size: int = 16) -> QIcon:
     fluent 的 PAGE_LEFT / PAGE_RIGHT 自带一圈圆环，这里换成手绘三角。
     颜色随深浅主题变化，主题切换后需要重新生成（见 messages_page.apply_theme）。
     """
-    from PySide6.QtCore import QPointF
-    from PySide6.QtGui import QPolygonF
+    from PyQt5.QtCore import QPointF
+    from PyQt5.QtGui import QPolygonF
 
     color = QColor("#d6d6d6") if isDarkTheme() else QColor("#3a3a3a")
 
@@ -264,7 +264,10 @@ class PageBanner(QWidget):
         self._set_size(self.desc_label, self.DESC_SIZE, weight=QFont.Weight.Normal)
         lay.addWidget(self.desc_label)
         self._apply_text_colors()
-        qconfig.themeChanged.connect(lambda *_: self._restyle())
+        # 必须连绑定方法而不是 lambda：qconfig 是全局单例，lambda 会替它攥着
+        # self 的 Python 引用，控件 C++ 侧先析构，下次切主题打进悬空对象——
+        # PyQt5 里槽函数抛异常直接 abort（绑定方法会在控件销毁时自动断开）
+        qconfig.themeChanged.connect(self._restyle)
         lay.addStretch(1)
 
         # 功能按钮：右下角一行，几何在 _place_controls 里按 banner 尺寸定位
@@ -632,7 +635,7 @@ def bind_table_context_menu(table, build_actions, select_row=None) -> None:
     右键点到数据行时传入行号，点到空白处传 -1。``select_row(row)`` 可选：
     先把右键行设为当前行，让「删除选中」这类复用 currentRow() 的回调作用于它。
     """
-    from PySide6.QtCore import Qt as _Qt
+    from PyQt5.QtCore import Qt as _Qt
 
     table.setContextMenuPolicy(_Qt.ContextMenuPolicy.CustomContextMenu)
 
@@ -660,11 +663,11 @@ def fit_table_columns(table: QTableView, stretch_last: bool = False,
     """按内容手动计算列宽（视觉效果同 ResizeToContents），但只在调用时算一次。
 
     不用 QHeaderView.ResizeToContents：它会在每次数据变化时逐格调用
-    delegate.sizeHint（Python override）——PySide6 6.12 下在 queued 信号处理
+    delegate.sizeHint（Python override）——PyQt5 5.15 下在 queued 信号处理
     栈内 + 后台线程活跃时会触发 shiboken 空指针崩溃
     （QTableView::sizeHintForColumn → PepException_GetArgs，见 17:18/17:19 两份崩溃报告）。
     数据填充完成后调用一次即可。"""
-    from PySide6.QtWidgets import QTableWidgetItem
+    from PyQt5.QtWidgets import QTableWidgetItem
 
     fm = QFontMetrics(table.font())
     header = table.horizontalHeader()
@@ -779,7 +782,11 @@ class CallbackWorker(QThread):
     """把一个函数放到后台线程跑，结果经信号回 GUI 线程。
 
     用于界面上的文件解析/写盘等重活：ok(object) 带返回值，fail(str) 带异常信息。
-    调用方需持有引用防 GC（存到 self._workers 之类）。"""
+    调用方需持有引用防 GC（存到 self._workers 之类）。
+
+    宿主控件与 worker 同生死：worker 以界面控件为 parent，控件析构时 Qt 会先
+    等这条线程结束再删——前提是任务本身是本地快活（解析、算快照、写盘），
+    不会挂几十秒。需要联网长跑的（测活/下载）不能用它，改用带 stop/wait 的专用线程。"""
 
     ok = Signal(object)
     fail = Signal(str)
@@ -820,7 +827,7 @@ class FluentPage(ScrollArea):
         """表格在滚动容器里需要保底高度，窗口缩小时不会被压扁。
 
         列宽不在此设置（不用 ResizeToContents——它会在数据变化时调用
-        delegate.sizeHint Python override，PySide6 6.12 下会崩溃，见
+        delegate.sizeHint Python override，PyQt5 5.15 下会崩溃，见
         fit_table_columns）；各页数据填充后调用 fit_table_columns 手动算宽。"""
         table.setMinimumHeight(min_height)
         self.vBoxLayout.addWidget(table, stretch)

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import (
+from PyQt5.QtCore import QRectF, Qt, pyqtSignal as Signal
+from PyQt5.QtGui import (
     QColor,
     QFont,
     QImage,
@@ -18,7 +18,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPixmap,
 )
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import CardWidget, FluentIcon as FIF
 from qfluentwidgets import SubtitleLabel, TitleLabel, isDarkTheme
@@ -177,7 +177,7 @@ class HomePage(FluentPage):
         inner_lay = QVBoxLayout(inner)
         inner_lay.setContentsMargins(36, 0, 36, 0)
         inner_lay.setSpacing(8)
-        from PySide6.QtWidgets import QLabel
+        from PyQt5.QtWidgets import QLabel
 
         from app.ui.brand import app_tile_pixmap
 
@@ -279,21 +279,35 @@ class HomePage(FluentPage):
         def _snapshot():
             return org_snapshot.snapshot(store.load())
 
-        def _on_done(data):
-            if token != self._stats_token:
-                return
-            if show_loading:
-                self._hide_loading()
-            self._apply_stats(data, animate)
-            self.stats_ready.emit()
-
         worker = CallbackWorker(_snapshot, self)
-        worker.ok.connect(_on_done)
+        # 上下文挂在 worker 上、槽用绑定方法：闭包槽不会随控件析构自动断开，
+        # 上一个页面的 worker 迟到投递打进已删除的 C++ 对象就是段错误
+        worker._token = token
+        worker._show_loading = show_loading
+        worker._animate = animate
+        worker.ok.connect(self._on_stats_done)
         # 快照读配置失败时也要收掉过渡页：否则整页停在加载态，看起来就是没渲染出来。
         # 旧数字仍然有效（只是没刷新），不弹提示，等下一轮同步重试。
-        worker.fail.connect(lambda _msg, t=token: self._on_stats_failed(t))
+        worker.fail.connect(self._on_stats_error)
         self._workers.append(worker)
         worker.start()
+
+    def _on_stats_done(self, data):
+        worker = self.sender()
+        token = getattr(worker, "_token", None)
+        if token is None or token != getattr(self, "_stats_token", None):
+            return
+        if getattr(worker, "_show_loading", True):
+            self._hide_loading()
+        self._apply_stats(data, getattr(worker, "_animate", True))
+        self.stats_ready.emit()
+
+    def _on_stats_error(self, _msg):
+        worker = self.sender()
+        token = getattr(worker, "_token", None)
+        if token is None or token != getattr(self, "_stats_token", None):
+            return
+        self._stop_loading()
 
     def _on_stats_failed(self, token: int):
         if token != self._stats_token:

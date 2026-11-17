@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtGui import QGuiApplication, QPixmap
+from PyQt5.QtGui import QGuiApplication, QPixmap
 
 
 @pytest.fixture()
 def app():
-    from PySide6.QtWidgets import QApplication
+    from PyQt5.QtWidgets import QApplication
 
     yield QApplication.instance() or QApplication([])
 
@@ -23,15 +23,16 @@ def dpr2(monkeypatch):
 
 
 def test_hidpi_canvas_doubles_physical_pixels(app, dpr2):
-    from PySide6.QtCore import QRectF
-    from PySide6.QtGui import QColor
+    from PyQt5.QtCore import QRectF
+    from PyQt5.QtGui import QColor
 
     from app.ui.hidpi import hidpi_canvas
 
     pm = hidpi_canvas(64, lambda p: p.fillRect(QRectF(0, 0, 64, 64), QColor("#ff0000")))
     assert pm.width() == 128 and pm.height() == 128     # 物理像素翻倍
     assert pm.devicePixelRatio() == 2.0                 # 逻辑尺寸仍是 64
-    assert pm.deviceIndependentSize().width() == 64
+    # PyQt5 没有 deviceIndependentSize()（Qt6 才有），用 width/dpr 算逻辑尺寸
+    assert pm.width() / pm.devicePixelRatio() == 64
     # 逻辑坐标铺满 → 四角都得有颜色（2× 下画成 1/4 大小的那个 bug 的回归点）
     img = pm.toImage()
     for x, y in ((2, 2), (126, 2), (2, 126), (126, 126)):
@@ -46,7 +47,7 @@ def test_scale_to_keeps_logical_size(app, dpr2):
     out = scale_to(src, 32)
     assert out.devicePixelRatio() == 2.0
     assert out.width() == 64                            # 物理 64 = 逻辑 32 × 2
-    assert out.deviceIndependentSize().width() == 32
+    assert out.width() / out.devicePixelRatio() == 32
 
 
 def test_app_icon_renders_at_screen_density(app, dpr2):
@@ -58,7 +59,7 @@ def test_app_icon_renders_at_screen_density(app, dpr2):
 
     tile = brand.app_tile_pixmap(64)
     assert tile.devicePixelRatio() == 2.0
-    assert tile.deviceIndependentSize().width() == pytest.approx(64, abs=1)
+    assert tile.width() / tile.devicePixelRatio() == pytest.approx(64, abs=1)
 
 
 def test_svg_mark_is_high_dpi(app, dpr2):

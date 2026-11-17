@@ -338,8 +338,10 @@ INSTALLABLE = (".zip", ".dmg", ".pkg", ".exe", ".msi", ".deb")
 def _pick_asset(assets: list[dict], platform: str | None = None) -> dict | None:
     """按平台挑安装包：macOS 优先 dmg，Windows 优先 exe，其它平台优先 zip。
 
-    Release 工作流会同时上传 dmg 和 exe，GitHub 返回顺序不保证，不能取第一个；
-    macOS 的 dmg 还分 arm64 / x86_64 两份，要挑和本机芯片匹配的那份。
+    Release 工作流会同时上传多个平台的产物，GitHub 返回顺序不保证，不能取第一个。
+    同一平台还分架构：macOS 有 arm64 / x86_64 的 dmg，Windows 有 Win-x64 /
+    Win-x86 / Win7-x64 / Win7-x86 的 setup，必须挑和本机系统与位数匹配的那份——
+    在 64 位 Windows 上装到 32 位包不致命，但在 32 位系统上装 64 位包会直接失败。
     """
     p = platform or sys.platform
     if p == "darwin":
@@ -350,19 +352,46 @@ def _pick_asset(assets: list[dict], platform: str | None = None) -> dict | None:
         prefs = INSTALLABLE
     pool = [a for a in (assets or [])
             if str(a.get("name", "")).lower().endswith(INSTALLABLE)]
-    # mac 上优先挑同架构的安装包：M 系列认 arm64，Intel 认 x86_64
-    arch_marker = ("arm64" if platform_module.machine().startswith("arm") else "x86_64") \
-        if p == "darwin" else ""
+    markers = _arch_markers(p)
     for ext in prefs:
-        for a in pool:
-            name = str(a.get("name", "")).lower()
-            if name.endswith(ext) and (not arch_marker or arch_marker in name):
-                return a
-        # 同扩展名里没有标着本机架构的（旧版 Release 只有一份 dmg），退回第一个
+        # 先按架构标记挑；同一档里优先没有 win7 前缀的（Win10+ 机器上别拿到旧系统包）
+        for marker in markers:
+            for a in pool:
+                name = str(a.get("name", "")).lower()
+                if name.endswith(ext) and marker in name:
+                    return a
+        # 同扩展名里没有标着本机架构的（旧版 Release 只有一份），退回第一个
         for a in pool:
             if str(a.get("name", "")).lower().endswith(ext):
                 return a
     return pool[0] if pool else None
+
+
+def _arch_markers(p: str) -> tuple[str, ...]:
+    """本机该优先匹配的文件名片段，按优先级排列。
+
+    macOS：M 系列认 arm64，Intel 认 x86_64（沿用历史命名）。
+    Windows：先认本系统世代的包，再退到另一位宽的包——Win10+ 的 64 位机器
+    可以跑 Win7 包与 32 位包，反过来不行。"""
+    if p == "darwin":
+        return ("arm64",) if platform_module.machine().startswith("arm") else ("x86_64",)
+    if p == "win32":
+        is64 = platform_module.architecture()[0] == "64bit"
+        win7 = _is_windows7()
+        if win7:
+            return ("win7-x64", "win7-x86") if is64 else ("win7-x86",)
+        return ("win-x64", "win-x86") if is64 else ("win-x86",)
+    return ()
+
+
+def _is_windows7() -> bool:
+    """当前是否是 Windows 7（build < 10.0）。非 Windows 恒为 False。"""
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        return sys.getwindowsversion().major < 10
+    except Exception:
+        return False
 
 
 def _release_info() -> UpdateInfo | None:
