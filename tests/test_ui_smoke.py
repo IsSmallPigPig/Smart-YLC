@@ -1447,6 +1447,28 @@ def test_org_manage_clear_hides_old_cards(app, isolated_store):
     assert old.isHidden()
 
 
+def test_org_manage_detail_drops_page_banner(app, isolated_store):
+    """支部详情不要头图：进详情收起 banner、顶部留白收回常规边距，并让出面包屑那一行；
+    返回列表时头图与留白一起复原。"""
+    from app.domain.org_manage import BranchNode
+    from app.ui.org_manage_page import OrgManagePage
+    from app.ui.page import PageBanner
+
+    page = OrgManagePage(FakeWindow())
+    page._branches = [BranchNode(code="ssfz12407", label="普通高中高三七班")]
+
+    page._open_branch("ssfz12407", animate=False)
+    assert page._banner_on is False
+    assert page.header.isHidden()
+    assert page.vBoxLayout.contentsMargins().top() == 16
+    assert not page.crumb_host.isHidden()
+
+    page.back_to_feed()
+    assert page._banner_on is True
+    assert page.vBoxLayout.contentsMargins().top() == PageBanner.HEIGHT + 16
+    assert page.crumb_host.isHidden()
+
+
 def test_branch_status_is_exclusive_and_fees_priority(app, isolated_store):
     """状态判定互斥：无系统数据→none，有其它异常→异常（压过欠缴），
     纯欠缴→欠缴，都没有→正常。异常里的 kind 用 report_kind 细分后的键。"""

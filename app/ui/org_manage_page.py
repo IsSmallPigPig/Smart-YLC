@@ -1,7 +1,9 @@
 """组织管理页：支部卡片列表 → 支部详情。
 
-返回统一由顶部面包屑「组织管理」、主窗口标题栏返回按钮和 Esc 承担，
-详情页不再放孤立的小箭头。视图切换、成员展开、统计数字与条形图都带过渡。
+头图只属于支部列表；进支部详情后整块收掉，标题直接贴顶（详情不需要再用大图
+打招呼，那 196px 全是从统计表上挪走的高度）。返回统一由页顶面包屑「组织管理」、
+主窗口标题栏返回按钮和 Esc 承担，详情页不再放孤立的小箭头。
+视图切换、成员展开、统计数字与条形图都带过渡。
 统计从成员缓存的系统记录离线计算，不发生网络请求。
 """
 
@@ -59,9 +61,8 @@ from app.ui import palette as P
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.export_flow import start_export
 from app.ui.page import (BatchedBuild, BusyOverlay, CardRow, FluentPage,
-                         PageBanner, PageHeader, banner_text_colors,
-                         chevron_icon, note_label, paint_tinted_card, set_tip,
-                         section_title, theme_font)
+                         PageBanner, chevron_icon, note_label, paint_tinted_card,
+                         set_tip, section_title, theme_font)
 
 SOURCE_COLOR = P.SOURCE
 KIND_COLOR = P.KIND
@@ -143,12 +144,12 @@ class ClickRow(CardRow):
         self.clicked.emit()
 
 
-class _BannerCrumbItem(BreadcrumbItem):
-    """banner 上的面包屑节点：字色跟着头图深浅走。
+class _CrumbItem(BreadcrumbItem):
+    """面包屑节点：按主题文字色绘制。
 
-    官方节点按主题取色，但头图的底色不跟页面底色一致（浅色模式的头图是浅蓝），
-    直接用官方配色会在其中一头读不清。这里只重绘文字与分隔箭头，颜色取自
-    `banner_text_colors()`，其余交互（点击、选中态）沿用父类。"""
+    官方节点把选中态压成接近正文色、非选中态压得很淡，两档在深色底下都偏灰；
+    这里自己画文字与分隔箭头，非选中态留 0.82 不透明度，既分层又不至于看不清。
+    其余交互（点击、选中态）沿用父类。"""
 
     def paintEvent(self, e):
         p = QPainter(self)
@@ -156,7 +157,7 @@ class _BannerCrumbItem(BreadcrumbItem):
                          | QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
 
-        ink, _ = banner_text_colors()
+        ink = P.fg("fg2")
         sw = self.spacing * 2
         if not self.isRoot():
             iw = self.font().pixelSize() / 14 * 8
@@ -174,20 +175,20 @@ class _BannerCrumbItem(BreadcrumbItem):
 
 
 class CrumbBar(BreadcrumbBar):
-    """官方面包屑导航：横向放在标题栏槽位里，按内容取宽。
+    """官方面包屑导航：支部详情页顶部单独一行，按内容取宽。
 
     qfluentwidgets 的 BreadcrumbBar 没重写 sizeHint、也只在 resizeEvent 里重排节点；
     放进横向布局会被压成 0 宽、且首次显示时宽度还没就绪会把首节点收进省略按钮。
     这里补 sizeHint 给偏好宽度，并在显示后强制重排一次。"""
 
     def addItem(self, routeKey: str, text: str):
-        """节点换成跟着头图底色取色的一版：面包屑只出现在 banner 里。"""
+        """节点换成按主题取色的一版。"""
         if routeKey in self.itemMap:
             return
         if not getattr(self, "_theme_hooked", False):
             qconfig.themeChanged.connect(lambda *_: self._repaint_items())
             self._theme_hooked = True
-        item = _BannerCrumbItem(routeKey, text, len(self.items), self)
+        item = _CrumbItem(routeKey, text, len(self.items), self)
         item.setFont(self.font())
         item.setSpacing(self.spacing)
         item.clicked.connect(lambda: self.setCurrentItem(routeKey))
@@ -199,7 +200,7 @@ class CrumbBar(BreadcrumbBar):
         self.updateGeometry()
 
     def _repaint_items(self):
-        """切主题后节点自己重绘：字色在 paintEvent 里按当前头图取。"""
+        """切主题后节点自己重绘：字色在 paintEvent 里按当前主题取。"""
         for item in self.items:
             item.update()
 
@@ -318,7 +319,8 @@ class OrgManagePage(FluentPage):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         lay = self.vBoxLayout
-        # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐
+        # 顶部留白让出头图位置（头图通栏贴顶、覆盖在内容之上），其余三边与内容对齐；
+        # 支部详情没有头图，顶部边距由 _set_banner 收回到常规页边距
         lay.setContentsMargins(32, PageBanner.HEIGHT + 16, 32, 24)
 
         # ── 头图通栏贴顶（overlay，不占布局），标题与工具条叠在 banner 上 ──
@@ -327,15 +329,22 @@ class OrgManagePage(FluentPage):
         from app.services import store
         self.header.set_image_path(store.load().get("headerImage", ""))
         self._place_banner()
+        self._banner_on = True
 
         self.title_lbl = self.header.title_label
         self.stat_label = self.header.desc_label
 
-        # 官方面包屑导航：组织管理 › 支部名，点「组织管理」返回支部列表
-        self.crumb_bar = CrumbBar(self.header)
+        # 面包屑导航：只在支部详情出现（头图那时已收起），点「组织管理」回支部列表
+        self.crumb_host = QWidget()
+        crumb_lay = QHBoxLayout(self.crumb_host)
+        crumb_lay.setContentsMargins(2, 0, 0, 0)
+        crumb_lay.setSpacing(0)
+        self.crumb_bar = CrumbBar(self.crumb_host)
         self.crumb_bar.currentItemChanged.connect(self._on_crumb)
-        self.header.slot.addWidget(self.crumb_bar, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.crumb_bar.setVisible(False)
+        crumb_lay.addWidget(self.crumb_bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        crumb_lay.addStretch(1)
+        self.crumb_host.setVisible(False)
+        lay.addWidget(self.crumb_host)
 
         # 显示全部：只有图标，常亮即「看全部团员」，灭掉只看系统名单
         self.sys_only = ToggleToolButton(FIF.TILES)
@@ -396,7 +405,7 @@ class OrgManagePage(FluentPage):
     def _place_busy(self):
         if self._busy is None:
             return
-        top = PageBanner.HEIGHT
+        top = PageBanner.HEIGHT if self._banner_on else 0
         self._busy.setGeometry(0, top, self.viewport().width(),
                                max(0, self.viewport().height() - top))
         self._busy.raise_()
@@ -465,7 +474,19 @@ class OrgManagePage(FluentPage):
 
     def _set_nav(self, detail: bool):
         self.title_lbl.setVisible(not detail)
+        self.crumb_host.setVisible(detail)
         self.crumb_bar.setVisible(detail)
+        self._set_banner(not detail)
+
+    def _set_banner(self, on: bool):
+        """支部列表用头图，支部详情收掉：顶部边距回到常规页边距，标题直接贴顶。"""
+        if on == self._banner_on:
+            return
+        self._banner_on = on
+        self.header.setVisible(on)
+        top = PageBanner.HEIGHT + 16 if on else 16
+        self.vBoxLayout.setContentsMargins(32, top, 32, 24)
+        self._place_busy()
 
     def _set_toolbar(self, detail: bool):
         """详情里已有大标题和三列统计，工具条不再重复一遍人数。"""
