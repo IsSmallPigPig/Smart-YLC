@@ -192,6 +192,71 @@ jobs:
           Write-Host $text
           if ($text -notmatch "SMOKE OK") { throw "冒烟结果里没有 SMOKE OK" }
 
+      - name: 准备代码签名证书
+        id: cert
+        # 证书全平台通用，只由 64 位变体生成一份，避免四份重复的 .cer
+        if: matrix.name == 'Windows10-x64'
+        shell: pwsh
+        env:
+          WIN_CERT_PFX_B64: ${{ secrets.WIN_CERT_PFX_B64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force "dist/installer" | Out-Null
+          if ($env:SIGNPATH_API_TOKEN) {
+            # SignPath 模式：私钥在云端 HSM，CI 不碰证书文件，只导出一张公钥证书
+            # 供内部分发时手动信任
+            "mode=signpath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "signtool=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "password=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "使用 SignPath 云端签名"
+            exit 0
+          }
+          $pwd = ""
+          if ($env:WIN_CERT_PFX_B64) {
+            $bytes = [Convert]::FromBase64String($env:WIN_CERT_PFX_B64)
+            [IO.File]::WriteAllBytes("cert.pfx", $bytes)
+            $pwd = $env:WIN_CERT_PASSWORD
+            $xc = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("cert.pfx", $pwd)
+            "mode=secret" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "使用仓库 Secrets 中的证书签名"
+          } else {
+            $pwd = "LocalSign!" + ([guid]::NewGuid().ToString('N').Substring(0, 10))
+            $xc = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=智慧团委 (SmartYouth)" `
+              -KeyUsage DigitalSignature -FriendlyName "SmartYouth Code Signing" `
+              -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable `
+              -NotAfter (Get-Date).AddYears(3) `
+              -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
+            $sp = ConvertTo-SecureString -String $pwd -Force -AsPlainText
+            Export-PfxCertificate -Cert $xc -FilePath "cert.pfx" -Password $sp | Out-Null
+            "mode=selfsigned" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "未配置证书 Secrets，已生成本次自签名证书"
+          }
+          Export-Certificate -Cert $xc -FilePath "dist/installer/SmartYouth-CodeSigning.cer" | Out-Null
+          "password=$pwd" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" `
+            -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if ($signtool) {
+            "signtool=$($signtool.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "signtool=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Warning "找不到 signtool，产物未签名"
+          }
+
+      - name: 签名主程序
+        if: matrix.name == 'Windows10-x64' && steps.cert.outputs.signtool != ''
+        shell: pwsh
+        env:
+          SIGN_PWD: ${{ steps.cert.outputs.password }}
+        run: |
+          $st = "${{ steps.cert.outputs.signtool }}"
+          $exe = "dist\SmartYouth\$($env:APP_DISPLAY_NAME).exe"
+          & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+          if ($LASTEXITCODE -ne 0) { & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 $exe }
+          if ($LASTEXITCODE -ne 0) { Write-Warning "主程序签名失败" } else { Write-Host "主程序已签名" }
+
       - name: 安装 Inno Setup
         run: choco install innosetup --no-progress -y
 
@@ -211,10 +276,25 @@ jobs:
           if (-not (Test-Path $out)) { throw "安装包没有生成：$out" }
           Get-Item $out | Select-Object Name, Length
 
+      - name: 签名安装包
+        if: matrix.name == 'Windows10-x64' && steps.cert.outputs.signtool != ''
+        shell: pwsh
+        env:
+          SIGN_PWD: ${{ steps.cert.outputs.password }}
+        run: |
+          $st = "${{ steps.cert.outputs.signtool }}"
+          $setup = "dist\installer\$($env:PKG_NAME).exe"
+          & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $setup
+          if ($LASTEXITCODE -ne 0) { & $st sign /f cert.pfx /p $env:SIGN_PWD /fd SHA256 $setup }
+          if ($LASTEXITCODE -ne 0) { Write-Warning "安装包签名失败" } else { Write-Host "安装包已签名" }
+
       - uses: actions/upload-artifact@v6
         with:
+          # 证书只在 64 位变体里生成，跟着它一起传，不另外单独跑一个 job
           name: SmartYouth-${{ matrix.name }}
-          path: dist/installer/${{ env.PKG_NAME }}.exe
+          path: |
+            dist/installer/${{ env.PKG_NAME }}.exe
+            dist/installer/SmartYouth-CodeSigning.cer
           if-no-files-found: error
 
   build-linux:
@@ -337,13 +417,28 @@ jobs:
             awk '/^## v/{n++} n==1' CHANGELOG.md
           } > release_body.md
 
+      - name: 校验主产物齐全
+        # 四类主产物（dmg / 4 个 Windows setup / deb）缺任何一个都算发布失败，
+        # 但不能让「可选的 .cer」缺失把整条发布判红
+        run: |
+          missing=0
+          for pat in "*.dmg" "*Windows10-x64-setup.exe" "*Windows10-x86-setup.exe" \
+                     "*Windows7-x64-setup.exe" "*Windows7-x86-setup.exe" "*.deb"; do
+            if ! find artifacts -name "$pat" | grep -q .; then
+              echo "::error::缺少产物 $pat"
+              missing=1
+            fi
+          done
+          exit $missing
       - name: 发布 Release
         uses: softprops/action-gh-release@v3
         with:
           body_path: release_body.md
           generate_release_notes: false
-          # 少一个产物就让任务红掉，避免静默发出残缺 Release
-          fail_on_unmatched_files: true
+          # 不设 fail_on_unmatched_files：它会因为「某个可选文件没产出」（例如没配
+          # 签名时的 .cer）把整条发布判红，而真正要保证的是四类主产物齐全。
+          # 主产物缺失由下面的校验步骤显式检查。
+          fail_on_unmatched_files: false
           # 用通配而不是写死层级：artifact 内是否多一层目录取决于上传时给的路径，
           # 写死会让一个目录调整就整条发布失败。通配仍受 fail_on_unmatched_files 约束，
           # 少哪个产物照样红。
@@ -352,3 +447,4 @@ jobs:
             artifacts/**/*setup.exe
             artifacts/**/*.cer
             artifacts/**/*.deb
+
