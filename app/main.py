@@ -217,6 +217,11 @@ def run() -> int:
         boot.close()
         raise
 
+    # 启动公告：经 GitHub 加速站拉 JSON，有新公告才弹窗；拉取失败只记日志
+    from app.services.announcement_check import check_on_login
+
+    check_on_login(w, delay_ms=4000)
+
     # 更新检查要联网、建窗口，等界面真的立起来再问，别跟启动抢那几百毫秒
     from app.services.update_check import check_on_startup
 
