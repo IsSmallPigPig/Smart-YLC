@@ -104,6 +104,20 @@ python3 scripts/build.py --dry-run  # 只看命令，不打包
 > [!TIP]
 > 打包后图标的两种落点（源码、PyInstaller 的 `_MEIPASS/assets`）由 `brand.assets_dir()` / `icons_dir()` 统一判断，新增图片仍只需放进 `app/assets/`。
 
+### 发布
+
+`scripts/release.py` 准备发布内容：更新应用版本号、在 CHANGELOG 顶部生成版本段、可选更新发布说明的前导文本。
+
+```bash
+python3 scripts/release.py --version 1.0.1 --dry-run   # 预览，不写文件
+python3 scripts/release.py --version 1.0.1             # 写文件，前导文本沿用上一版
+python3 scripts/release.py --version 1.0.1 --intro-file notes.md   # 同时换前导文本
+```
+
+版本段从最近 tag 到 HEAD 的 `feat` / `fix` 提交自动生成，每行 `- [短hash] <提交标题>`，文末 @ 贡献者。发布说明的前导文本（下载指引那一段）存在 `docs/release-intro.md`，`--intro` / `--intro-file` 不传就沿用原文件，改这段也可直接编辑该文件。
+
+脚本只改本地文件，不 commit、不 push、不打 tag、不触发发布。检查 `git diff` 后自行提交；发布由维护者另行打 tag 触发 CI。
+
 ### Windows 安装包与代码签名
 
 Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 PyInstaller 的 onedir 产物打成正式安装程序：脚本是 `installer.iss`，构建时由 workflow 调用 `ISCC.exe` 编译。
