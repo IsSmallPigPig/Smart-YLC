@@ -259,6 +259,9 @@ class OrgPage(FluentPage):
         self._uploaded = 0
         self._by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
         self._error_rows: list = []
+        # 详情视图的类别筛选：None=全部异常；"fees"/"archive" 等=只看该类。
+        # 概览的欠缴/没有档案卡点进来时设对应值，异常团员卡设 None。
+        self._detail_kind: str | None = None
         self._transfer_applied = 0
         self._unpaid_amount = 0.0
         self._extras = {"dupMobile": 0, "ecardMissing": 0,
@@ -400,9 +403,14 @@ class OrgPage(FluentPage):
     CARD_TALL_H = None
 
     def _card_shell(self, title: str, hint: str = "",
-                    height: int | None = None) -> tuple[CardWidget, QVBoxLayout]:
-        """概览卡共用外壳：标题一行 + 内容区。高度按角色给，不再全等。"""
-        card = CardWidget()
+                    height: int | None = None,
+                    clickable: bool = False) -> tuple[CardWidget, QVBoxLayout]:
+        """概览卡共用外壳：标题一行 + 内容区。高度按角色给，不再全等。
+
+        clickable=True 时整块卡可点（手型光标 + clicked 信号），用于「点卡进名单」
+        这类入口；默认 False 保持静态卡行为不变。
+        """
+        card = TapCard() if clickable else CardWidget()
         card.setMinimumHeight(height if height is not None else self.CARD_MIN_H)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(18, 14, 18, 16)
@@ -416,6 +424,19 @@ class OrgPage(FluentPage):
             note = note_label(hint)
             lay.addWidget(note)
         return card, lay
+
+    def _add_card_arrow(self, lay: QVBoxLayout):
+        """在 _card_shell 的标题行右端加「查看 ›」，提示这张卡可点进名单。
+
+        标题行是 lay 的第一个 item，末尾已有 addStretch；箭头追加在 stretch 之后，
+        因此贴着卡片右缘。与「异常团员」卡的提示保持同一套文案与配色。
+        """
+        head = lay.itemAt(0)
+        if head is None or head.layout() is None:
+            return
+        arrow = CaptionLabel("查看 ›")
+        arrow.setTextColor(*P.text_colors("brand"))
+        head.layout().addWidget(arrow)
 
     def _build_overview_card(self) -> CardWidget:
         """团员概览：多段圆环，圆心是总团员数，环上按类别分色。"""
@@ -508,8 +529,11 @@ class OrgPage(FluentPage):
         return card
 
     def _build_fees_card(self) -> CardWidget:
-        """欠缴团费：展示总计要补缴的金额。"""
-        card, lay = self._card_shell("欠缴团费")
+        """欠缴团费：展示总计要补缴的金额；点整张卡看欠缴名单。"""
+        card, lay = self._card_shell("欠缴团费", clickable=True)
+        card.clicked.connect(lambda: self._open_detail(kind="fees"))
+        # 标题行右端加箭头提示可点（_card_shell 的 head 是 lay 里第一个 QHBoxLayout）
+        self._add_card_arrow(lay)
         row = QHBoxLayout()
         row.setSpacing(4)
         self.fees_amount = theme_font(StrongBodyLabel("0"), P.FONT["metric"], int(QFont.Weight.Bold))
@@ -525,8 +549,10 @@ class OrgPage(FluentPage):
         return card
 
     def _build_archive_card(self) -> CardWidget:
-        """没有档案：只缺电子志愿书档案的人数。"""
-        card, lay = self._card_shell("没有档案")
+        """没有档案：只缺电子志愿书档案的人数；点整张卡看缺档名单。"""
+        card, lay = self._card_shell("没有档案", clickable=True)
+        card.clicked.connect(lambda: self._open_detail(kind="archive"))
+        self._add_card_arrow(lay)
         self.archive_value = theme_font(StrongBodyLabel("0"), P.FONT["metric"], int(QFont.Weight.Bold))
         lay.addWidget(self.archive_value)
         self.archive_sub = note_label("0 人缺少电子志愿书档案")
@@ -728,24 +754,54 @@ class OrgPage(FluentPage):
 
     # ---------- 视图切换（概览 ↔ 异常名单） ----------
 
-    def _open_detail(self, *_):
-        """点异常团员卡：切到名单视图，面包屑可点回概览。
+    def _open_detail(self, *_args, kind: str | None = None):
+        """切到名单子视图。kind 指定只看某一类（fees/archive/...），None=全部异常。
 
-        名单是子页，不带头图：banner 是「页面级」的东西，进到子页还挂着一张
-        主导航的图，视觉上会以为还在概览层。同时把顶部边距从 banner 高度收回
-        16，否则子页顶上会空出一大片。
+        概览有三处入口：「异常团员」卡（kind=None）、「欠缴团费」卡（fees）、
+        「没有档案」卡（archive）。都进同一个名单视图，只是标题与可见行不同。
+        名单是子页，不带头图：banner 是页面级的东西，进到子页还挂着主导航的图，
+        视觉上会以为还在概览层。同时把顶部边距从 banner 高度收回 16。
         """
         from app.ui.anim import switch_with_fade
 
-        self._add_crumb()
+        self._detail_kind = kind
+        self._add_crumb(kind)
         self._detail_open = True
         self._set_nav(True)
         self._set_banner(False)
         self.detail_changed.emit(True)
         self.detail_box.setVisible(True)
-        self.error_title.setText(f"异常团员 {len(self._error_rows)}")
+        self._apply_detail_filter()
         # 两个视图在同一位置、同一尺寸，直接换会硬切；淡出→淡入让点击有回应
         switch_with_fade(self.overview_group, self.detail_box)
+
+    def _apply_detail_filter(self):
+        """按 _detail_kind 决定名单里哪些行可见，并同步标题。
+
+        名单卡片在数据刷新时全量铺好，这里只切可见性：不用重建，筛选即时生效。
+        卡片携带的 _kinds 是类别 key 列表（欠缴=fees、没有档案=archive）。
+        """
+        kind = self._detail_kind
+
+        def in_kind(row) -> bool:
+            # 行的 kinds 是中文标签串（如「欠缴团费、没有档案」），与卡片上
+            # 携带的类别 key 两套表示；这里按标签判断，口径与圆环计数一致。
+            return kind is None or (
+                str(getattr(row, "kinds", "")) and
+                KIND_LABEL.get(kind, "") in getattr(row, "kinds", ""))
+
+        # 标题按数据源计数，不依赖卡片是否已铺（离线恢复/测试可能还没铺卡）
+        shown = sum(1 for r in self._error_rows if in_kind(r))
+        for i in range(self.error_lay.count()):
+            item = self.error_lay.itemAt(i)
+            card = item.widget() if item else None
+            if card is None:
+                continue
+            card_kinds = getattr(card, "_kinds", [])
+            visible = kind is None or kind in card_kinds
+            card.setVisible(visible)
+        label = KIND_LABEL.get(kind, "异常团员") if kind else "异常团员"
+        self.error_title.setText(f"{label} {shown}")
 
     def back_to_overview(self, *_):
         """返回概览：面包屑与主窗口返回键共用。"""
@@ -754,6 +810,7 @@ class OrgPage(FluentPage):
         from app.ui.anim import switch_with_fade
 
         self._detail_open = False
+        self._detail_kind = None
         self._set_nav(False)
         self._set_banner(True)
         self.detail_changed.emit(False)
@@ -795,13 +852,15 @@ class OrgPage(FluentPage):
         elif not on and has:
             lay.takeAt(last)
 
-    def _add_crumb(self):
+    def _add_crumb(self, kind: str | None = None):
         if "org" not in self.crumb_bar.itemMap:
             self.crumb_bar.addItem("org", "组织状况")
+        label = KIND_LABEL.get(kind, "异常团员") if kind else "异常团员"
         if "errors" in self.crumb_bar.itemMap:
+            self.crumb_bar.setItemText("errors", label)
             self.crumb_bar.setCurrentItem("errors")
         else:
-            self.crumb_bar.addItem("errors", "异常团员")
+            self.crumb_bar.addItem("errors", label)
 
     def _on_crumb(self, route_key: str):
         if route_key == "org":
@@ -967,6 +1026,8 @@ class OrgPage(FluentPage):
                 self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                                   r.problems, r.branch)
             self.error_title.setText(f"异常团员 {len(rows)}")
+            if self._detail_open:
+                self._apply_detail_filter()  # 统计刷新时保持当前类别筛选
         # 卡片落地后下一帧再收遮罩：让布局先把最终高度算完，避免露出中间态
         QTimer.singleShot(0, self._hide_busy)
 
@@ -1053,6 +1114,8 @@ class OrgPage(FluentPage):
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch)
         self.error_title.setText(f"异常团员 {len(error_rows)}")
+        if self._detail_open:
+            self._apply_detail_filter()  # 统计刷新时保持当前类别筛选
 
     def _on_account(self, user, branch, total, uploaded, abnormal, by_kind, status, message, transfer, rows):
         self._progress_done += 1
@@ -1094,6 +1157,8 @@ class OrgPage(FluentPage):
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch)
         self.error_title.setText(f"异常团员 {len(self._error_rows)}")
+        if self._detail_open:
+            self._apply_detail_filter()  # 统计刷新时保持当前类别筛选
         if status == "ok":
             self._persist_account(user, branch, total, uploaded, dict(by_kind or {}), transfer, rows)
 
@@ -1203,6 +1268,8 @@ class OrgPage(FluentPage):
             self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
                               r.problems, r.branch)
         self.error_title.setText(f"异常团员 {len(agg['rows'])}")
+        if self._detail_open:
+            self._apply_detail_filter()  # 统计刷新时保持当前类别筛选
         # 缓存里是 ISO 时间串，直接显示会带 T 和秒；截图/阅读都不好看
         updated = agg["updated"]
         stamp = f"，更新于 {updated.replace('T', ' ')[:16]}" if updated else ""
@@ -1219,6 +1286,8 @@ class OrgPage(FluentPage):
 
     def _append_card(self, name, mobile, kinds: list, problem, branch):
         """一张异常团员卡片：左侧姓名+手机号，右侧支部；下方类别与问题。"""
+        # 记下类别 key，供详情按类别筛选显示；账号级失败卡 kinds=[] 归到「全部异常」
+        card_kinds = list(kinds) if kinds else []
         # kinds 为 None 是账号级失败，没有可跳转的支部，保持普通卡片
         if kinds is None or not branch:
             card = TintedCard("danger" if kinds is None else "warning")
@@ -1255,6 +1324,7 @@ class OrgPage(FluentPage):
             body.setTextColor(*P.text_colors("danger"))
         v.addWidget(body)
 
+        card._kinds = card_kinds      # 详情筛选按此判断，见 _apply_detail_filter
         self.error_lay.addWidget(card)
 
     def _goto_branch(self, branch: str):

@@ -201,6 +201,17 @@ class CrumbBar(BreadcrumbBar):
         self.setCurrentItem(routeKey)
         self.updateGeometry()
 
+    def setItemText(self, routeKey: str, text: str):
+        """改已有节点的文字（宽度由 BreadcrumbItem.setText 自动重算）。
+
+        「异常团员」子页会按进入的类别把面包屑改成「欠缴团费 / 没有档案」，
+        复用同一个 errors 节点，避免反复 addItem 造成重复。
+        """
+        item = self.itemMap.get(routeKey)
+        if item is not None and item.text != text:
+            item.setText(text)
+            self.updateGeometry()
+
     def _repaint_items(self):
         """切主题后节点自己重绘：字色在 paintEvent 里按当前主题取。"""
         for item in self.items:

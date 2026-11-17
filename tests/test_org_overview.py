@@ -14,7 +14,7 @@ import pytest
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from app.domain.check_rules import CheckResult, MemberRecord
-from app.domain.org_stats import merge_totals, unpaid_amount
+from app.domain.org_stats import KIND_LABEL, merge_totals, unpaid_amount
 
 
 @pytest.fixture()
@@ -209,3 +209,63 @@ def test_grid_is_staggered_not_equal(app):
         return grid.getItemPosition(idx)[2:]   # (rowSpan, colSpan)
     assert span(page.overview_card) == (2, 1), "圆环卡应跨两行"
     assert span(page.abnormal_card) == (1, 2), "异常卡应跨两列"
+
+
+def test_fee_and_archive_cards_open_filtered_member_lists(app):
+    """欠缴 / 没有档案两张卡点进去只看对应类别的名单。
+
+    三张入口卡（异常团员、欠缴、没有档案）共用同一名单视图，靠 _detail_kind
+    区分：标题、面包屑、可见行都要跟着变；返回概览后清除筛选。
+    """
+    from app.ui.org_page import TapCard
+
+    page = _page(_Win())
+    rows = [
+        type("R", (), {"name": "欠费甲", "mobile": "1", "kinds": "欠缴团费",
+                       "problems": "欠缴", "branch": "1班"})(),
+        type("R", (), {"name": "缺档乙", "mobile": "2", "kinds": "没有档案",
+                       "problems": "缺档案", "branch": "2班"})(),
+        type("R", (), {"name": "双项丙", "mobile": "3", "kinds": "欠缴团费、没有档案",
+                       "problems": "Both", "branch": "3班"})(),
+    ]
+    _feed(page, total=10,
+          by_kind={"identity": 0, "report": 0, "archive": 2, "fees": 2}, rows=rows)
+    # _feed 不铺卡片，这里按真实路径铺一遍，验证可见性筛选
+    page._clear_cards()
+    for r in rows:
+        page._append_card(r.name, r.mobile,
+                          [k for k in ("fees", "archive") if KIND_LABEL[k] in r.kinds],
+                          r.problems, r.branch)
+
+    assert isinstance(page.fees_card, TapCard)
+    assert isinstance(page.archive_card, TapCard)
+
+    # 欠缴卡：标题、面包屑、可见行
+    page.fees_card.clicked.emit()
+    from PyQt5.QtTest import QTest
+    for _ in range(6):  # 让 switch_with_fade 的淡入跑完再断言，避免收尾时动画仍活跃
+        QTest.qWait(60); QApplication.processEvents()
+    assert page.in_detail()
+    assert page.error_title.text() == "欠缴团费 2"
+    assert page.crumb_bar.itemMap["errors"].text == "欠缴团费"
+    visible = [page.error_lay.itemAt(i).widget()
+               for i in range(page.error_lay.count())]
+    shown = [c for c in visible if c is not None and c.isVisible()]
+    assert len(shown) == 2, "欠费甲 + 双项丙"
+
+    # 直接换类别（不返回概览）：筛选要即时切换
+    page._open_detail(kind="archive")
+    for _ in range(6):
+        QTest.qWait(60); QApplication.processEvents()
+    assert page.error_title.text() == "没有档案 2"
+    assert page.crumb_bar.itemMap["errors"].text == "没有档案"
+    shown = [c for c in (
+        page.error_lay.itemAt(i).widget() for i in range(page.error_lay.count()))
+        if c is not None and c.isVisible()]
+    assert len(shown) == 2, "缺档乙 + 双项丙"
+
+    page.back_to_overview()
+    for _ in range(6):
+        QTest.qWait(60); QApplication.processEvents()
+    assert not page.in_detail()
+    assert page._detail_kind is None
