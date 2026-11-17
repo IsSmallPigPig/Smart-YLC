@@ -123,13 +123,16 @@ jobs:
             bit: "64"
             python: "3.11"
             pyinstaller: "pyinstaller"
-            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf'
+            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11"'
           - name: Windows10-x86
             os: Windows10
             bit: "32"
             python: "3.11"
             pyinstaller: "pyinstaller"
-            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf'
+            # 钉 1.24.11：新版 PyMuPDF 没有 win32 wheel，pip 会回退到 88MB 的 sdist
+            # 现场编译 MuPDF，卡在 "Preparing metadata" 几十分钟。1.24.11 的
+            # cp38-abi3 wheel 兼容 3.11，四个 Windows 变体与 Win7 组同版本。
+            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11"'
           - name: Windows7-x64
             os: Windows7
             bit: "64"
