@@ -167,3 +167,30 @@ def test_check_on_login_fetches_once(monkeypatch):
     announcement_check.check_on_login(host, delay_ms=0)
     QTest.qWait(200)
     assert calls == [1]
+
+
+def test_check_on_login_uses_daemon_thread(monkeypatch):
+    """拉取不能建挂在窗口下的 QThread：退出时析构运行中的线程会原生 abort。"""
+    import threading
+
+    from PyQt5.QtCore import QThread
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QWidget
+
+    from app.services import announcement_check, announcements
+
+    monkeypatch.setattr(announcements, "fetch_announcements", lambda: [])
+    host = QWidget()
+    threads = []
+    original = threading.Thread
+
+    def _remember(*args, **kwargs):
+        t = original(*args, **kwargs)
+        threads.append(t)
+        return t
+
+    monkeypatch.setattr(threading, "Thread", _remember)
+    announcement_check.check_on_login(host, delay_ms=0)
+    QTest.qWait(200)
+    assert threads and all(isinstance(t, original) for t in threads)
+    assert all(t.daemon and not isinstance(t, QThread) for t in threads)

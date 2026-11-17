@@ -24,16 +24,27 @@ def fresh_log(monkeypatch, tmp_path):
 
     old_logger = app_log._logger
     old_hook = app_log._original_excepthook
+    old_thread_hook = app_log._original_thread_excepthook
+    old_fault_file = app_log._fault_file
+    old_qt_installed = app_log._qt_handler_installed
     app_log._logger = None
     app_log._original_excepthook = None
+    app_log._original_thread_excepthook = None
+    app_log._fault_file = None
+    app_log._qt_handler_installed = False
     yield app_log
     # 清理 handler，别让关闭的 tmp 目录留在全局 logger 上
     if app_log._logger is not None:
         for h in list(app_log._logger.handlers):
             h.close()
             app_log._logger.removeHandler(h)
+    if app_log._fault_file is not None:
+        app_log._fault_file.close()
     app_log._logger = old_logger
     app_log._original_excepthook = old_hook
+    app_log._original_thread_excepthook = old_thread_hook
+    app_log._qt_handler_installed = old_qt_installed
+    app_log._fault_file = old_fault_file
     sys.excepthook = old_hook or sys.__excepthook__
 
 
@@ -95,6 +106,39 @@ def test_excepthook_logs_crash(fresh_log, monkeypatch):
     assert "RuntimeError: 未捕获的崩溃" in text
     assert "未处理异常" in text
     assert len(called) == 1
+
+
+def test_export_logs_includes_all_saved_logs(fresh_log, tmp_path):
+    """导出的是日志目录的全部 app.log* 与 fatal.log，不含 config.json。"""
+    log = fresh_log.setup_logging()
+    fresh_log.info("最新一条")
+    for h in log.handlers:
+        h.flush()
+    with open(fresh_log._log_file(), "w", encoding="utf-8") as f:
+        f.write("最新日志内容\n")
+    (tmp_path / "logs" / "app.log.1").write_text("上一轮日志\n", encoding="utf-8")
+    (tmp_path / "logs" / "fatal.log").write_text("原生崩溃栈\n", encoding="utf-8")
+    (tmp_path / "config.json").write_text("账号密码", encoding="utf-8")
+
+    dest = tmp_path / "exported.txt"
+    assert fresh_log.export_logs(str(dest)) == 3
+    text = dest.read_text(encoding="utf-8")
+    assert "最新日志内容" in text
+    assert "上一轮日志" in text
+    assert "原生崩溃栈" in text
+    assert "账号密码" not in text
+
+
+def test_qt_warning_goes_to_log(fresh_log):
+    """Qt 的原生警告要落盘：--windowed 没有 stderr，abort 前就靠这行定位。"""
+    from PyQt5.QtCore import qWarning
+
+    fresh_log.install_crash_handler()
+    qWarning("qt warning for log")
+    for h in fresh_log._logger.handlers:
+        h.flush()
+    assert "qt warning for log" in open(
+        fresh_log._log_file(), encoding="utf-8").read()
 
 
 def test_keyboard_interrupt_not_treated_as_crash(fresh_log, monkeypatch):

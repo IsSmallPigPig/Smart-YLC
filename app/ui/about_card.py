@@ -11,7 +11,7 @@ import os
 
 from PyQt5.QtCore import QUrl
 from PyQt5.QtGui import QDesktopServices
-from PyQt5.QtWidgets import QHBoxLayout, QWidget
+from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QWidget
 
 from qfluentwidgets import (
     FluentIcon as FIF,
@@ -21,7 +21,7 @@ from qfluentwidgets import (
 )
 
 from app import __version__
-from app.services import silent_update, update_check, updater
+from app.services import app_log, silent_update, update_check, updater
 from app.ui.mirror_combo import MirrorComboBox
 from app.ui.page import CONTROL_WIDTH, CollapsibleCard, SettingRow
 
@@ -78,12 +78,16 @@ class AboutCard(CollapsibleCard):
             "开源许可", desc="GPL-3.0，可自由分发与修改",
             icon=FIF.CERTIFICATE, control=_fill(license_btn)))
 
+        export_btn = _button(FIF.DOCUMENT, "导出日志")
+        export_btn.setFixedWidth(CONTROL_WIDTH)
+        export_btn.clicked.connect(self._export_logs)
         feedback_btn = _button(FIF.FEEDBACK, "提交反馈")
+        feedback_btn.setFixedWidth(CONTROL_WIDTH)
         feedback_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl(updater.ISSUES_URL)))
         self.body_lay.addWidget(SettingRow(
             "提供反馈", desc=self.FEEDBACK_DESC, icon=FIF.FEEDBACK,
-            control=_fill(feedback_btn)))
+            control=_controls(export_btn, feedback_btn)))
 
         # 镜像源与检查按钮同一行：左侧选走哪个站，右侧执行检查/下载
         self.mirror_combo = MirrorComboBox()
@@ -95,6 +99,27 @@ class AboutCard(CollapsibleCard):
             control=_controls(self.mirror_combo, self.check_btn))
         self.body_lay.addWidget(self.update_row)
         self._refresh_status()
+
+    # ------------------------------------------------------------ 运行日志
+
+    def _export_logs(self):
+        """导出全部滚动日志到用户指定位置。日志可能含路径等信息，但不包含配置里的密码。"""
+        from app.services.export_data import default_name
+
+        path, _ = QFileDialog.getSaveFileName(
+            self.window(), "导出运行日志", default_name("运行日志", ".txt"),
+            "文本文件 (*.txt)")
+        if not path:
+            return
+        if not path.lower().endswith(".txt"):
+            path += ".txt"
+        try:
+            count = app_log.export_logs(path)
+        except OSError as e:
+            self._notice("error", "导出日志失败", str(e), 8000)
+            return
+        self._notice("success", "日志已导出",
+                     f"已写入 {count} 份日志：{path}", 8000)
 
     # ------------------------------------------------------------ 状态小字
 
