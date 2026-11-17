@@ -2082,22 +2082,25 @@ def test_search_box_is_disabled_not_hidden_on_pages_without_search(app, isolated
     assert hides == [], "没有搜索的页面不该把搜索框藏起来"
 
 
-def test_donut_segments_are_rounded_and_concentric(app):
-    """圆环分段要两端圆角，并且与底环同心。
+def test_donut_arc_length_matches_ratio(app):
+    """圆环分段的弧长要等于人数占比，且与底环同心。
 
-    曾经底环用 drawArc（矩形是笔画中心线）、分段用 QPainterPath.arcTo
-    （矩形是弧的边界），两者基准不同，彩色段整体向内偏，看着就是环上错位。
+    这是这个部件真正的契约：读者直接从弧长读比例。之前底环用 drawArc（矩形是
+    笔画中心线）、分段用 QPainterPath.arcTo（矩形是弧的边界），两者基准不同，
+    彩色段整体向内偏，看着就是环上错位。
 
-    按分段的本色（#EAB308）匹配像素，不按「亮不亮」猜：整轮测试里主题可能
-    被前面的用例切过，亮/暗判定会随主题翻车。
+    端头样式（平头/圆头）是视觉选择，不在这里锁——两种都能满足「弧长等于占比」。
     """
+    import math
+
     from PyQt5.QtGui import QPixmap
 
     from app.ui.charts import SegmentedDonut
 
     YELLOW = (0xEA, 0xB3, 0x08)
     donut = SegmentedDonut()
-    donut.set_data(260, [("信息错误", 5, "#EAB308")])
+    # 只放一段，量到的角度就是这一段
+    donut.set_data(260, [("信息错误", 26, "#EAB308")])
     donut.set_progress(1.0)
     pm = QPixmap(150, 150)
     pm.fill()
@@ -2111,25 +2114,25 @@ def test_donut_segments_are_rounded_and_concentric(app):
                 and abs(c.green() - YELLOW[1]) < 40
                 and c.blue() < 70)
 
-    ys = [y for x in range(0, img.width()) for y in range(0, img.height() // 2)
-          if is_yellow(x, y)]
-    assert ys, "顶部应该有黄色分段"
+    cx, cy = img.width() / 2, img.height() / 2
+    angles, radii = [], []
+    for y in range(img.height()):
+        for x in range(img.width()):
+            if not is_yellow(x, y):
+                continue
+            dx, dy = x - cx, cy - y
+            angles.append(math.degrees(math.atan2(dy, dx)))
+            radii.append(math.hypot(dx, dy))
 
-    # 分段是圆角的：厚度从中间向两端收窄（圆头），不是一整条等厚的平头
-    # 取横向跨度上最厚处，应明显大于 1/4 处
-    cols = {}
-    for x in range(0, img.width()):
-        col = [y for y in range(0, img.height() // 2) if is_yellow(x, y)]
-        if col:
-            cols[x] = max(col) - min(col) + 1
-    if len(cols) >= 6:
-        xs = sorted(cols)
-        thickest = max(cols.values())
-        edge = (cols[xs[0]] + cols[xs[-1]]) / 2
-        # 圆头两端比最厚处薄，平头则三处基本一样
-        assert edge < thickest * 0.75, "分段两端应圆角收窄，不像平头切面"
+    assert angles, "应该画出一段黄色圆弧"
+    # 一段从 12 点顺时针铺开：角度落在 (90-占比, 90] 区间内
+    expected = 360 * 26 / 260          # 36°
+    span = max(angles) - min(angles)
+    assert abs(span - expected) < 6, f"弧长 {span:.1f}° 与占比 {expected:.0f}° 不符"
 
-
+    # 同心：所有彩色像素的半径都应落在同一圈上（环宽 14，允许抗锯齿余量）
+    assert max(radii) - min(radii) < 18, \
+        f"分段径向跨度 {max(radii) - min(radii):.1f}px 过大，可能没贴在同一条圆上"
 def test_resize_path_never_touches_window_frame():
     """resizeEvent 的同步路径里不许改窗口 frame。
 
