@@ -352,6 +352,10 @@
 **动态数字**：会连续跳数的文本（进度、耗时）用等宽字族（`widgets.tabular_label`），
 避免宽度变化导致左右抖。静态统计值保持界面默认字体。
 
+等宽字体 `JetBrains Mono` 随程序打包（`app/assets/fonts/`，OFL 许可，许可证同目录），
+启动时用 `QFontDatabase.addApplicationFont` 注册，不枚举系统字体——系统没装等宽字体时
+会静默回退成比例字体，数字宽度照旧不等，而且每台机器结果不同。
+
 ## 9. 图标语义约定（`FluentIcon`）
 
 | 功能 | 图标 |

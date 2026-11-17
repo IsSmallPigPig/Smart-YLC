@@ -515,6 +515,37 @@ class ProgressToast(QWidget):
                 painter.drawRoundedRect(fill, 1.5, 1.5)
 
 
+_MONO_FAMILY: str | None = None
+
+
+def mono_family() -> str:
+    """内置等宽字族的名字（首次调用时注册字体文件）。
+
+    字体随程序打包（`app/assets/fonts/JetBrainsMono-Regular.ttf`，OFL 许可），
+    不枚举系统字体——系统没装等宽字体时会静默回退成比例字体，数字宽度照旧不等，
+    而且各机器结果不同，等于没修。
+    """
+    global _MONO_FAMILY
+    if _MONO_FAMILY is not None:
+        return _MONO_FAMILY
+    _MONO_FAMILY = "JetBrains Mono"
+    try:
+        from PyQt5.QtGui import QFontDatabase
+
+        from app.ui.brand import assets_dir
+
+        path = assets_dir() / "fonts" / "JetBrainsMono-Regular.ttf"
+        if path.is_file():
+            fid = QFontDatabase.addApplicationFont(str(path))
+            if fid != -1:
+                families = QFontDatabase.applicationFontFamilies(fid)
+                if families:
+                    _MONO_FAMILY = families[0]
+    except Exception:
+        pass
+    return _MONO_FAMILY
+
+
 def tabular_label(label):
     """给会跳数的标签套等宽字族，避免数字变化时左右抖。
 
@@ -522,13 +553,7 @@ def tabular_label(label):
     开不了 OpenType 的 tnum，只能换等宽字族达到同样效果（每个字形等宽）。
     只用在进度、耗时这类会连续变的数字上——静态统计值保持界面默认字体。
     """
-    from PyQt5.QtGui import QFontDatabase
-
     f = label.font()
-    families = QFontDatabase().families()
-    for name in ("Consolas", "Menlo", "DejaVu Sans Mono", "Courier New"):
-        if name in families:
-            f.setFamily(name)
-            break
+    f.setFamily(mono_family())
     label.setFont(f)
     return label
