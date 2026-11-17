@@ -278,69 +278,45 @@ def native_button_center(window) -> int | None:
         return None
 
 
-class _WindowDragger:
-    """标题栏拖动：按下记全局位置，移动时自己 move 窗口。
+def _start_system_move(host: QWidget, global_pos: QPoint) -> bool:
+    """把这一下拖动交给系统窗口管理器接管。
 
-    Qt 的 startSystemMove() 在 macOS 上最终调用 AppKit 的
-    performWindowDragWithEvent:。这次交接偶尔丢失，日志里刷
-    “Window move completed without beginning”，这一次拖动也跟着失效。
-    自己算位移不经过 AppKit，拖动稳定，也不会再刷这条警告。
+    用 qframelesswindow 自带的 startSystemMove：它按平台分派到系统接口
+    （macOS 走 AppKit 的 performWindowDragWithEvent:，Windows 走
+    ReleaseCapture + WM_NCLBUTTONDOWN），跟手由系统负责，Qt 不参与坐标计算，
+    多屏不同缩放、窗口吸附与触控板手势都能正常工作。
+
+    必须在鼠标按下事件里、带上按下的全局坐标调用——系统要在那次事件上下文中
+    才接受拖动交接，自己另起一次调用会直接被拒。
+
+    macOS 日志偶尔打印 “Window move completed without beginning”，那是这条事件
+    没被系统消费的提示，拖动本身仍然连贯；曾经的绕开办法是自己算位移，
+    代价是丢掉系统侧行为，所以这里仍然交回系统。
     """
+    window = host.window()
+    if window is None:
+        return False
+    try:
+        from qframelesswindow.utils import startSystemMove
 
-    def __init__(self, host: QWidget):
-        self._host = host
-        self._press = QPoint()
-        self._origin = QPoint()
-        self._dragging = False
-
-    def press(self, e) -> bool:
-        if e.button() != Qt.MouseButton.LeftButton:
-            return False
-        # PyQt5 没有 QMouseEvent.globalPosition()（Qt6 才有），用 globalPos()
-        self._press = e.globalPos()
-        self._origin = self._host.window().pos()
-        self._dragging = True
-        self._host.setCursor(Qt.CursorShape.ClosedHandCursor)
+        startSystemMove(window, global_pos)
         return True
-
-    def move(self, e) -> bool:
-        if not self._dragging:
-            return False
-        self._host.window().move(self._origin + e.globalPos() - self._press)
-        return True
-
-    def release(self) -> bool:
-        if not self._dragging:
-            return False
-        self._dragging = False
-        self._host.unsetCursor()
-        return True
+    except Exception:
+        return False
 
 
 class ChromeRow(QWidget):
     """标签条的空白处：按在空白处就拖动窗口。
 
     标签、加号、导航按钮都是子控件，自己吃掉按下事件，不受影响。
+    拖动交给系统接管（见 _start_system_move），不再自己算位移。
     """
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._drag = _WindowDragger(self)
-
     def mousePressEvent(self, e):
-        if self._drag.press(e):
+        if (e.button() == Qt.MouseButton.LeftButton
+                and _start_system_move(self, e.globalPos())):
             return
         super().mousePressEvent(e)
-
-    def mouseMoveEvent(self, e):
-        if self._drag.move(e):
-            return
-        super().mouseMoveEvent(e)
-
-    def mouseReleaseEvent(self, e):
-        if self._drag.release():
-            return
-        super().mouseReleaseEvent(e)
 
 
 class LoginView(QWidget):
@@ -451,9 +427,7 @@ class BrowserWindow(FluentWindowBase):
 
     def _build_title_bar(self):
         self.setTitleBar(MSFluentTitleBar(self))
-        # 标题栏本身也要接住拖动：qframelesswindow 在 macOS 上会调 startSystemMove，
-        # 就是那条 “move completed without beginning” 的来源。
-        self._title_drag = _WindowDragger(self.titleBar)
+        # 标题栏空白处的拖动交给系统接管（与 ChromeRow 同一套做法）
         self.titleBar.installEventFilter(self)
         # 标题栏高度按系统按钮的中线定（macOS 46，Windows 38）；标签行上沿让出
         # TAB_TOP，行内 32px 的按钮中线就跟红绿灯、加号、后退前进落在同一条线上。
@@ -1130,16 +1104,12 @@ class BrowserWindow(FluentWindowBase):
         return view
 
     def eventFilter(self, obj, event):
-        """浏览区尺寸变化时把每一层跟上去；标题栏空白区自己拖动。"""
+        """浏览区尺寸变化时把每一层跟上去；标题栏空白处按下则交给系统拖动。"""
         from PyQt5.QtCore import QEvent
 
-        if obj is self.titleBar:
-            t = event.type()
-            if t == QEvent.Type.MouseButtonPress and self._title_drag.press(event):
-                return True
-            if t == QEvent.Type.MouseMove and self._title_drag.move(event):
-                return True
-            if t == QEvent.Type.MouseButtonRelease and self._title_drag.release():
+        if obj is self.titleBar and event.type() == QEvent.Type.MouseButtonPress:
+            if (event.button() == Qt.MouseButton.LeftButton
+                    and _start_system_move(self.titleBar, event.globalPos())):
                 return True
         if event.type() == QEvent.Type.Resize and obj is self.area:
             self._place_pages()

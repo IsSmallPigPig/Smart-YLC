@@ -684,35 +684,51 @@ def test_messages_content_digest_tracks_changes(app):
         [view("u1", 1, "2026-11-16 10:00"), view("u1", 3, "2026-11-16 11:00")])
 
 
-def test_browser_tab_row_drags_window_itself(app):
-    """拖窗自己算位移，不把 mouseDown 交给 AppKit 的系统拖动。"""
-    from types import SimpleNamespace
+def test_browser_drag_hands_off_to_system(app, monkeypatch):
+    """标题栏与标签条空白处的拖动交给系统接管，不自己算位移。
 
+    自绘拖动（记录按下点、移动时 move 窗口）能避开 macOS 那条
+    “Window move completed without beginning” 日志，但会丢掉系统侧行为：
+    多屏不同缩放的换算、窗口吸附、触控板手势。所以改回系统接管——
+    断言「按下去就是发起一次系统拖动」，而不是「窗口位置被自己改了」。
+    """
     from PyQt5.QtCore import QPoint, Qt
     from PyQt5.QtWidgets import QWidget
 
-    from app.ui.browser_page import ChromeRow, _WindowDragger
+    from app.ui import browser_page
 
-    assert {"mousePressEvent", "mouseMoveEvent", "mouseReleaseEvent"} <= set(
-        ChromeRow.__dict__)
+    calls = []
+    monkeypatch.setattr(browser_page, "_start_system_move",
+                        lambda host, pos: calls.append((host, pos)) or True)
 
-    host = QWidget()
-    host.move(100, 100)
-    app.processEvents()
-    drag = _WindowDragger(host)
-    # PyQt5 用 globalPos()（Qt6 的 globalPosition().toPoint() 在 Qt5 没有）
-    event = lambda x: SimpleNamespace(
-        button=lambda: Qt.MouseButton.LeftButton,
-        globalPos=lambda: QPoint(x, 120))
-    try:
-        assert drag.press(event(200))
-        assert drag.move(event(260))
-        app.processEvents()
-        assert host.pos().x() == 160
-        assert drag.release()
-        assert not drag.move(event(300))
-    finally:
-        host.deleteLater()
+    # ChromeRow：按在空白处就发起系统拖动
+    row = browser_page.ChromeRow()
+    row.mousePressEvent(type("E", (), {
+        "button": lambda self: Qt.MouseButton.LeftButton,
+        "globalPos": lambda self: QPoint(200, 120),
+    })())
+    assert len(calls) == 1, "标签条空白处没有发起系统拖动"
+
+    # 自绘拖动类必须已经移除，别再偷偷回退
+    assert not hasattr(browser_page, "_WindowDragger")
+
+
+def test_browser_drag_ignores_non_left_button(app, monkeypatch):
+    """右键不触发窗口拖动，否则右键菜单一按窗口就跟着跑。"""
+    from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+    from PyQt5.QtGui import QMouseEvent
+
+    from app.ui import browser_page
+
+    calls = []
+    monkeypatch.setattr(browser_page, "_start_system_move",
+                        lambda host, pos: calls.append(1) or True)
+    row = browser_page.ChromeRow()
+    event = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(1, 1), QPointF(1, 1),
+                        Qt.MouseButton.RightButton, Qt.MouseButton.RightButton,
+                        Qt.KeyboardModifier.NoModifier)
+    row.mousePressEvent(event)
+    assert calls == []
 
 
 def test_upload_search_filters_rows(app, isolated_store):

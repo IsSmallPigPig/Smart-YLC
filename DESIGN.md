@@ -284,9 +284,13 @@
   AppKit 摆在窗口顶部往下 21px 处，不是 32px 标题栏的中点，按 32 排会整体高 5px。
   标签行固定 32 高、在标题栏里 `AlignVCenter`，加号与导航图标因此和圆点同一条中线；
   showEvent 里用 `native_button_center()` 量一次实际位置再校正，常量只做兜底。
-- 标签条拖窗在 `mousePressEvent` 里直接 `startSystemMove()`：macOS 的
-  `performWindowDragWithEvent:` 只认 mouseDown，等鼠标移动 4px 后再从 mouseMove 调，
-  AppKit 会报 `Window move completed without beginning`，且这一下常常真的拖不动。
+- 浏览器窗口的拖窗交回**系统接管**：`mousePressEvent` 里调
+  `qframelesswindow.utils.startSystemMove(window, e.globalPos())`，由系统负责跟手。
+  它按平台分派（macOS → `performWindowDragWithEvent:`，Windows → `ReleaseCapture` +
+  `WM_NCLBUTTONDOWN`），多屏不同缩放的换算、窗口吸附与触控板手势都能正常工作。
+  必须在按下事件的上下文里、带上按下的全局坐标调用，另起一次调用会被系统拒绝。
+  曾经改用自绘拖动（记按下点、移动时 move 窗口）来绕开 macOS 那条
+  `Window move completed without beginning` 日志，代价是丢掉系统侧行为，已撤回。
 - 大量卡片用 `BatchedBuild` 分批建，首帧先出内容。
 - 组织管理切页只在数据真的变了时重建：切页 5 分钟内直接用现有支部树，刷新结果用
   「支部 + 成员数 + 分类计数」摘要比较，相同就跳过；重建前先把旧卡片 `hide()` 再
