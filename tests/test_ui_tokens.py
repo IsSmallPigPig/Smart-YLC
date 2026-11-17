@@ -94,3 +94,25 @@ def test_font_scale_is_compact(app):
 
     assert 4 <= len(set(P.FONT.values())) <= 5
     assert min(P.FONT.values()) >= 12
+
+
+def test_mono_font_is_bundled_and_registered(app):
+    """等宽数字字体随程序打包并注册，不依赖系统装了什么。
+
+    枚举系统字体（Consolas / Menlo / ...）在没装的机器上会静默回退成比例字体，
+    数字宽度照旧不等，各人机器结果还不一样——等于没修。"""
+    from app.ui.brand import assets_dir
+    from app.ui.widgets import mono_family, tabular_label
+    from PyQt5.QtWidgets import QLabel
+
+    font_file = assets_dir() / "fonts" / "JetBrainsMono-Regular.ttf"
+    assert font_file.is_file(), f"打包缺字体文件：{font_file}"
+    assert (assets_dir() / "fonts" / "OFL.txt").is_file(), "字体许可证要随包分发"
+
+    from PyQt5.QtGui import QFontDatabase
+
+    family = mono_family()
+    # 只比名字不够：注册失败时代码会回落成同名默认值，这里确认字体真在库里
+    assert family in QFontDatabase().families(), f"字体未注册到 Qt：{family}"
+    lbl = tabular_label(QLabel("42/260（16%）"))
+    assert lbl.font().family() == family
