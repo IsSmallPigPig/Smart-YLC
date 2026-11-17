@@ -36,6 +36,14 @@
 ### 变更（布局）
 - 组织状况右列（上传进度 / 待办数据）加宽：原来 stretch=0 全靠内容撑，两张窄卡局促。
 
+### 修复（CI）
+- **v1.7.0 的 Release 发布失败**：合并 Windows 构建矩阵时把「准备代码签名证书」与
+  「签名主程序 / 安装包」两个步骤一起删掉了，产物里没有 `SmartYouth-CodeSigning.cer`，
+  而 `fail_on_unmatched_files: true` 会因这一个可选文件缺失把整条发布判红。
+  现在补回签名步骤（证书只由 64 位变体生成一份），并把
+  `fail_on_unmatched_files` 改为 false，另加一步显式校验四类主产物齐全
+  （dmg、4 个 Windows setup、deb），缺主产物仍然会红。
+
 ## v1.7.0
 
 ### 修复
