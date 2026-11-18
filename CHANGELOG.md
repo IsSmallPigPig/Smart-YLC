@@ -7,6 +7,13 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.6
+
+- [a169dfc] fix: 修复 Windows 打开网页闪退——安装目录改 ASCII、WebEngine 资源按实际位置钉死
+- [f0e699d] fix(windows): WebEngine 资源缺失时跳过预热，避免 int3 崩溃
+
+@AnkoQAQ
+
 ## v1.0.4
 
 - [04a8bfe] fix(windows): 强制覆盖 WebEngine 资源路径；Win10 恢复圆角并避开最大化
