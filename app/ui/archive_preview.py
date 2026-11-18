@@ -111,6 +111,10 @@ class ArchivePreviewView(FluentPage):
         theme_font(title, P.FONT['title'], int(QFont.Weight.DemiBold))
         title.setWordWrap(True)
         head.addWidget(title, 1)
+        self.ocr_btn = PushButton(FIF.INFO, "核对信息", self)
+        self.ocr_btn.clicked.connect(self._run_ocr)
+        set_tip(self.ocr_btn, "识别封面手写姓名，与文件名和在线名单比对（辅助提示）")
+        head.addWidget(self.ocr_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self.abnormal_btn = PushButton(FIF.INFO, "存在异常", self)
         self.abnormal_btn.setCheckable(True)
         self.abnormal_btn.clicked.connect(self._toggle_abnormal)
@@ -221,6 +225,45 @@ class ArchivePreviewView(FluentPage):
             if pix.width() > avail:
                 self.preview_lbl.setPixmap(
                     pix.scaledToWidth(avail, Qt.TransformationMode.SmoothTransformation))
+
+    # ---- OCR 信息核对（可选，慢） ----
+
+    def _run_ocr(self):
+        from app.services.archive_ocr import compare_name, read_cover
+
+        self.ocr_btn.setEnabled(False)
+        self.exam_label.setText("正在识别封面姓名，约需 2-5 秒…")
+
+        def job():
+            from app.domain.naming import analyze_file_name
+
+            r = read_cover(self.path)
+            expected = analyze_file_name(self.name)
+            file_name = expected.parsed[0] if expected.parsed else ""
+            same, msg = compare_name(r.name, file_name)
+            return same, msg, r.available
+
+        def done(result):
+            same, msg, available = result
+            self.ocr_btn.setEnabled(True)
+            prefix = "信息核对：" if same else "信息待确认："
+            self.exam_label.setText(prefix + msg + ("（手写识别可能误识，仅供参考）"
+                                                    if not available or not same else ""))
+
+        from PyQt5.QtCore import QThread, pyqtSignal as Signal
+
+        class W(QThread):
+            finished = Signal(object)
+
+            def run(self):
+                try:
+                    self.finished.emit(job())
+                except Exception as exc:  # noqa: BLE001
+                    self.finished.emit((False, f"核对失败：{exc}", False))
+
+        self._ocr_worker = W(self)
+        self._ocr_worker.finished.connect(done)
+        self._ocr_worker.start()
 
     # ---- 异常标记 ----
 

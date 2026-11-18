@@ -97,3 +97,18 @@ def test_preview_view_builds(qapp_session):
     # 子页面无 banner：布局顶部边距是常规 16，不是 PageBanner.HEIGHT+16
     assert view.vBoxLayout.contentsMargins().top() == 16
     view.deleteLater(); host.deleteLater()
+
+
+def test_ocr_compare_name_strict():
+    """手写 OCR 有误识风险：空识别与疑似不一致都不能判通过。"""
+    from app.services.archive_ocr import compare_name
+
+    ok, msg = compare_name("任思澳", "任思澳")
+    assert ok and "一致" in msg
+    ok, msg = compare_name("", "任思澳")
+    assert not ok and "人工核对" in msg
+    ok, msg = compare_name("刘回延", "刘炯延")
+    assert not ok and "疑似不一致" in msg
+    # 无比对来源时按识别结果提示，不判错
+    ok, msg = compare_name("任思澳", "")
+    assert ok
