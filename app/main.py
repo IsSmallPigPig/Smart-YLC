@@ -91,6 +91,20 @@ def _smoke_test() -> int:
 
     from app.ui.main_window import MainWindow
 
+    # 云端备份的 cryptography 在函数体内才 import，静态分析收不到；上一次
+    # CI 依赖列表漏装，冻结包要到用户点「云端备份」才炸。冒烟直接 import
+    # 真用到的原语并做一次性加解密——缺模块或 Rust 扩展没打进包里就红。
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        AESGCM(b"0" * 32).encrypt(b"0" * 12, b"smoke", None)
+    except Exception as exc:  # noqa: BLE001 - 冻结产物里缺什么都有可能
+        print(f"SMOKE FAIL: 加密模块不可用：{exc}", flush=True)
+        _write_smoke_result(f"SMOKE FAIL: cryptography unavailable: {exc}")
+        import os
+
+        os._exit(1)
+
     w = MainWindow()
     w.show()
     app.processEvents()
