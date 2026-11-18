@@ -1,0 +1,42 @@
+name: Cloud Backup
+
+on:
+  push:
+    branches: ["server", "main"]
+    paths:
+      - "netlify/**"
+      - ".github/workflows/cloud-backup.yml"
+  pull_request:
+    paths: ["netlify/**"]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: netlify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund
+
+      - name: 打包校验
+        run: npx --yes esbuild functions/backup.mts --bundle --platform=neutral --format=esm --external:@netlify/blobs --outfile=/tmp/backup.js
+
+      - name: 部署到 Netlify
+        if: github.ref == 'refs/heads/server' || github.ref == 'refs/heads/main'
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          if [ -z "$NETLIFY_AUTH_TOKEN" ] || [ -z "$NETLIFY_SITE_ID" ]; then
+            echo "::warning::未配置 NETLIFY_AUTH_TOKEN / NETLIFY_SITE_ID，跳过部署（打包校验已通过）"
+            exit 0
+          fi
+          npx --yes netlify-cli deploy --prod --dir=. --functions=functions --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN"
