@@ -9,7 +9,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults.flingBehavior
 import androidx.compose.foundation.pager.rememberPagerState
@@ -25,6 +27,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigationevent.NavigationEventInfo
@@ -34,6 +37,8 @@ import com.smallylc.smartyouth.data.Repo
 import com.smallylc.smartyouth.scan.Naming
 import com.smallylc.smartyouth.ui.component.bottombar.BottomBar
 import com.smallylc.smartyouth.ui.component.bottombar.MainPagerState
+import com.smallylc.smartyouth.ui.component.bottombar.NavigationRailMiuix
+import com.smallylc.smartyouth.ui.component.bottombar.useNavigationRail
 import com.smallylc.smartyouth.ui.component.bottombar.rememberMainPagerState
 import com.smallylc.smartyouth.ui.navigation3.LocalNavigator
 import com.smallylc.smartyouth.ui.navigation3.Navigator
@@ -188,13 +193,15 @@ fun MainScreen(
     onOpenAbout: () -> Unit,
 ) {
     val navigator = LocalNavigator.current
+    val wideScreen = useNavigationRail()
     val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { MainPagerConfig.PAGE_COUNT })
-    val mainPagerState = rememberMainPagerState(pagerState)
+    val mainPagerState = rememberMainPagerState(pagerState, animatePageChanges = !wideScreen)
     val pagerMode = PagerInterceptionMode.CrossAxisInterceptor
 
     val session by Repo.sessionState.collectAsStateWithLifecycle()
     val members by Repo.members.collectAsStateWithLifecycle()
     val messages by Repo.messages.collectAsStateWithLifecycle()
+    val unreadCount by remember { derivedStateOf { messages.count { it.unread } } }
     val sync by Repo.syncState.collectAsStateWithLifecycle()
     val overview = remember(members, messages) { Repo.overview() }
     val scope = rememberCoroutineScope()
@@ -207,19 +214,11 @@ fun MainScreen(
     MainScreenBackHandler(mainPagerState, navigator)
 
     CompositionLocalProvider(LocalMainPagerState provides mainPagerState) {
-        Scaffold(
-            bottomBar = {
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    BottomBar(
-                        unreadCount = messages.count { it.unread },
-                        mainState = mainPagerState,
-                        modifier = Modifier.align(Alignment.BottomCenter),
-                    )
-                }
-            },
-        ) { innerPadding ->
+        val pager = @Composable { bottom: androidx.compose.ui.unit.Dp ->
             HorizontalPager(
-                modifier = Modifier.pagerGestureOverride(pagerState = mainPagerState.pagerState, mode = pagerMode),
+                modifier = Modifier
+                    .pagerGestureOverride(pagerState = mainPagerState.pagerState, mode = pagerMode)
+                    .then(if (wideScreen) Modifier.widthIn(max = 1100.dp) else Modifier),
                 state = mainPagerState.pagerState,
                 beyondViewportPageCount = 1,
                 overscrollEffect = null,
@@ -230,7 +229,6 @@ fun MainScreen(
                     snapAnimationSpec = PagerNavigationSpringSpec,
                 ),
             ) { page ->
-                val bottom = innerPadding.calculateBottomPadding()
                 when (page) {
                     0 -> HomeScreen(
                         loggedIn = session.loggedIn,
@@ -293,6 +291,32 @@ fun MainScreen(
                     )
                 }
             }
+        }
+
+        if (wideScreen) {
+            Scaffold { _ ->
+                Row {
+                    NavigationRailMiuix(
+                        unreadCount = unreadCount,
+                        mainState = mainPagerState,
+                    )
+                    Box(Modifier.weight(1f)) {
+                        pager(0.dp)
+                    }
+                }
+            }
+        } else {
+            Scaffold(
+                bottomBar = {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        BottomBar(
+                            unreadCount = unreadCount,
+                            mainState = mainPagerState,
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                        )
+                    }
+                },
+            ) { innerPadding -> pager(innerPadding.calculateBottomPadding()) }
         }
     }
 }

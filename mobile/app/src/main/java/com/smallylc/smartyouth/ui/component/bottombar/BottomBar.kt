@@ -2,6 +2,8 @@ package com.smallylc.smartyouth.ui.component.bottombar
 
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -75,6 +77,16 @@ fun rememberMainPagerState(
     animatePageChanges: Boolean = true,
 ): MainPagerState = remember(pagerState, coroutineScope, animatePageChanges) {
     MainPagerState(pagerState, coroutineScope, animatePageChanges)
+}
+
+/** 平板或横屏用侧栏：宽度 >=600dp 且偏横，或 >=840dp。 */
+@Composable
+fun useNavigationRail(): Boolean {
+    val size = LocalWindowInfo.current.containerSize
+    val density = LocalResources.current.displayMetrics.density
+    val widthDp = size.width / density
+    val heightDp = size.height / density
+    return widthDp >= 840f || (widthDp >= 600f && heightDp / widthDp < 1.2f)
 }
 
 enum class MainDestination(val label: String, val icon: ImageVector) {
