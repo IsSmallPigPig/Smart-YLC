@@ -36,7 +36,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install "PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf
+          pip install "PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf "cryptography==41.0.7"
           pip install pyobjc-framework-Cocoa pyobjc-framework-UserNotifications
 
       - name: 生成应用图标（icns）
@@ -123,7 +123,7 @@ jobs:
             bit: "64"
             python: "3.11"
             pyinstaller: "pyinstaller"
-            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11"'
+            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11" "cryptography==41.0.7"'
           - name: Windows10-x86
             os: Windows10
             bit: "32"
@@ -132,20 +132,20 @@ jobs:
             # 钉 1.24.11：新版 PyMuPDF 没有 win32 wheel，pip 会回退到 88MB 的 sdist
             # 现场编译 MuPDF，卡在 "Preparing metadata" 几十分钟。1.24.11 的
             # cp38-abi3 wheel 兼容 3.11，四个 Windows 变体与 Win7 组同版本。
-            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11"'
+            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11" "cryptography==41.0.7"'
           - name: Windows7-x64
             os: Windows7
             bit: "64"
             python: "3.8"
             pyinstaller: "pyinstaller==5.13.2"
             # 3.8 必须钉版本：新版 PyMuPDF 要 >=3.10、numpy 2.x 要 >=3.9
-            deps: '"PyQt5==5.15.11" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine==5.15.7" pypdf "pillow<11" openpyxl requests "pymupdf==1.24.11" "numpy<1.25"'
+            deps: '"PyQt5==5.15.11" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine==5.15.7" pypdf "pillow<11" openpyxl requests "pymupdf==1.24.11" "numpy<1.25" "cryptography==41.0.7"'
           - name: Windows7-x86
             os: Windows7
             bit: "32"
             python: "3.8"
             pyinstaller: "pyinstaller==5.13.2"
-            deps: '"PyQt5==5.15.11" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine==5.15.7" pypdf "pillow<11" openpyxl requests "pymupdf==1.24.11" "numpy<1.25"'
+            deps: '"PyQt5==5.15.11" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine==5.15.7" pypdf "pillow<11" openpyxl requests "pymupdf==1.24.11" "numpy<1.25" "cryptography==41.0.7"'
     env:
       PKG_NAME: SmartYouth-${{ matrix.name }}-setup
       TARGET_OS: ${{ matrix.os }}
@@ -335,7 +335,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install "PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf
+          pip install "PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf "cryptography==41.0.7"
 
       - name: PyInstaller 打包（onedir）
         # 脚本在 Linux 上输出 dist/SmartYouth/，并把图标铺进 share/icons/hicolor

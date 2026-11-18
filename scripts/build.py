@@ -88,6 +88,11 @@ def build_command() -> list[str]:
         # qfluentwidgets 包内带字体和资源，PyInstaller 默认不收第三方包数据
         "--collect-all=qfluentwidgets",
         "--hidden-import=PyQt5.QtSvg",
+        # 云端备份的加密调用全在函数体内按需 import，静态分析收不到；
+        # cryptography 的 Rust 原生扩展（_rust）也必须显式带上，
+        # Windows 冻结包里缺它就是运行时报「未导入加密模块」。
+        "--hidden-import=cryptography",
+        "--hidden-import=cryptography.hazmat.backends.openssl.backend",
         # PyInstaller 把数据放到 _MEIPASS/assets；brand.assets_dir() 认这个落点
         f"--add-data=app/assets{os.pathsep}assets",
     ]
