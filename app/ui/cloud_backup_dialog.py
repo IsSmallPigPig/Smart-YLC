@@ -37,7 +37,7 @@ class CloudBackupDialog(ConfigDialog):
         self._worker: _Worker | None = None
 
         self.server_edit = LineEdit(self.widget)
-        self.server_edit.setPlaceholderText("https://your-site.netlify.app")
+        self.server_edit.setPlaceholderText(cloud_backup.DEFAULT_SERVER)
         self.server_edit.setText(server)
         self.add(self.server_edit)
 

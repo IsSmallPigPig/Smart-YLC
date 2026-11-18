@@ -1249,11 +1249,13 @@ class SettingsPage(FluentPage):
         ).show()
 
     def _cloud_server(self) -> str:
-        """上次用过的地址存在配置里，换机后第一次需要手填。"""
+        """默认用官方备份站；只有显式改过地址时才用配置里的值。"""
+        from app.services.cloud_backup import DEFAULT_SERVER
+
         try:
-            return str((store.load() or {}).get("cloudBackupServer") or "")
+            return str((store.load() or {}).get("cloudBackupServer") or DEFAULT_SERVER)
         except Exception:
-            return ""
+            return DEFAULT_SERVER
 
     def _remember_cloud_server(self, server: str) -> None:
         if not server:

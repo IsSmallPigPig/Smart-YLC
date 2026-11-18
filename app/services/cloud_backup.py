@@ -28,6 +28,7 @@ SALT_BYTES = 16
 NONCE_BYTES = 12
 MAX_BYTES = 5 * 1024 * 1024
 DEFAULT_TIMEOUT = 20
+DEFAULT_SERVER = "https://smartylc.netlify.app"
 
 
 def generate_code() -> str:
