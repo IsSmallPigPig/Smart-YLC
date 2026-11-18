@@ -118,6 +118,7 @@ var
   ResultCode: Integer;
   CertPath: String;
   OldDir: String;
+  OldPrompt: String;
 begin
   if CurStep <> ssPostInstall then
     Exit;
@@ -130,10 +131,12 @@ begin
   if DirExists(OldDir) and FileExists(OldDir + '\{#AppName}.exe')
      and (OldDir <> ExpandConstant('{app}')) then
   begin
-    if MsgBox('检测到旧版本仍在：' + OldDir + #13#10#13#10 +
-              '新版本已装到 ' + ExpandConstant('{app}') + '（纯英文路径，内置浏览器才能正常加载）。' +
-              #13#10 + '旧目录约占几百 MB，现在删除吗？',
-              mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+    { 字符串里换行符 #13#10 不要出现在续行的行首：预处理器把行首的 # 当成
+      指令，#13 就成了「未知指令」。所以换行符一律写在上一行末尾。 }
+    OldPrompt := '检测到旧版本仍在：' + OldDir + #13#10#13#10 +
+                 '新版本已装到 ' + ExpandConstant('{app}') + '（纯英文路径，内置浏览器才能正常加载）。' + #13#10 +
+                 '旧目录约占几百 MB，现在删除吗？';
+    if MsgBox(OldPrompt, mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
       DelTree(OldDir, True, True, True);
   end;
 
