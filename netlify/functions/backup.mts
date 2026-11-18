@@ -64,7 +64,9 @@ export default async (req: Request, _context: Context) => {
     return json({ ok: false, error: "请求过于频繁，请稍后再试" }, 429);
   }
 
-  const store = getStore("smartyouth-backup");
+  // strong：跨区复制默认最终一致——建档刚 PUT 完就 probe/越权校验，读到旧值
+  // 会把「别人的码」看成空闲或放行覆盖。备份场景读写必须看到彼此。
+  const store = getStore({ name: "smartyouth-backup", consistency: "strong" });
 
   if (req.method === "GET") {
     const stored = (await store.get(code, { type: "json" })) as
