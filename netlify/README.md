@@ -21,14 +21,19 @@
 
 函数按需安装依赖：Netlify 会自动读取 `netlify/package.json` 并在部署时安装 `@netlify/blobs`。
 
-## 接口
+## 接口（v2）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| PUT/POST | `/api/backup?id=ABC234` | 存一份信封：`{salt, nonce, ciphertext}` |
-| GET | `/api/backup?id=ABC234` | 取回同一份信封；不存在返回 404 |
+| PUT/POST | `/api/backup?id=ABC234` | 存一份信封：`{v, salt, nonce, ciphertext}`，头带 `X-Owner-Key` |
+| GET | `/api/backup?id=ABC234` | 取回信封（不含 owner 字段）；不存在返回 404 |
+| GET | `/api/backup?id=ABC234&probe=1` | 建档查重：只回答 `{exists: true/false}` |
 
-约束：提取码 6 位，字符集 `A-Z2-9`（去掉 0/1/I/O）；请求体上限 5MB；单 IP 每分钟 30 次。
+所有权：建档时服务端记录 `SHA-256(owner key)`。之后的 PUT 必须带匹配的
+`X-Owner-Key`，否则 403——别人的提取码只能拉取，不能被覆盖。没有 owner 头
+的 PUT 一律 403。v1 老记录没有 owner，只能被读取，不能再被改写。
+
+约束：提取码 6 位，字符集 `A-Z2-9`（去掉 0/1/I/O）；owner key 为 64 位 hex；请求体上限 5MB；单 IP 每分钟 30 次。
 
 ## 其他平台
 

@@ -28,7 +28,7 @@ jobs:
         run: npm install --no-audit --no-fund
 
       - name: 打包校验
-        run: npx --yes esbuild functions/backup.mts --bundle --platform=neutral --format=esm --external:@netlify/blobs --outfile=/tmp/backup.js
+        run: npx --yes esbuild functions/backup.mts --bundle --platform=node --format=esm --external:@netlify/blobs --outfile=/tmp/backup.js
 
       - name: 部署到 Netlify
         if: github.ref == 'refs/heads/server' || github.ref == 'refs/heads/main'
