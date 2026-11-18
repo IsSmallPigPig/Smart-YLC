@@ -35,6 +35,9 @@ import com.smallylc.smartyouth.ui.component.EmptyHint
 import com.smallylc.smartyouth.ui.component.MutedText
 import com.smallylc.smartyouth.ui.component.ToneRed
 import com.smallylc.smartyouth.ui.theme.LocalEnableBlur
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Share
 import com.smallylc.smartyouth.ui.util.BlurredBar
 import com.smallylc.smartyouth.ui.util.rememberBlurBackdrop
 import top.yukonga.miuix.kmp.basic.Button
@@ -42,6 +45,8 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
@@ -99,7 +104,7 @@ fun ScansScreen(
                             color = colorScheme.onSurface,
                         )
                         MutedText(
-                            "自动找纸张四边、摆正、拉平阴影，多页合成一个 PDF。",
+                            "自动裁边摆正，多页合成一个 PDF。",
                             Modifier.padding(top = 6.dp),
                         )
                         Button(
@@ -116,42 +121,45 @@ fun ScansScreen(
             }
 
             if (docs.isEmpty()) {
-                item { EmptyHint("还没有扫描件", "拍完保存的 PDF 都会出现在这里，可以直接分享或上传。") }
+                item { EmptyHint("还没有扫描件", "保存后的 PDF 会出现在这里。") }
             } else {
                 item { CardGap(16) }
-                item {
-                    MutedText("本机扫描件", Modifier.padding(start = 4.dp, bottom = 6.dp))
-                }
                 items(docs, key = { it.file.absolutePath }) { doc ->
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                            Text(
-                                text = doc.name,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = colorScheme.onSurface,
-                            )
-                            MutedText(
-                                "${formatSize(doc.size)} · ${formatDate(doc.savedAt)}",
-                                Modifier.padding(top = 3.dp),
-                            )
-                        }
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { DocStore.open(doc) },
+                    ) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            TextButton(text = "查看档案", onClick = { DocStore.open(doc) })
-                            TextButton(text = "分享档案", onClick = { DocStore.share(doc) })
-                            Spacer(Modifier.weight(1f))
-                            TextButton(
-                                text = "删除档案",
-                                onClick = { pendingDelete = doc },
-                                colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.textButtonColors(
-                                    color = ToneRed,
-                                ),
-                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = doc.name,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = colorScheme.onSurface,
+                                    maxLines = 1,
+                                )
+                                MutedText(
+                                    "${formatSize(doc.size)} · ${formatDate(doc.savedAt)}",
+                                    Modifier.padding(top = 3.dp),
+                                )
+                            }
+                            IconButton(onClick = { DocStore.share(doc) }) {
+                                Icon(
+                                    MiuixIcons.Share,
+                                    contentDescription = "分享",
+                                    tint = colorScheme.onSurfaceVariantActions,
+                                )
+                            }
+                            IconButton(onClick = { pendingDelete = doc }) {
+                                Icon(
+                                    MiuixIcons.Delete,
+                                    contentDescription = "删除",
+                                    tint = ToneRed,
+                                )
+                            }
                         }
                     }
                     CardGap(8)
@@ -171,12 +179,12 @@ fun ScansScreen(
             content = {
                 Row(modifier = Modifier.fillMaxWidth()) {
                     TextButton(
-                        text = "暂不删除",
+                        text = "取消",
                         onClick = { pendingDelete = null },
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(
-                        text = "删除档案",
+                        text = "删除",
                         onClick = {
                             DocStore.delete(doc)
                             docs = DocStore.list()
