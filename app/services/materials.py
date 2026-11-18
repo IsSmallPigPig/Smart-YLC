@@ -62,6 +62,16 @@ def win11_mica_available() -> bool:
     return win11_build() >= WINDOWS_MICA_BUILD
 
 
+def window_corner_radius(radius: int = 10) -> int:
+    """这台机器上窗口应该画多大圆角；Win10 与 Linux 保持直角。
+
+    启动画面与主窗口接力，两边半径必须一致，否则淡出时会露出一块角。
+    """
+    if sys.platform == "darwin" or win11_mica_available():
+        return radius
+    return 0
+
+
 def win10_acrylic_available() -> bool:
     """亚克力在 Windows 10 1803（build ≥ 17134）及更高版本可用。"""
     return win11_build() >= WINDOWS_ACRYLIC_BUILD
@@ -209,33 +219,6 @@ def add_dwm_shadow(window) -> bool:
         return False
 
 
-def apply_mask_corners(window, radius: int = 10) -> bool:
-    """用 setMask 把窗口切成圆角（没有系统圆角接口时用）。
-
-    遮罩按位图走，边缘没有抗锯齿，半径给小一点更干净。
-
-    两个限制要知道：
-    * Windows 上 `setMask` 会调 `SetWindowRgn`，那同样会让窗口重算区域并触发
-      重绘甚至尺寸确认——所以它**不能**放在 resizeEvent 的同步路径里反复调，
-      只能由调用方去抖后调用，并且尺寸没变时不要重复调（见 set_corners）。
-    * 它和「DWM 把客户区扩展成玻璃边框」是冲突的：一个要求裁掉圆角外的像素，
-      另一个要求那块像素交给系统合成。所以开了亚克力/Mica 的 Windows 窗口
-      不要走这条路径。
-    """
-    try:
-        from PyQt5.QtGui import QPainterPath, QRegion
-
-        w, h = window.width(), window.height()
-        if w <= 0 or h <= 0:
-            return False
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, w, h, radius, radius)
-        window.setMask(QRegion(path.toFillPolygon().toPolygon()))
-        return True
-    except Exception:
-        return False
-
-
 # 上次切圆角时的 (id(窗口), 宽, 高, 半径)：尺寸没变就不重复调系统接口
 _CORNER_STATE: dict[int, tuple[int, int, int]] = {}
 
@@ -252,12 +235,11 @@ def set_corners(window, radius: int = 10, force: bool = False,
 
     各平台策略：
     * macOS：无边框窗口由系统切圆角，什么都不做。
-    * Windows 11：只写 DWM 圆角偏好（纯属性，不改窗口几何）。**绝不 setMask**，
+    * Windows 11：只写 DWM 圆角偏好（纯属性，不改窗口几何）。绝不 setMask，
       那会和「客户区扩展成玻璃边框」打架。
-    * Windows 10：没有系统圆角接口，用 setMask 裁区域；最大化时退回直角，
-      否则四角会切掉桌面像素。
-    * Linux：不进 setMask。Qt 在 Wayland 上不支持窗口遮罩，X11 上遮罩会把阴影
-      一起裁掉；而主流桌面环境对无边框窗口本来就有自己的圆角与阴影，
+    * Windows 10 及更早：不做圆角。遮罩没有抗锯齿，还会与透明材质、系统阴影
+      互相裁切，观感比直角更差。
+    * Linux：不做圆角。主流桌面环境对无边框窗口本来就有自己的圆角与阴影，
       再切一次反而更差。
 
     `platform` / `build` 只为测试注入：这些分支在 macOS 上跑不到，闪退恰恰出在
@@ -278,30 +260,11 @@ def set_corners(window, radius: int = 10, force: bool = False,
         return False
     if build >= WINDOWS_MICA_BUILD:
         return apply_dwm_round_corners(window)
-    if _is_maximized(window):
-        try:
-            window.clearMask()
-        except Exception:
-            pass
-        return False
-    return apply_mask_corners(window, radius)
-
-
-def _is_maximized(window) -> bool:
-    """最大化/全屏时不能再裁圆角：那会在屏幕四角露出桌面。"""
-    try:
-        return bool(window.isMaximized()) or bool(window.isFullScreen())
-    except Exception:
-        return False
+    return False
 
 
 def clear_corners(window) -> None:
-    """撤掉遮罩式圆角，并把幂等缓存清掉。
-
-    窗口要切成「不透明纯色 + 直角」或者要交给 DWM 合成圆角时必须先撤遮罩：
-    mask 与「DWM 把客户区扩展成玻璃边框」是互斥的，两者同时生效会在圆角处
-    切掉一块系统合成的像素。
-    """
+    """清掉幂等缓存与可能残留的窗口遮罩（老版本用遮罩切过圆角）。"""
     _CORNER_STATE.pop(id(window), None)
     try:
         window.clearMask()

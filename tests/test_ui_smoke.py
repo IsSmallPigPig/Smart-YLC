@@ -282,16 +282,11 @@ def test_autostart_does_not_require_accounts(app, isolated_store, monkeypatch):
 
 
 def test_rounded_corners_dispatch_by_platform(app):
-    """窗口圆角按平台分派，策略与副作用都要对。
-
-    macOS 系统自带；Win11 只写 DWM 圆角偏好；Win10 退到 setMask；
-    Linux 不进 setMask（Wayland 不支持窗口遮罩，X11 上会把阴影一起裁掉，
-    而桌面环境本来就有圆角）。
-    """
+    """窗口圆角按平台分派：macOS 与 Win11 有系统圆角，其余平台保持直角。"""
     import sys
 
     from app.services.materials import (
-        apply_mask_corners,
+        WINDOWS_MICA_BUILD,
         clear_corners,
         set_corners,
         win11_build,
@@ -300,78 +295,47 @@ def test_rounded_corners_dispatch_by_platform(app):
     widget = QWidget()
     widget.resize(400, 300)
 
-    # 遮罩实现本身在任何平台都能切（不依赖系统接口）
-    assert apply_mask_corners(widget, 10) is True
-    assert not widget.mask().isEmpty()
-    clear_corners(widget)
-    assert widget.mask().isEmpty(), "clear_corners 必须把遮罩撤掉"
-
     # 统一入口在当前平台上的预期结果
     if sys.platform == "darwin":
         assert set_corners(widget, 10) is True
     elif sys.platform == "win32":
-        from app.services.materials import WINDOWS_MICA_BUILD
-
-        win11 = win11_build() >= WINDOWS_MICA_BUILD
-        assert set_corners(widget, 10) is win11
-        if not win11:
-            assert widget.mask().isEmpty(), "Win10 不再用遮罩切圆角"
+        assert set_corners(widget, 10) is (win11_build() >= WINDOWS_MICA_BUILD)
     else:
-        # Linux / 其它：不切遮罩，避免 Wayland 不支持、X11 裁掉阴影
         assert set_corners(widget, 10) is False
-        assert widget.mask().isEmpty(), "非 Windows 平台不该留遮罩"
+
+    assert widget.mask().isEmpty(), "任何平台都不该再用遮罩切圆角"
 
 
-def test_corner_setting_is_idempotent(app):
-    """同尺寸重复调用不再碰系统接口。
-
-    resizeEvent 会连发，Win10 那条路是 SetWindowRgn——每帧调一次会掉帧，
-    更糟的是它可能触发新的尺寸确认，形成自激。这里锁住「尺寸没变就跳过」。
-    """
-    import sys
-
+def test_corner_setting_is_idempotent(app, monkeypatch):
+    """同尺寸重复调用不再写 DWM 圆角偏好。"""
     from app.services import materials
 
     widget = QWidget()
     widget.resize(640, 480)
-    # macOS 走系统圆角，压根不调实现；那条路上「幂等」由系统保证，
-    # 这里只验会真正调用系统接口的平台
-    if sys.platform == "darwin":
-        from app.services.materials import set_corners
-
-        assert set_corners(widget, 10) is True
-        return
 
     calls = []
-    orig = materials.apply_mask_corners
-    orig_dwm = materials.apply_dwm_round_corners
+    monkeypatch.setattr(materials, "apply_dwm_round_corners",
+                        lambda w: calls.append("dwm") or True)
 
-    def spy_mask(w, r=10):
-        calls.append(("mask", r))
-        return orig(w, r)
+    materials.clear_corners(widget)
+    materials.set_corners(widget, 10, platform="win32", build=22631)
+    assert calls == ["dwm"]
 
-    def spy_dwm(w):
-        calls.append(("dwm", 0))
-        return orig_dwm(w)
+    # 同尺寸再调三次：不应再碰系统接口
+    for _ in range(3):
+        materials.set_corners(widget, 10, platform="win32", build=22631)
+    assert calls == ["dwm"], f"同尺寸重复切圆角了：{calls}"
 
-    materials.apply_mask_corners = spy_mask
-    materials.apply_dwm_round_corners = spy_dwm
-    try:
-        materials.clear_corners(widget)
-        materials.set_corners(widget, 10)
-        first = len(calls)
-        # 同尺寸再调三次：不应再产生任何系统调用
-        for _ in range(3):
-            materials.set_corners(widget, 10)
-        assert len(calls) == first, f"同尺寸重复切圆角了：{calls}"
+    # 尺寸变了才应该重切
+    widget.resize(700, 500)
+    materials.set_corners(widget, 10, platform="win32", build=22631)
+    assert calls == ["dwm", "dwm"]
 
-        # 尺寸变了才应该重切
-        widget.resize(700, 500)
-        materials.set_corners(widget, 10)
-        assert len(calls) > first, "尺寸变化后应重新切圆角"
-    finally:
-        materials.apply_mask_corners = orig
-        materials.apply_dwm_round_corners = orig_dwm
+    # Win10 不设圆角，也不产生任何系统调用
+    calls.clear()
+    materials.clear_corners(widget)
+    assert materials.set_corners(widget, 10, platform="win32", build=19045) is False
+    assert calls == []
 
 
 def test_material_default_is_mica(app, isolated_store):
@@ -2192,20 +2156,11 @@ def test_resize_path_never_touches_window_frame():
     assert "apply_rounded_corners" not in resize_code, \
         "resizeEvent 里不能调 apply_rounded_corners（它包含 addShadowEffect）"
     assert "addShadowEffect" not in resize_code
-    assert "_corner_timer" in resize_code, "resizeEvent 应通过定时器去抖"
-
-    radius_code = calls_only(MainWindow._apply_window_radius)
-    assert "addShadowEffect" not in radius_code, \
-        "_apply_window_radius 会被 resize 调用，不能碰投影"
-    assert "set_corners" in radius_code, "_apply_window_radius 应走幂等的 set_corners"
+    assert "set_corners" not in resize_code, "Win11 圆角偏好在 showEvent 设一次即可，resize 不必重设"
 
 
 def test_corner_dispatch_windows_and_linux(app, monkeypatch):
-    """按注入的平台/版本验证分派：Win11 只写 DWM、Win10 用 mask、Linux 不动区域。
-
-    这些分支平时在 macOS 上跑不到，靠平台参数注入覆盖——闪退就出在
-    Win10 / Win11 两条分支的取值上，不能只靠「本机不崩」判断。
-    """
+    """按注入的平台/版本验证分派：Win11 只写 DWM，其余系统保持直角。"""
     from app.services import materials
 
     widget = QWidget()
@@ -2214,21 +2169,19 @@ def test_corner_dispatch_windows_and_linux(app, monkeypatch):
     calls = []
     monkeypatch.setattr(materials, "apply_dwm_round_corners",
                         lambda w: calls.append("dwm") or True)
-    monkeypatch.setattr(materials, "apply_mask_corners",
-                        lambda w, r=10: calls.append("mask") or True)
 
-    # Win11：只写 DWM，绝不 setMask（会和玻璃边框打架）
+    # Win11：写 DWM 圆角偏好
     materials.clear_corners(widget)
     assert materials.set_corners(widget, 10, platform="win32", build=22631) is True
     assert calls == ["dwm"], f"Win11 应只走 DWM：{calls}"
 
-    # Win10：没有系统接口，退到 mask；最大化时保持直角
+    # Win10：直角，什么都不做
     calls.clear()
     materials.clear_corners(widget)
-    assert materials.set_corners(widget, 10, platform="win32", build=19045) is True
-    assert calls == ["mask"], f"Win10 应走 mask：{calls}"
+    assert materials.set_corners(widget, 10, platform="win32", build=19045) is False
+    assert calls == [], f"Win10 不该改窗口区域：{calls}"
 
-    # Linux：Wayland 不支持窗口遮罩、X11 会把阴影裁掉，不做
+    # Linux：桌面环境自带圆角与阴影，不动窗口区域
     calls.clear()
     materials.clear_corners(widget)
     assert materials.set_corners(widget, 10, platform="linux", build=0) is False
