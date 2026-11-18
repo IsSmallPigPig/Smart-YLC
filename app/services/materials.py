@@ -254,7 +254,9 @@ def set_corners(window, radius: int = 10, force: bool = False,
     * macOS：无边框窗口由系统切圆角，什么都不做。
     * Windows 11：只写 DWM 圆角偏好（纯属性，不改窗口几何）。**绝不 setMask**，
       那会和「客户区扩展成玻璃边框」打架。
-    * Windows 10：没有系统接口，退到 setMask。
+    * Windows 10：没有系统圆角接口，也不退回 setMask——遮罩按位图裁，边缘没有
+      抗锯齿，在 125%/150% 缩放下就是一圈毛边。窗口本来就是透明+自绘圆角，
+      交给合成器按 alpha 混合更干净。
     * Linux：不进 setMask。Qt 在 Wayland 上不支持窗口遮罩，X11 上遮罩会把阴影
       一起裁掉；而主流桌面环境对无边框窗口本来就有自己的圆角与阴影，
       再切一次反而更差。
@@ -277,7 +279,11 @@ def set_corners(window, radius: int = 10, force: bool = False,
         return False
     if build >= WINDOWS_MICA_BUILD:
         return apply_dwm_round_corners(window)
-    return apply_mask_corners(window, radius)
+    try:
+        window.clearMask()
+    except Exception:
+        pass
+    return False
 
 
 def clear_corners(window) -> None:
