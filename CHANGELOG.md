@@ -2,6 +2,15 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.0.5
+
+- [7fa7790] fix(windows): 安装目录改 ASCII，WebEngine 三件套复制到 exe 旁
+- [7fb47be] feat(android): 档案页落地本地存档与图片导入
+- [9133f36] feat(android): 底栏接 miuix-blur，按 liquid-miuix 配方调参
+- [69c1149] feat(android): 原生端重建（mobile-native 分支）
+
+@AnkoQAQ
+
 ## v1.0.3
 
 - [fd1a832] fix(windows): 打包补 QtWebEngine 子进程与资源；Win10 不再用遮罩切圆角
