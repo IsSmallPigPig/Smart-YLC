@@ -7,6 +7,12 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.9
+
+- [fd21210] fix(windows): 安装提示的续行不能以 # 开头，否则预处理器当成未知指令
+
+@AnkoQAQ
+
 ## v1.0.8
 
 - [f142daa] feat(backup): 客户端云端备份，服务端地址与提取码都在设置里填
