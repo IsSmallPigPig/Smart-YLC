@@ -168,6 +168,52 @@ def _postprocess_macos() -> Path | None:
     return final
 
 
+def _ensure_webengine_files(dist_dir: Path) -> list[str]:
+    """补齐并核对 QtWebEngine 的必需文件，返回仍然缺的项（空表示齐了）。
+
+    Qt 要的是 resources/qtwebengine_resources.pak、resources/icudtl.dat、
+    bin/QtWebEngineProcess.exe、translations/qtwebengine_locales/*.pak。少了任何
+    一项，运行时不是抛异常，而是引擎初始化直接 int3 断点（0x80000003）把进程带走
+    ——用户看到的就是「双击后闪一下就没了」。所以在这里补拷并硬性校验，宁可让
+    构建红，也不发出打不开网页的包。
+
+    PyInstaller 6 把依赖收进 _internal，5.x 平铺在安装根，两种都认。
+    """
+    import PyQt5
+
+    src_qt = Path(PyQt5.__file__).resolve().parent / "Qt5"
+    base = dist_dir / "_internal" if (dist_dir / "_internal").is_dir() else dist_dir
+    dst_qt = base / "PyQt5" / "Qt5"
+
+    # (相对路径, 是否目录)：locales 是整目录，其余按文件
+    wanted = [
+        ("resources/qtwebengine_resources.pak", False),
+        ("resources/icudtl.dat", False),
+        ("bin/QtWebEngineProcess.exe", False),
+        ("translations/qtwebengine_locales", True),
+    ]
+
+    for rel, is_dir in wanted:
+        src, dst = src_qt / rel, dst_qt / rel
+        if not src.exists():
+            continue                     # 构建机上也没有，交给下面的校验报缺
+        if is_dir:
+            if dst.is_dir() and any(dst.glob("*.pak")):
+                continue
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        elif not dst.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+    missing = []
+    for rel, is_dir in wanted:
+        dst = dst_qt / rel
+        ok = any(dst.glob("*.pak")) if is_dir else dst.is_file()
+        if not ok:
+            missing.append(rel)
+    return missing
+
+
 def _postprocess_windows() -> Path | None:
     # onedir 产物固定是 dist/SmartYouth/SmartYouth.exe
     dist = ROOT / "dist"
@@ -220,6 +266,12 @@ def main() -> int:
 
     if sys.platform == "win32":
         final = _postprocess_windows()
+        if final is not None:
+            missing = _ensure_webengine_files(final)
+            if missing:
+                print("打包产物缺 QtWebEngine 文件，网页会打不开："
+                      + "、".join(missing), file=sys.stderr)
+                return 1
     elif sys.platform == "darwin":
         final = _postprocess_macos()
     else:

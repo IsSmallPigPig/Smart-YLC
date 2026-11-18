@@ -255,45 +255,17 @@ class MainWindow(MSFluentWindow):
         """预热 Chromium（只建默认 profile，不碰各账号的存储分区）。
 
         幂等：Qt 里默认 profile 只建一次，之后再调就是瞬间返回。
-        资源缺失时 QtWebEngine 在 Windows 上会触发 int3 断点（0x80000003），
-        直接把进程带走——所以先验目录，缺了就不碰引擎，把缺失原因写进日志。"""
+        资源不齐时 QtWebEngine 在 Windows 上触发 int3 断点（0x80000003），进程
+        当场消失——所以先问 webengine 能不能用，不能就一个字节都不碰引擎。"""
         if getattr(self, "_engine_warm", False):
             return
+        from app.services import webengine
+        from app.services.app_log import warning
+
+        if not webengine.available():
+            warning(f"WebEngine 不可用，跳过预热：{webengine.reason()}")
+            return
         self._engine_warm = True
-
-        # 与 main.py 的 _prepare_bundled_webengine 同一套探测；那里没找到时
-        # 变量是旧值（构建机路径），这里必须拦住
-        from app import log
-
-        try:
-            from PyQt5.QtCore import QLibraryInfo, qVersion
-        except Exception:
-            return
-
-        candidates = []
-        try:
-            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-        except Exception:
-            return
-        for base in (getattr(sys, "_MEIPASS", None), exe_dir, exe_dir.rsplit("_internal", 1)[0]):
-            if not base:
-                continue
-            qt = os.path.join(base, "PyQt5", "Qt5")
-            candidates.append(qt)
-        resources = next(
-            (os.path.join(q, "resources") for q in candidates if os.path.isdir(os.path.join(q, "resources"))),
-            None,
-        )
-        if not resources:
-            log.warning("WebEngine 资源缺失，跳过预热："
-                        f"QTWEBENGINE_RESOURCES_PATH={os.environ.get('QTWEBENGINE_RESOURCES_PATH')}"
-                        f"；候选={candidates}")
-            self._engine_warm = False
-            return
-        os.environ["QTWEBENGINE_RESOURCES_PATH"] = resources
-        os.environ.setdefault("QTWEBENGINEPROCESS_PATH",
-                               os.path.join(os.path.dirname(resources), "bin", "QtWebEngineProcess.exe"))
-        log.info(f"WebEngine 资源就绪：{resources}")
         try:
             from PyQt5.QtWebEngineWidgets import QWebEngineProfile
 

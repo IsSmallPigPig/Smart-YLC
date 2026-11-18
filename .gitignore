@@ -5,3 +5,6 @@ dist/
 *.spec
 .DS_Store
 .venv*/
+
+# WorkBuddy 的项目数据（会话记忆等），不进仓库
+/.workbuddy/

@@ -114,14 +114,25 @@ def run() -> int:
     if demo:
         _enter_demo_home()
 
+    # 引擎路径必须在任何 QtWebEngine import 之前钉好：打包后 Qt 按 QLibraryInfo
+    # 推出的前缀指向构建机，资源一缺，Windows 上是 int3 崩进程而不是抛异常
+    from app.services.webengine import available, prepare, reason, resources_dir
+
+    prepare()
+
     if "--smoke-test" in sys.argv:
         return _smoke_test()
 
     # 日志最早初始化：Qt 导入、QApplication 构造、插件加载都可能原生崩溃。
     # --demo 已经把 HOME 指到临时目录，这里建出的日志目录也跟着走。
+    from app.services import app_log
     from app.services.app_log import setup_logging
 
     setup_logging()
+    if available():
+        app_log.info(f"WebEngine 就绪：{resources_dir() or '开发环境'}")
+    else:
+        app_log.warning(f"WebEngine 不可用，网页功能将停用：{reason()}")
 
     if "--tray" in sys.argv:
         from app.tray import run_tray

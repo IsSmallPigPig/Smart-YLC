@@ -55,7 +55,11 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
-DefaultDirName={localappdata}\Programs\{#AppName}
+DefaultDirName={localappdata}\Programs\SmartYouth
+; 安装目录必须是纯 ASCII：Qt5 的 WebEngine 用 ANSI 代码页解析路径，目录里有中文
+; 时在非中文系统上会变成 '?'，内置浏览器于是找不到 resources 直接 int3 崩进程
+; （1.0.3 / 1.0.4 的「打开就闪退」）。界面上的名字仍是「智慧团委」。
+UsePreviousAppDir=no
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 ; 每用户安装：不需要管理员、不弹 UAC，从根上避开「未知发布者」的提权提示
@@ -113,9 +117,24 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
   CertPath: String;
+  OldDir: String;
 begin
   if CurStep <> ssPostInstall then
     Exit;
+
+  { 老版本装在 {localappdata}\Programs\智慧团委（中文目录），升级后换到 ASCII 目录，
+    旧目录里的 _internal 有几百 MB。确认是这份程序的目录才提示删除。 }
+  OldDir := ExpandConstant('{localappdata}\Programs\智慧团委');
+  if DirExists(OldDir) and FileExists(OldDir + '\{#AppName}.exe')
+     and (OldDir <> ExpandConstant('{app}')) then
+  begin
+    if MsgBox('检测到旧版本仍在：' + OldDir + #13#10#13#10 +
+              '新版本已装到 ' + ExpandConstant('{app}') + '（纯英文路径，内置浏览器才能正常加载）。' +
+              #13#10 + '旧目录约占几百 MB，现在删除吗？',
+              mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+      DelTree(OldDir, True, True, True);
+  end;
+
 #if SelfSigned
   if not WizardIsTaskSelected('trustcert') then
     Exit;
