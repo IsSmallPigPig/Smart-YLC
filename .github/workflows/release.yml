@@ -268,8 +268,14 @@ jobs:
         run: |
           $ver = "${{ github.ref_name }}".TrimStart('v')
           if (-not $ver -or $ver -eq 'workflow_dispatch') { $ver = "1.0.0" }
-          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { throw "找不到 ISCC.exe（Inno Setup 未装好）" }
+          # choco 装的 innosetup 会随上游发新大版本换安装目录（6 -> 7），
+          # 写死路径会在某天毫无征兆地失败，这里按版本号找最新的那个
+          $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe",
+                                 "C:\Program Files\Inno Setup*\ISCC.exe" `
+                             -ErrorAction SilentlyContinue |
+                  Sort-Object FullName -Descending | Select-Object -First 1 -Expand FullName
+          if (-not $iscc) { throw "找不到 ISCC.exe（Inno Setup 未装好）" }
+          Write-Host "使用编译器：$iscc"
           # 参数用数组传，不靠反引号续行。产物名整体传入，安装脚本不再自己拼后缀
           $defs = @("/DAppVersion=$ver", "/DOutputName=$env:PKG_NAME",
                     "/DTargetOS=$env:TARGET_OS", "/DIs64=$env:IS_64")
