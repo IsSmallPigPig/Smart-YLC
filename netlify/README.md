@@ -9,9 +9,11 @@
 | Secret | 取处 |
 |---|---|
 | `NETLIFY_AUTH_TOKEN` | Netlify → User settings → Applications → Personal access tokens |
-| `NETLIFY_SITE_ID` | 站点 → Site configuration → General → Site ID |
+| `NETLIFY_SITE_ID` | 站点 → Project configuration → General → Project details → Project information → Project ID（旧界面叫 Site ID） |
 
 没配这两个 secret 时工作流只跑校验、跳过部署（日志里有 warning），不会红。
+
+这个 workflow 只在 `server` 分支上，GitHub 页面的「Run workflow」按钮读取默认分支的 workflow 定义，所以这里看不到它。改 `netlify/` 下的文件并推到 `server` 就会触发部署；GitHub Actions 页面点旧运行右侧的 `··· → Re-run all jobs` 也可以。
 
 也可以让 Netlify 直接连仓库：仓库根的 `netlify.toml` 已声明发布目录 `netlify/public`、函数目录 `netlify/functions`，Netlify 会自动读到，不用手填构建参数。
 
