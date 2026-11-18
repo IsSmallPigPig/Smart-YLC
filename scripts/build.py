@@ -177,6 +177,24 @@ def _postprocess_windows() -> Path | None:
     exe = target / f"{APP_NAME}.exe"
     if exe.is_file():
         exe.rename(target / f"{DISPLAY_NAME}.exe")
+
+    # QtWebEngine 找不到资源时的回退位置是 exe 同级目录。中文安装路径会让
+    # QLibraryInfo 推导的路径在 local8Bit 转换中被弄坏（日志里的 ???? 即此），
+    # 把三件套复制到 exe 旁边，让回退路径必定命中。
+    import PyQt5
+
+    qt = Path(PyQt5.__file__).resolve().parent / "Qt5"
+    internal = target / "_internal" / "PyQt5" / "Qt5"
+    src = qt if (qt / "resources").is_dir() else internal
+    for name in ("resources", "translations/qtwebengine_locales"):
+        folder = src / name
+        if folder.is_dir():
+            dest = target / name
+            if not dest.exists():
+                shutil.copytree(folder, dest)
+    proc = src / "bin" / "QtWebEngineProcess.exe"
+    if proc.is_file() and not (target / "QtWebEngineProcess.exe").is_file():
+        shutil.copyfile(proc, target / "QtWebEngineProcess.exe")
     return target
 
 

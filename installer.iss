@@ -55,7 +55,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
-DefaultDirName={localappdata}\Programs\{#AppName}
+DefaultDirName={localappdata}\Programs\SmartYouth
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 ; 每用户安装：不需要管理员、不弹 UAC，从根上避开「未知发布者」的提权提示
