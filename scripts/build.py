@@ -93,10 +93,29 @@ def build_command() -> list[str]:
     ]
 
     if sys.platform == "win32":
+        # 浏览器页在函数内部才 import QtWebEngineWidgets，静态分析看不到；
+        # 少了它 PyInstaller 的 QtWebEngine hook 不会跑，包里就没有
+        # QtWebEngineProcess.exe 和 resources，运行时才报错。
+        import PyQt5
+
+        qt = Path(PyQt5.__file__).resolve().parent / "Qt5"
         cmd += [
             f"--icon={ROOT / 'app/assets/smart-ylc.ico'}",
             f"--version-file={version_file_path()}",
+            "--hidden-import=PyQt5.QtWebEngineWidgets",
+            "--hidden-import=PyQt5.QtWebEngineCore",
+            "--hidden-import=PyQt5.QtWebChannel",
+            "--hidden-import=PyQt5.QtNetwork",
         ]
+        process = qt / "bin" / "QtWebEngineProcess.exe"
+        if process.is_file():
+            cmd.append(f"--add-binary={process}{os.pathsep}PyQt5/Qt5/bin")
+        resources = qt / "resources"
+        if resources.is_dir():
+            cmd.append(f"--add-data={resources}{os.pathsep}PyQt5/Qt5/resources")
+        locales = qt / "translations" / "qtwebengine_locales"
+        if locales.is_dir():
+            cmd.append(f"--add-data={locales}{os.pathsep}PyQt5/Qt5/translations/qtwebengine_locales")
     elif sys.platform == "darwin":
         # 原生通知走 PyObjC 的 UserNotifications；这些模块在函数内按需导入，
         # PyInstaller 静态分析看不到，显式带上，避免发布版点通知没反应。

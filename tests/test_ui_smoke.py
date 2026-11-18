@@ -310,7 +310,12 @@ def test_rounded_corners_dispatch_by_platform(app):
     if sys.platform == "darwin":
         assert set_corners(widget, 10) is True
     elif sys.platform == "win32":
-        assert set_corners(widget, 10) is (win11_build() >= 0)
+        from app.services.materials import WINDOWS_MICA_BUILD
+
+        win11 = win11_build() >= WINDOWS_MICA_BUILD
+        assert set_corners(widget, 10) is win11
+        if not win11:
+            assert widget.mask().isEmpty(), "Win10 不再用遮罩切圆角"
     else:
         # Linux / 其它：不切遮罩，避免 Wayland 不支持、X11 裁掉阴影
         assert set_corners(widget, 10) is False
@@ -2196,7 +2201,7 @@ def test_resize_path_never_touches_window_frame():
 
 
 def test_corner_dispatch_windows_and_linux(app, monkeypatch):
-    """按注入的平台/版本验证分派：Win11 只写 DWM、Win10 用 mask、Linux 不做。
+    """按注入的平台/版本验证分派：Win11 只写 DWM、Win10 与 Linux 都不动区域。
 
     这些分支平时在 macOS 上跑不到，靠平台参数注入覆盖——闪退就出在
     Win10 / Win11 两条分支的取值上，不能只靠「本机不崩」判断。
@@ -2217,11 +2222,12 @@ def test_corner_dispatch_windows_and_linux(app, monkeypatch):
     assert materials.set_corners(widget, 10, platform="win32", build=22631) is True
     assert calls == ["dwm"], f"Win11 应只走 DWM：{calls}"
 
-    # Win10：没有系统接口，退到 mask
+    # Win10：没有系统圆角接口；遮罩无抗锯齿，会把圆角切成毛边，不做
     calls.clear()
     materials.clear_corners(widget)
-    assert materials.set_corners(widget, 10, platform="win32", build=19045) is True
-    assert calls == ["mask"], f"Win10 应走 mask：{calls}"
+    assert materials.set_corners(widget, 10, platform="win32", build=19045) is False
+    assert calls == [], f"Win10 不该动窗口区域：{calls}"
+    assert widget.mask().isEmpty()
 
     # Linux：Wayland 不支持窗口遮罩、X11 会把阴影裁掉，不做
     calls.clear()
