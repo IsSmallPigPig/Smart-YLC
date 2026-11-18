@@ -22,7 +22,14 @@ def _prepare_bundled_webengine() -> None:
     if not getattr(sys, "frozen", False) or sys.platform != "win32":
         return
     exe_dir = Path(sys.executable).resolve().parent
-    roots = [Path(getattr(sys, "_MEIPASS", exe_dir)), exe_dir, exe_dir / "_internal"]
+    roots = [
+        Path(getattr(sys, "_MEIPASS", exe_dir)),
+        exe_dir,
+        exe_dir / "_internal",
+        # PyInstaller 6 onedir：exe 在安装根，依赖收在 _internal/ 下
+        exe_dir / "_internal" / "PyQt5" / "Qt5",
+    ]
+    # 6.x 布局下 _MEIPASS 已指向 _internal，上面的组合覆盖 5.x 平铺与 6.x 收拢
     for root in roots:
         qt = root / "PyQt5" / "Qt5"
         proc = qt / "bin" / "QtWebEngineProcess.exe"
