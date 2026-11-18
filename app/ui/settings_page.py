@@ -1239,33 +1239,25 @@ class SettingsPage(FluentPage):
     def _open_cloud_backup(self):
         from app.ui.cloud_backup_dialog import CloudBackupDialog
 
-        server = self._cloud_server()
+        cfg = store.load() or {}
+        custom = list(cfg.get("cloudBackupServers") or [])
+        legacy = str(cfg.get("cloudBackupServer") or "")
+        if legacy and legacy not in custom:
+            custom.append(legacy)   # 1.0.9 只存一个地址，迁进站点列表
         CloudBackupDialog(
             self.window(),
             get_config=store.load,
             on_restore=self._confirm_cloud_restore,
-            server=server,
-            note="上传会把当前全部设置加密后放到服务端；恢复用同一个提取码解回来。",
+            profiles=cfg.get("cloudProfiles"),
+            active_id=str(cfg.get("cloudActiveProfile") or ""),
+            custom_servers=custom,
+            on_change=self._save_cloud_state,
         ).show()
 
-    def _cloud_server(self) -> str:
-        """默认用官方备份站；只有显式改过地址时才用配置里的值。"""
-        from app.services.cloud_backup import DEFAULT_SERVER
-
+    def _save_cloud_state(self, patch: dict) -> None:
+        """对话框的档案/站点改动落到配置里（合并写，不整份覆盖）。"""
         try:
-            return str((store.load() or {}).get("cloudBackupServer") or DEFAULT_SERVER)
-        except Exception:
-            return DEFAULT_SERVER
-
-    def _remember_cloud_server(self, server: str) -> None:
-        if not server:
-            return
-        try:
-            cfg = store.load()
-            if cfg.get("cloudBackupServer") == server:
-                return
-            cfg["cloudBackupServer"] = server
-            store.save(cfg)
+            store.update(lambda cfg: cfg.update(patch))
         except Exception:
             pass
 
