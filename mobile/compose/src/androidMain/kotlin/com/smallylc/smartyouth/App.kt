@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -58,14 +59,18 @@ fun App() {
     Box(Modifier.fillMaxSize()) {
         // 内容层：被底栏采样
         Box(Modifier.fillMaxSize().background(surface).layerBackdrop(backdrop)) {
-            Column(
-                Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                BrandMark(64.dp)
-                Text(TABS[tab].label, style = MiuixTheme.textStyles.main.copy(fontSize = 22.sp, fontWeight = FontWeight.Bold))
-                Text(TABS[tab].hint, style = MiuixTheme.textStyles.main.copy(fontSize = 13.sp))
+            if (tab == 1) {
+                FilesScreen()
+            } else {
+                Column(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    BrandMark(64.dp)
+                    Text(TABS[tab].label, style = MiuixTheme.textStyles.main.copy(fontSize = 22.sp, fontWeight = FontWeight.Bold))
+                    Text(TABS[tab].hint, style = MiuixTheme.textStyles.main.copy(fontSize = 13.sp))
+                }
             }
         }
 
@@ -74,7 +79,7 @@ fun App() {
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 16.dp)
+                .padding(horizontal = 16.dp, vertical = 16.dp).navigationBarsPadding()
                 .height(64.dp)
                 .then(
                     if (glass) {
