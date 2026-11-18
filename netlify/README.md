@@ -4,9 +4,18 @@
 
 ## 部署到 Netlify
 
-1. 把仓库连到 Netlify，构建目录留空（纯函数，无前端）。
-2. 环境变量不需要配置；`@netlify/blobs` 在 Netlify 运行时自带。
-3. 部署后地址形如 `https://<站点>.netlify.app/api/backup`，在客户端「设置 → 系统备份 → 云端备份」里填站点根地址即可。
+仓库里已有 `.github/workflows/cloud-backup.yml`：推到 `server` 或 `main` 时先做打包校验，再部署。需要两个仓库 secret：
+
+| Secret | 取处 |
+|---|---|
+| `NETLIFY_AUTH_TOKEN` | Netlify → User settings → Applications → Personal access tokens |
+| `NETLIFY_SITE_ID` | 站点 → Site configuration → General → Site ID |
+
+没配这两个 secret 时工作流只跑校验、跳过部署（日志里有 warning），不会红。
+
+也可以让 Netlify 直接连仓库：仓库根的 `netlify.toml` 已声明发布目录 `netlify/public`、函数目录 `netlify/functions`，Netlify 会自动读到，不用手填构建参数。
+
+`@netlify/blobs` 在 Netlify 运行时自带，环境变量不需要配置。部署后地址形如 `https://<站点>.netlify.app`，在客户端「设置 → 系统备份 → 云端备份」里填站点根地址即可。
 
 函数按需安装依赖：Netlify 会自动读取 `netlify/package.json` 并在部署时安装 `@netlify/blobs`。
 

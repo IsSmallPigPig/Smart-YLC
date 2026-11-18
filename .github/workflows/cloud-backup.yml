@@ -5,9 +5,10 @@ on:
     branches: ["server", "main"]
     paths:
       - "netlify/**"
+      - "netlify.toml"
       - ".github/workflows/cloud-backup.yml"
   pull_request:
-    paths: ["netlify/**"]
+    paths: ["netlify/**", "netlify.toml"]
   workflow_dispatch:
 
 jobs:
@@ -31,6 +32,7 @@ jobs:
 
       - name: 部署到 Netlify
         if: github.ref == 'refs/heads/server' || github.ref == 'refs/heads/main'
+        working-directory: .
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
@@ -39,4 +41,7 @@ jobs:
             echo "::warning::未配置 NETLIFY_AUTH_TOKEN / NETLIFY_SITE_ID，跳过部署（打包校验已通过）"
             exit 0
           fi
-          npx --yes netlify-cli deploy --prod --dir=. --functions=functions --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN"
+          npx --yes netlify-cli deploy --prod \
+            --config netlify.toml \
+            --dir=netlify/public --functions=netlify/functions \
+            --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN"
