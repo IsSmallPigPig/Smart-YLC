@@ -131,13 +131,14 @@
   两个圆角圆心重合才是一套语言；把外层半径直接抄给内层，内层弧线比外层更靠内，
   四角看着不平行。内边距超过外层半径时函数返回 0（中间用直角，别挤出畸形弧）。
 - **窗口圆角跨平台**（`materials.set_corners`）：macOS 系统自带；Windows 11 只写
-  DWM 圆角偏好；Windows 10 退到 `setMask`；Linux 不做——Wayland 不支持窗口遮罩，
-  X11 上遮罩会把阴影一起裁掉，而桌面环境本来就有自己的圆角。
+  DWM 圆角偏好；Windows 10 与 Linux 保持直角——遮罩没有抗锯齿，还会与材质、
+  系统阴影和桌面环境自身的圆角打架。启动画面按 `window_corner_radius` 取同一档，
+  避免淡出时露出不一样的角。
 - **投影与圆角必须分开**：`addShadowEffect` 内部是
   `DwmExtendFrameIntoClientArea(-1,-1,-1,-1)`，它会改变窗口 frame 并发出新的
   `WM_SIZE`。在 `resizeEvent` 里调它就成了「resize → 改 frame → resize」自激循环，
-  Windows 上表现为启动 CPU 打满、进主界面即闪退。所以圆角偏好（纯属性写入）可以随
-  尺寸重设，投影只能在 `showEvent` / 切材质这类几何已稳的时机调。
+  Windows 上表现为启动 CPU 打满、进主界面即闪退。投影只能在 `showEvent` / 切材质
+  这类几何已稳的时机调；圆角偏好是纯属性写入，在 showEvent 设一次即可，resize 不必重设。
 - **窗口圆角要幂等 + 去抖**：`set_corners` 记住上次的尺寸，没变就直接返回；
   主窗口另用 120ms 单次定时器，拖拽缩放时不逐帧改窗口区域。
 - 遮罩式圆角用多边形近似，边缘没有抗锯齿，所以半径取 10 这档。
@@ -318,7 +319,7 @@
 - **圆角**：无边框窗口在 Windows 11 上显式设 `DWMWA_WINDOW_CORNER_PREFERENCE = ROUND`，
   并由 DWM 补窗口投影（`materials.apply_rounded_corners`）；主窗口、访问支部的浏览器窗口
   在显示、切材质、`showNormal` 之后都要重设一次，因为这些动作会重设窗口 frame。
-  macOS 的圆角由系统给，不需要处理；Windows 10 没有该接口。
+  macOS 的圆角由系统给，不需要处理；Windows 10 没有该接口，窗口与启动画面都保持直角。
 - **底色一套**：主窗口与账号网页窗口都取 `page.window_background()`：有材质时铺约六成
   不透明的「衬纸」（深 (20,22,26,112) / 浅 (250,251,253,96)），没有材质时铺纯色。全透明时
   桌面的亮斑会直接透到小字后面，系统消息与上传空态最先糊；Windows 的 Mica 自带对比处理，

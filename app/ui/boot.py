@@ -142,10 +142,13 @@ class BootSplash(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
+        from app.services.materials import window_corner_radius
+
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(self._bg)
+        r = window_corner_radius(CORNER_RADIUS)
         path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()), CORNER_RADIUS, CORNER_RADIUS)
+        path.addRoundedRect(QRectF(self.rect()), r, r)
         p.drawPath(path)
 
         cx, cy = self.width() / 2, self.height() / 2

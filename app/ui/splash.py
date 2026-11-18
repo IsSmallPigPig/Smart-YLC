@@ -57,7 +57,9 @@ class SplashScreen(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(page_bg_color())
-        r = self.CORNER_RADIUS
+        from app.services.materials import window_corner_radius
+
+        r = window_corner_radius(self.CORNER_RADIUS)
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), r, r)
         p.drawPath(path)

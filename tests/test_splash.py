@@ -128,3 +128,18 @@ def test_home_emits_stats_ready(app, isolated_store):
         app.processEvents()
         time.sleep(0.02)
     assert hits
+
+
+def test_splash_corner_radius_matches_window(monkeypatch):
+    """启动画面与主窗口同半径：Win10 必须一起变成直角。"""
+    from app.services import materials
+
+    monkeypatch.setattr(materials.sys, "platform", "win32")
+    monkeypatch.setattr(materials, "win11_mica_available", lambda: False)
+    assert materials.window_corner_radius(10) == 0
+
+    monkeypatch.setattr(materials, "win11_mica_available", lambda: True)
+    assert materials.window_corner_radius(10) == 10
+
+    monkeypatch.setattr(materials.sys, "platform", "darwin")
+    assert materials.window_corner_radius(10) == 10
