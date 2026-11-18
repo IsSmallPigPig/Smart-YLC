@@ -7,6 +7,12 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.7
+
+- [53a6c4f] fix: 安装脚本注释里嵌了花括号常量，Inno 编译直接失败
+
+@AnkoQAQ
+
 ## v1.0.6
 
 - [a169dfc] fix: 修复 Windows 打开网页闪退——安装目录改 ASCII、WebEngine 资源按实际位置钉死
