@@ -59,3 +59,21 @@ def test_server_url_normalisation():
     assert cb.normalize_server(" http://127.0.0.1:8888 ") == "http://127.0.0.1:8888"
     with pytest.raises(ValueError):
         cb.normalize_server("")
+
+
+def test_default_backup_server(qapp_session, monkeypatch):
+    """没改过地址时用官方备份站；用户自定义的地址不能被默认值覆盖。"""
+    import os
+    import tempfile
+
+    from app.services import store
+    from app.ui.settings_page import SettingsPage
+
+    monkeypatch.setattr(store, "CONFIG_FILE", os.path.join(tempfile.mkdtemp(), "config.json"))
+
+    page = SettingsPage()
+    assert page._cloud_server() == "https://smartylc.netlify.app"
+    assert cb.normalize_server(page._cloud_server()) == cb.DEFAULT_SERVER
+
+    store.update(lambda cfg: cfg.__setitem__("cloudBackupServer", "https://backup.example.com"))
+    assert page._cloud_server() == "https://backup.example.com"
