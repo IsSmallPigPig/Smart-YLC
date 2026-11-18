@@ -2,6 +2,12 @@
 
 本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
 
+## v1.0.3
+
+- [fd1a832] fix(windows): 打包补 QtWebEngine 子进程与资源；Win10 不再用遮罩切圆角
+
+@AnkoQAQ
+
 ## v1.0.2
 
 - [41992ce] fix: 避免公告拉取线程导致原生崩溃并支持导出日志
