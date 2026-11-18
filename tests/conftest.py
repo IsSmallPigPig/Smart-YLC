@@ -96,10 +96,15 @@ def no_real_login(qapp_session):
     QThread 直接 abort（整轮测试随机崩在这里）。
 
     封在最底层的 requests.Session.request：FakeClient 类用例不受影响，
-    漏网的真实请求立刻抛异常快速失败，而不是挂几十秒等超时。"""
+    漏网的真实请求立刻抛异常快速失败，而不是挂几十秒等超时。本机回环地址
+    除外——云端备份的接口契约要用本地 HTTP 服务验证，那不是联网。"""
     import requests
 
+    _real = requests.Session.request
+
     def _blocked(self, method, url, **kwargs):
+        if "//127.0.0.1" in url or "//localhost" in url:
+            return _real(self, method, url, **kwargs)
         raise requests.ConnectionError(f"测试环境禁止联网：{method} {url}")
 
     requests.Session.request = _blocked

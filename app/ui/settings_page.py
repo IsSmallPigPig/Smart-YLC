@@ -509,7 +509,15 @@ class SettingsPage(FluentPage):
             "全部设置",
             desc="账号、名单、工作区、通知、外观与编号规则一次带走",
             icon=FIF.SAVE_AS,
-            control=controls(self.backup_import_btn, self.backup_export_btn)),
+            control=controls(self.backup_import_btn, self.backup_export_btn)))
+        self.cloud_backup_btn = PushButton(FIF.CLOUD, "云端备份")
+        set_tip(self.cloud_backup_btn, "用 6 位提取码在两台机器之间同步设置")
+        self.cloud_backup_btn.clicked.connect(self._open_cloud_backup)
+        row(backup_card, SettingRow(
+            "云端备份",
+            desc="服务端只存密文，提取码就是解密口令",
+            icon=FIF.CLOUD,
+            control=controls(self.cloud_backup_btn)),
             last=True)
 
         from app.ui.about_card import AboutCard
@@ -1224,6 +1232,48 @@ class SettingsPage(FluentPage):
             self.window(), "恢复系统备份",
             f"将用这份备份替换当前全部设置：{len(accounts)} 个账号、{len(rosters)} 份名单，"
             f"以及工作区、通知、明暗模式、窗口材质、首页头图与编号规则。\n"
+            f"当前设置会先另存一份备份。",
+            yes="恢复", cancel="取消",
+            on_result=lambda ok: ok and self._do_import_config(cfg))
+
+    def _open_cloud_backup(self):
+        from app.ui.cloud_backup_dialog import CloudBackupDialog
+
+        server = self._cloud_server()
+        CloudBackupDialog(
+            self.window(),
+            get_config=store.load,
+            on_restore=self._confirm_cloud_restore,
+            server=server,
+            note="上传会把当前全部设置加密后放到服务端；恢复用同一个提取码解回来。",
+        ).show()
+
+    def _cloud_server(self) -> str:
+        """上次用过的地址存在配置里，换机后第一次需要手填。"""
+        try:
+            return str((store.load() or {}).get("cloudBackupServer") or "")
+        except Exception:
+            return ""
+
+    def _remember_cloud_server(self, server: str) -> None:
+        if not server:
+            return
+        try:
+            cfg = store.load()
+            if cfg.get("cloudBackupServer") == server:
+                return
+            cfg["cloudBackupServer"] = server
+            store.save(cfg)
+        except Exception:
+            pass
+
+    def _confirm_cloud_restore(self, cfg: dict):
+        from app.ui import dialogs
+
+        dialogs.confirm(
+            self.window(), "恢复云端备份",
+            f"将用云端这份备份替换当前全部设置：{len(cfg.get('accounts') or [])} 个账号、"
+            f"{len(cfg.get('rosters') or {})} 份名单，以及工作区、通知、外观与编号规则。\n"
             f"当前设置会先另存一份备份。",
             yes="恢复", cancel="取消",
             on_result=lambda ok: ok and self._do_import_config(cfg))
