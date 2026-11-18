@@ -440,3 +440,24 @@ jobs:
             artifacts/**/*.cer
             artifacts/**/*.deb
 
+  # 云端备份：函数在 netlify/ 下，只改到它或打包脚本时才会跑
+  deploy-cloud-backup:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: 安装函数依赖
+        working-directory: netlify
+        run: npm install --no-audit --no-fund
+      - name: 校验函数可打包
+        working-directory: netlify
+        run: npx --yes esbuild functions/backup.mts --bundle --platform=neutral --format=esm --external:@netlify/blobs --outfile=/tmp/backup.js
+      - name: 触发 Netlify 部署
+        if: env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != ''
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: npx --yes netlify-cli deploy --prod --dir=. --functions=netlify/functions --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN"

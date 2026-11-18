@@ -13,3 +13,5 @@ pytest
 pymupdf==1.24.11
 pyobjc-framework-Cocoa; sys_platform == "darwin"
 pyobjc-framework-UserNotifications; sys_platform == "darwin"
+# 云端备份：AES-GCM 与 PBKDF2；41.x 覆盖 Win7(py3.8)/Win10/macOS/Linux 预编译轮子
+cryptography==41.0.7
