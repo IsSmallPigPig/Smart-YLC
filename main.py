@@ -28,12 +28,15 @@ def _prepare_bundled_webengine() -> None:
         proc = qt / "bin" / "QtWebEngineProcess.exe"
         if not proc.is_file():
             continue
-        os.environ.setdefault("QTWEBENGINEPROCESS_PATH", str(proc))
-        if (qt / "resources").is_dir():
-            os.environ.setdefault("QTWEBENGINE_RESOURCES_PATH", str(qt / "resources"))
+        # 直接写，不用 setdefault：PyQt5 的启动代码可能先塞了一个指向构建机的值，
+        # 保留它就会继续报 QtWebEngine resource not found。
+        os.environ["QTWEBENGINEPROCESS_PATH"] = str(proc)
+        resources = qt / "resources"
+        if resources.is_dir():
+            os.environ["QTWEBENGINE_RESOURCES_PATH"] = str(resources)
         locales = qt / "translations" / "qtwebengine_locales"
         if locales.is_dir():
-            os.environ.setdefault("QTWEBENGINE_LOCALES_PATH", str(locales))
+            os.environ["QTWEBENGINE_LOCALES_PATH"] = str(locales)
         return
 
 
