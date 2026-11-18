@@ -122,8 +122,10 @@ begin
   if CurStep <> ssPostInstall then
     Exit;
 
-  { 老版本装在 {localappdata}\Programs\智慧团委（中文目录），升级后换到 ASCII 目录，
-    旧目录里的 _internal 有几百 MB。确认是这份程序的目录才提示删除。 }
+  { 老版本装在 localappdata\Programs\智慧团委（中文目录），升级后换到 ASCII
+    目录，旧目录里的 _internal 有几百 MB。确认是这份程序的目录才提示删除。
+    注意注释里不能写花括号常量：内层左花括号会提前闭合注释，后面的文字被当成
+    代码，ISCC 直接编译失败。 }
   OldDir := ExpandConstant('{localappdata}\Programs\智慧团委');
   if DirExists(OldDir) and FileExists(OldDir + '\{#AppName}.exe')
      and (OldDir <> ExpandConstant('{app}')) then
