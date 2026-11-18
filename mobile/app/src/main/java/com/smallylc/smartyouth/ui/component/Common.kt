@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import com.smallylc.smartyouth.ui.theme.isInDarkTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -26,10 +27,20 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 
-val ToneRed = Color(0xFFD7261E)
-val ToneAmber = Color(0xFFD98300)
-val ToneGreen = Color(0xFF2E7D32)
-val ToneBlue = Color(0xFF1565C0)
+/**
+ * 业务状态色统一在这里映射：
+ * - 错误/异常走 Miuix 的 error，深色与动态取色下自动协调；
+ * - 信息走 primary，与主色一致；
+ * - Miuix 没有成功/警告 token，用明暗自适应的固定色保证对比度。
+ */
+val ToneRed: Color
+    @Composable get() = colorScheme.error
+val ToneAmber: Color
+    @Composable get() = if (isInDarkTheme()) Color(0xFFFFB74D) else Color(0xFFB26A00)
+val ToneGreen: Color
+    @Composable get() = if (isInDarkTheme()) Color(0xFF81C784) else Color(0xFF2E7D32)
+val ToneBlue: Color
+    @Composable get() = colorScheme.primary
 
 /** 数字格：首页统计与异常分布共用，保证两处字号、间距一致。 */
 @Composable

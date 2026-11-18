@@ -70,7 +70,7 @@ object ThemeController {
         }
 
         val colorMode = ColorMode.fromValue(colorModeValue)
-        val keyColor = prefs.getInt("key_color", 0)
+        val keyColor = prefs.getInt("key_color", 0xFF3482FF.toInt())
         val paletteStyleStr = prefs.getString("color_style", PaletteStyle.TonalSpot.name)
         val paletteStyle = try {
             PaletteStyle.valueOf(paletteStyleStr!!)

@@ -61,6 +61,8 @@ fun ThemeScreen(onBack: () -> Unit) {
     var colorMode by remember { mutableIntStateOf(repo.themeMode) }
     var keyColor by remember { mutableIntStateOf(repo.keyColor) }
     var blur by remember { mutableStateOf(repo.enableBlur) }
+    var monet by remember { mutableStateOf(repo.miuixMonet) }
+    var colorStyle by remember { mutableStateOf(repo.colorStyle) }
     val scrollBehavior = MiuixScrollBehavior()
     val backdrop = rememberBlurBackdrop(LocalEnableBlur.current)
     val barColor = if (backdrop != null) Color.Transparent else colorScheme.surface
@@ -111,6 +113,25 @@ fun ThemeScreen(onBack: () -> Unit) {
                         },
                     )
                     SwitchPreference(
+                        title = "动态取色",
+                        summary = "用系统壁纸或选定主色生成整套配色",
+                        checked = monet,
+                        onCheckedChange = {
+                            monet = it
+                            repo.miuixMonet = it
+                        },
+                    )
+                    OverlayDropdownPreference(
+                        title = "取色风格",
+                        summary = "影响动态取色的鲜艳程度",
+                        items = paletteNames,
+                        selectedIndex = paletteNames.indexOf(colorStyle).coerceAtLeast(0),
+                        onSelectedIndexChange = {
+                            colorStyle = paletteNames[it]
+                            repo.colorStyle = colorStyle
+                        },
+                    )
+                    SwitchPreference(
                         title = "界面模糊",
                         summary = "顶栏与底栏用实时模糊，关闭更省电",
                         checked = blur,
@@ -127,11 +148,12 @@ fun ThemeScreen(onBack: () -> Unit) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         MutedText("选一个主色，按钮、选中态和进度条都跟着变。")
-                        Row(
+                        androidx.compose.foundation.layout.FlowRow(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 14.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             swatches.forEach { swatch ->
                                 val selected = keyColor == swatch.first
@@ -168,11 +190,8 @@ fun ThemeScreen(onBack: () -> Unit) {
     }
 }
 
-private val swatches = listOf(
-    0 to "默认",
-    0xFF3B82F6.toInt() to "蓝",
-    0xFF2E7D32.toInt() to "绿",
-    0xFFD7261E.toInt() to "红",
-    0xFF8E24AA.toInt() to "紫",
-    0xFFD98300.toInt() to "橙",
-)
+private val swatchNames = listOf("蓝", "青", "绿", "草绿", "紫", "玫红", "珊瑚", "灰蓝")
+private val swatches = com.smallylc.smartyouth.ui.theme.keyColorOptions
+    .mapIndexed { index, color -> color to swatchNames[index] } + listOf(0 to "壁纸")
+
+private val paletteNames = listOf("TonalSpot", "Vibrant", "Neutral", "Expressive", "Rainbow", "Monochrome", "Fidelity")
