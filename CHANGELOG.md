@@ -10,6 +10,7 @@
 ## v1.0.10
 
 - [3325310] feat(backup): 云端备份 v2——4 位密码、多配置档案与所有权
+- [fe42266] test(ci): 冒烟检查补加密模块自检——缺 cryptography 现在打包期就红
 - [0639f3c] fix(ci): 打包清单补 cryptography——云端备份的库在函数内才 import
 - [392fe5d] feat(backup): 默认使用 https://smartylc.netlify.app 作为备份站
 - [b21a020] fix(windows): Win10 不再做窗口圆角
