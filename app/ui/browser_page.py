@@ -674,6 +674,10 @@ class BrowserWindow(FluentWindowBase):
         只建默认 profile，不碰各账号的存储分区。"""
         if self._engine_warm:
             return
+        from app.services import webengine
+
+        if not webengine.available():
+            return
         self._engine_warm = True
         from PyQt5.QtWebEngineWidgets import QWebEngineProfile
 
@@ -877,6 +881,12 @@ class BrowserWindow(FluentWindowBase):
             return
         if self.tab_count() >= MAX_TABS:   # 连点两下可能同时排进两个
             self._explain(f"最多同时打开 {MAX_TABS} 个标签，先关掉一个再来")
+            return
+        # 资源不齐时碰 QtWebEngine 是 int3 崩进程，不是抛异常，这里必须先拦住
+        from app.services import webengine
+
+        if not webengine.available():
+            self._explain("内置浏览器组件不完整，网页打不开。用最新安装包覆盖安装一次即可恢复。")
             return
         self._ensure_view(user)
         self._activate(user)

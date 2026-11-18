@@ -97,3 +97,64 @@ def test_all_windows_variants_pin_pymupdf_with_win32_wheel():
     # requirements.txt 同样要钉，避免本地安装踩同一个坑
     req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "pymupdf==1.24.11" in req
+
+
+def _load_build_module():
+    """scripts 不是包，按路径加载；模块级代码只算 ROOT，没有副作用。"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_build_script", ROOT / "scripts/build.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fake_qt_tree(tmp_path: Path, *, with_pak: bool = True) -> Path:
+    """造一份构建机上的 PyQt5 安装树。"""
+    pkg = tmp_path / "site" / "PyQt5"
+    qt = pkg / "Qt5"
+    resources = qt / "resources"
+    resources.mkdir(parents=True)
+    if with_pak:
+        (resources / "qtwebengine_resources.pak").write_text("pak")
+        (resources / "icudtl.dat").write_text("icu")
+    (qt / "bin").mkdir(parents=True)
+    (qt / "bin" / "QtWebEngineProcess.exe").write_text("exe")
+    locales = qt / "translations" / "qtwebengine_locales"
+    locales.mkdir(parents=True)
+    (locales / "zh-CN.pak").write_text("loc")
+    (pkg / "__init__.py").write_text("")
+    return pkg
+
+
+def test_build_copies_webengine_files_into_bundle(tmp_path, monkeypatch):
+    """PyInstaller 漏收的资源要补进产物，且按 6.x 的 _internal 布局落位。"""
+    import PyQt5
+
+    build = _load_build_module()
+    pkg = _fake_qt_tree(tmp_path)
+    monkeypatch.setattr(PyQt5, "__file__", str(pkg / "__init__.py"))
+
+    dist = tmp_path / "dist" / "SmartYouth"
+    (dist / "_internal").mkdir(parents=True)
+    assert build._ensure_webengine_files(dist) == []
+
+    qt = dist / "_internal" / "PyQt5" / "Qt5"
+    assert (qt / "resources" / "qtwebengine_resources.pak").is_file()
+    assert (qt / "resources" / "icudtl.dat").is_file()
+    assert (qt / "bin" / "QtWebEngineProcess.exe").is_file()
+    assert any((qt / "translations" / "qtwebengine_locales").glob("*.pak"))
+
+
+def test_build_reports_missing_webengine_files(tmp_path, monkeypatch):
+    """源头就没有 pak 时要报缺，不能让构建悄悄产出打不开网页的包。"""
+    import PyQt5
+
+    build = _load_build_module()
+    pkg = _fake_qt_tree(tmp_path, with_pak=False)
+    monkeypatch.setattr(PyQt5, "__file__", str(pkg / "__init__.py"))
+
+    dist = tmp_path / "dist" / "SmartYouth"
+    dist.mkdir(parents=True)          # PyInstaller 5.x 平铺布局
+    missing = build._ensure_webengine_files(dist)
+    assert "resources/qtwebengine_resources.pak" in missing
