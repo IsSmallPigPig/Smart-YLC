@@ -7,6 +7,15 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.10
+
+- [3325310] feat(backup): 云端备份 v2——4 位密码、多配置档案与所有权
+- [0639f3c] fix(ci): 打包清单补 cryptography——云端备份的库在函数内才 import
+- [392fe5d] feat(backup): 默认使用 https://smartylc.netlify.app 作为备份站
+- [b21a020] fix(windows): Win10 不再做窗口圆角
+
+@AnkoQAQ
+
 ## v1.0.9
 
 - [fd21210] fix(windows): 安装提示的续行不能以 # 开头，否则预处理器当成未知指令
