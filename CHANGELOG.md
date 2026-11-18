@@ -7,6 +7,13 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.8
+
+- [f142daa] feat(backup): 客户端云端备份，服务端地址与提取码都在设置里填
+- [6e01537] fix(ci): 安装编译器按版本号查找，不再写死 Inno Setup 6 目录
+
+@AnkoQAQ
+
 ## v1.0.7
 
 - [53a6c4f] fix: 安装脚本注释里嵌了花括号常量，Inno 编译直接失败
