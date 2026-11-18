@@ -90,3 +90,31 @@ def test_install_dir_is_ascii():
     _, value = line.split("=", 1)
     assert value.isascii(), f"安装目录里有非 ASCII 字符：{value}"
     assert "UsePreviousAppDir=no" in text, "升级时要换到新目录，否则老用户仍装在中文路径"
+
+
+# 预处理器认得的行首指令；其余以 # 开头的行会被 ISCC 当成未知指令直接中断
+ISPP_DIRECTIVES = {
+    "if", "ifdef", "ifndef", "elif", "else", "endif", "define", "undef",
+    "include", "pragma", "error", "expr", "insert", "append", "emit",
+    "file", "sub", "endsub", "for", "redir", "dim", "option",
+}
+
+
+def test_code_lines_never_start_with_hash():
+    """[Code] 里的续行不能以 # 开头。
+
+    踩过一次：MsgBox 的多行拼接把 `#13#10` 放在续行行首，预处理器把 #13 当成
+    指令，报「Unknown preprocessor directive」，四个 Windows 变体全在编译安装包
+    这一步挂掉。换行符写在上一行末尾即可。"""
+    bad = []
+    in_code = False
+    for no, line in enumerate((ROOT / "installer.iss").read_text(encoding="utf-8").splitlines(), 1):
+        if line.strip() == "[Code]":
+            in_code = True
+            continue
+        if not line.lstrip().startswith("#"):
+            continue
+        word = line.lstrip()[1:].split("(")[0].split()[0].lower() if line.lstrip()[1:].strip() else ""
+        if in_code and word not in ISPP_DIRECTIVES:
+            bad.append(f"{no}: {line.strip()[:40]}")
+    assert not bad, "这些行以 # 开头，会被当成预处理器指令：\n" + "\n".join(bad)
