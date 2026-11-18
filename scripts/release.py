@@ -60,7 +60,7 @@ def collect_commits(since: str, types: tuple[str, ...]) -> list[tuple[str, str, 
             continue
         sha, author, subject = parts
         prefix = subject.split(":", 1)[0]
-        kind = re.split(r"[\(!]", prefix, 1)[0]
+        kind = re.split(r"[\(!]", prefix, maxsplit=1)[0]
         if kind in types:
             result.append((sha, author, subject))
     return result

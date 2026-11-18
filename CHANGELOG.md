@@ -1,6 +1,11 @@
 # 变更日志
 
-本文件按版本记录改动；发布时 Release 说明直接取这里的内容（见 `.github/workflows/release.yml`）。
+每版的条目就是本版本的提交，由 `scripts/release.py` 从 `git log` 生成，格式
+`- [短hash] <commit subject>`，没有人手写的段落。写法上只有一条要求：提交信息按
+`feat(模块): 做了什么` / `fix: 修了什么` 写清楚，它就是发布说明。
+
+发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
+文件里备查。
 
 ## v1.0.4
 

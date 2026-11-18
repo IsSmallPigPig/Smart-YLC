@@ -90,10 +90,10 @@ def test_dry_run_writes_nothing(repo):
     assert (init.read_text(), changelog.read_text(), intro.read_text()) == before
 
 
-def test_workflow_reads_intro_and_full_changelog():
-    """release body = docs/release-intro.md + 全部版本段落，不是只有最新版。
+def test_workflow_reads_intro_and_latest_version():
+    """release body = docs/release-intro.md + 本版本段落。
 
-    用户要求这一版的发布说明带上之前所有的 changelog；intro 仍从文件读，
+    发版说明只列本版本的提交，历史版本留在仓库里备查；intro 仍从文件读，
     改文案不必动 workflow。
     """
     wf = (Path(__file__).resolve().parent.parent /
@@ -102,16 +102,20 @@ def test_workflow_reads_intro_and_full_changelog():
     assert "cat docs/release-intro.md" in block
     # 旧的硬编码 echo 已移除
     assert 'echo "## 下载"' not in block
-    assert "awk '/^## v/{p=1} p' CHANGELOG.md" in block
-    assert "n==1" not in block
+    assert "awk '/^## v/{n++} n==1' CHANGELOG.md" in block
+    assert "p=1" not in block
 
 
-def test_release_body_includes_every_version():
-    """按 workflow 的取法构造正文：最新一版和更早的版本都要在里面。"""
+def test_release_body_only_latest_version():
+    """按 workflow 的取法构造正文：只留第一个版本段落，更早的不进正文。"""
     root = Path(__file__).resolve().parent.parent
     lines = (root / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith("## v"))
-    body = lines[start:]
-    versions = [line for line in body if line.startswith("## v")]
-    assert len(versions) >= 2
-    assert not any("本文件按版本记录改动" in line for line in body)
+    body: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("## v") and body:
+            break
+        body.append(line)
+    # 文件里仍有历史版本，正文里只有一个
+    assert sum(1 for line in lines[start:] if line.startswith("## v")) >= 2
+    assert sum(1 for line in body if line.startswith("## v")) == 1

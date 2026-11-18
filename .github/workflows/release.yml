@@ -395,7 +395,7 @@ jobs:
         with:
           path: artifacts
 
-      - name: 组合 Release 说明（下载信息 + CHANGELOG）
+      - name: 组合 Release 说明（下载信息 + 本版提交）
         # 前导文本放 docs/release-intro.md，可由 scripts/release.py --intro 更新；
         # 不写就沿用文件里的上一版，不必每次改 workflow。
         run: |
@@ -404,9 +404,8 @@ jobs:
             echo
             echo "---"
             echo
-            # 从第一个版本段落开始整份贴出：本版发布说明包含全部历史变更。
-            # 前面两行是文件标题和说明，不属于发布内容。
-            awk '/^## v/{p=1} p' CHANGELOG.md
+            # 只贴本版本：段内每行都是本版的提交，历史版本留在仓库里备查
+            awk '/^## v/{n++} n==1' CHANGELOG.md
           } > release_body.md
 
       - name: 校验主产物齐全
