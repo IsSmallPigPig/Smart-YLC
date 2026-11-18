@@ -20,7 +20,7 @@ import tempfile
 
 from PyQt5.QtCore import QRectF, Qt, QThread, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
-from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QDialog, QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
@@ -411,6 +411,9 @@ class UploadPage(FluentPage):
         self._branch_builder = BatchedBuild(self, batch=2)
         self._busy: BusyOverlay | None = None  # 加载遮罩（渲染/检查期间盖住内容，避免闪屏）
         self._drop_overlay: _DropOverlay | None = None
+        # 被标记「存在异常」的档案不参与上传；结构检查发现的异常也会自动加进来
+        self._abnormal_paths: set[str] = set()
+        self._preview_dialog: QDialog | None = None
         self._dirs: list[str] = []          # 来源目录（配置文件里的 workspaceDirs）
         self._scans: list[FolderScan] = []  # 每个来源目录的扫描结果
         self._folder_cards: dict[str, CollapsibleCard] = {}
@@ -442,9 +445,12 @@ class UploadPage(FluentPage):
         self.stop_btn = PushButton(FIF.PAUSE, "停止")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(lambda: self.worker and self.worker.stop())
+        self.abnormal_btn = PushButton(FIF.INFO, "存在异常")
+        set_tip(self.abnormal_btn, "查看被标记为异常的档案，这些档案不会上传")
+        self.abnormal_btn.clicked.connect(self._show_abnormal)
         # 功能按钮统一落在 banner 右下角（不居中）
-        for w in (self.pick_btn, self.rescan_btn,
-                  self.upload_btn, self.stop_btn):
+        for w in (self.pick_btn, self.rescan_btn, self.upload_btn,
+                  self.stop_btn, self.abnormal_btn):
             self.header.add_control(w)
 
         # 已知问题公告（banner 下方）：上传检查出的问题收进这里，不再重复弹窗
@@ -909,6 +915,61 @@ class UploadPage(FluentPage):
         self._search = text
         self._rebuild_branches()
 
+    # ---------- 档案预览详情 ----------
+
+    def _open_preview(self, path: str):
+        """点档案行 -> 全屏详情页：面包屑 + PDF 预览 + 结构检查 + 异常标记。"""
+        from app.ui.archive_preview import ArchivePreviewView
+
+        status = next((s for s in self.statuses if str(s.path) == path), None)
+        name = status.name if status else os.path.basename(path)
+        self._show_preview(path, name)
+
+    def _show_preview(self, path: str, name: str):
+        from app.ui.archive_preview import ArchivePreviewView
+
+        if not os.path.isfile(path):
+            InfoBar.warning("文件不在了", path, duration=4000, parent=self)
+            return
+        if self._preview_dialog is not None:
+            self._preview_dialog.close()
+        dlg = QDialog(self.window())
+        dlg.setWindowTitle("档案详情")
+        dlg.resize(760, 900)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(0, 0, 0, 0)
+        view = ArchivePreviewView(
+            self, path, name, expected_pages=self._expected_pages(),
+            on_back=dlg.close,
+            on_mark_abnormal=lambda p, bad: self._mark_abnormal(p, bad),
+        )
+        lay.addWidget(view)
+        if path in self._abnormal_paths:
+            view._set_abnormal(True)
+        self._preview_dialog = dlg
+        dlg.show()
+
+    def _mark_abnormal(self, path: str, bad: bool):
+        if bad:
+            self._abnormal_paths.add(path)
+        else:
+            self._abnormal_paths.discard(path)
+        self._refresh_abnormal_button()
+
+    def _refresh_abnormal_button(self):
+        n = len(self._abnormal_paths)
+        self.abnormal_btn.setText(f"存在异常 {n}" if n else "存在异常")
+
+    def _show_abnormal(self):
+        """「存在异常」按钮：有异常就打开第一份，没有就提示。"""
+        bad = [s for s in self.statuses
+               if str(s.path) in self._abnormal_paths or not s.usable]
+        if not bad:
+            InfoBar.success("没有异常", "所有档案都通过了检查", duration=3000, parent=self)
+            return
+        s = bad[0]
+        self._show_preview(str(s.path), s.name)
+
     def _row_item(self, status) -> dict:
         """把一份档案的状态翻译成折叠卡片里一行的展示数据。"""
         meta = []
@@ -930,6 +991,7 @@ class UploadPage(FluentPage):
             meta.append(status.branch)
         return {
             "title": status.name,
+            "path": str(status.path),
             "note": note,
             "tone": status.tone,
             "status": status.status_text,
@@ -984,6 +1046,7 @@ class UploadPage(FluentPage):
         card = CollapsibleCard(name or branch, expanded=True, tags=tags)
         listing = StatusList()
         listing.set_items([self._row_item(s) for s in bstatuses])
+        listing.rowClicked.connect(self._open_preview)
         card.body_lay.addWidget(listing)
         self.branch_lay.addWidget(card)
         for row_index, s in enumerate(bstatuses):
@@ -992,7 +1055,12 @@ class UploadPage(FluentPage):
     # ---------- 上传 ----------
 
     def _start_upload(self):
-        usable = [s for s in self.statuses if s.usable]
+        usable = [s for s in self.statuses
+                  if s.usable and str(s.path) not in self._abnormal_paths]
+        skipped = len([s for s in self.statuses if s.usable]) - len(usable)
+        if skipped:
+            InfoBar.info("已跳过异常档案", f"{skipped} 份被标记为异常，未加入本次上传",
+                         duration=4000, parent=self)
         if not usable:
             InfoBar.warning("没有可上传档案", "先处理状态列表里的异常文件",
                             duration=4000, parent=self)

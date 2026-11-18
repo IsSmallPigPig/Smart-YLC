@@ -148,11 +148,16 @@ class StatusRow(CardWidget):
     状态标签用与组织管理成员标签同款的实心小标签（PillLabel：纯色底白字、4px 圆角），
     不再用左侧圆点 + 浅底软标签的混搭，跨页视觉统一。
 
-    item 结构：{title, note, tone, status, meta: [str], }
+    item 结构：{title, note, tone, status, meta: [str], path: str（可点开预览）}
     """
+
+    clicked = Signal(str)   # 带档案路径，点行即打开预览详情
 
     def __init__(self, item: dict, parent=None):
         super().__init__(parent)
+        self.path = str(item.get("path") or "")
+        if self.path:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
         # 嵌在卡片里的小控件：半径按同心圆从卡片半径推出来，
         # 不是随手减 2——卡片内边距一变，这里会自动跟上
         self.setBorderRadius(P.inner_radius(P.RADIUS["card"], 8))
@@ -180,6 +185,11 @@ class StatusRow(CardWidget):
         if self.pill is not None:
             lay.addWidget(self.pill, 0, Qt.AlignmentFlag.AlignVCenter)
 
+    def mousePressEvent(self, e):
+        if self.path:
+            self.clicked.emit(self.path)
+        super().mousePressEvent(e)
+
     def set_state(self, status: str, tone: str, note: str | None = None):
         if note is not None and self.note_lbl is not None:
             self.note_lbl.setText(note)
@@ -192,6 +202,8 @@ class StatusRow(CardWidget):
 
 class StatusList(QWidget):
     """卡片式状态列表：加一行就多一张小卡片，空列表显示一行灰字。"""
+
+    rowClicked = Signal(str)   # 透传某一行的点击（档案路径）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -210,6 +222,8 @@ class StatusList(QWidget):
         self._rows = []
         for data in items:
             row = StatusRow(data)
+            if row.path:
+                row.clicked.connect(self.rowClicked.emit)
             self._rows.append(row)
             self._lay.addWidget(row)
         if not items:
