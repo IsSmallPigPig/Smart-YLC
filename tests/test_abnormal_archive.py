@@ -137,6 +137,28 @@ def test_row_item_marks_abnormal_row(app, tmp_path):
         stub, FileStatus(path=path, name=os.path.basename(path), pages=13))
 
     assert item["abnormal"] is True
-    assert item["tone"] == "warning"
+    # 标签颜色用 PillLabel 认识的取值；写 "warning" 会落进默认灰
+    assert item["tone"] == "error"
     assert item["status"] == "已标记"
     assert "不参与上传" in item["note"]
+
+
+def test_row_item_adds_missing_cell_pill(app, tmp_path):
+    """表格有空格时单独挂一个「漏填」软标签，不和「异常」挤在同一个红标签里。"""
+    from app.domain.upload_inspect import FileStatus
+    from app.ui import upload_page
+
+    path = _pdf(tmp_path / "高一1班")
+    stub = _stub_page()
+    stub._abnormal_paths = set()
+    stub._cell_counts = {path: 2}
+    item = upload_page.UploadPage._row_item(
+        stub, FileStatus(path=path, name=os.path.basename(path), pages=13))
+
+    assert ("漏填", "warning", "warning") in item["extra_pills"]
+    assert "2 处空格" in item["note"]
+
+    stub._cell_counts = {path: 0}
+    clean = upload_page.UploadPage._row_item(
+        stub, FileStatus(path=path, name=os.path.basename(path), pages=13))
+    assert clean["extra_pills"] == []

@@ -12,24 +12,43 @@ from __future__ import annotations
 import sys
 
 
+_DEMO_REAL_HOME: str | None = None
+
+
 def _enter_demo_home() -> str:
-    """--demo：把配置目录指到一份临时 HOME，并在那里写一份演示数据。
+    """--demo：把配置目录指到一份隔离的 HOME，必要时写入演示数据。
 
     必须在 import app 之前设环境变量：constants 里 CONFIG_FILE 是
     `expanduser("~/.gd12355-helper/config.json")` 在 import 时求值的，
-    晚一步设就还写到真实配置上。演示数据只存在这份临时目录里，退出即弃，
-    正式版永远不含测试数据。
+    晚一步设就还写到真实配置上。
+
+    目录固定在 `~/.smartyouth-demo`，不再用 mkdtemp：每次启动换一个空目录时，
+    演示模式里加的来源目录、改过的设置关掉就没了（正式版不受影响——这里是
+    另一份 HOME）。要重置演示数据，删掉这个目录即可。
     """
     import json
     import os
-    import tempfile
 
-    home = tempfile.mkdtemp(prefix="smartyouth-demo-")
+    global _DEMO_REAL_HOME
+    if _DEMO_REAL_HOME is None:
+        _DEMO_REAL_HOME = os.path.expanduser("~")
+    home = os.path.join(_DEMO_REAL_HOME, ".smartyouth-demo")
+    os.makedirs(home, exist_ok=True)
     os.environ["HOME"] = home
     os.environ["USERPROFILE"] = home
 
     from app.constants import CONFIG_FILE
     from app.services import demo_data
+
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
+                cfg = json.load(f)
+        except (OSError, ValueError):
+            cfg = {}
+        if cfg:
+            print(f"[demo] 配置目录 {home}；沿用已有数据", flush=True)
+            return home
 
     cfg = demo_data.build_config()
     os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
