@@ -265,3 +265,76 @@ def test_dialog_builds_profiles_and_gates_upload(qapp_session):
     assert empty.upload_btn.isEnabledTo(empty.widget) is False
     assert empty.restore_btn.isEnabledTo(empty.widget) is False
     dlg.deleteLater(); empty.deleteLater(); host.deleteLater()
+
+
+def test_empty_profile_combo_shows_hint(qapp_session):
+    """没有档案时下拉框要显示说明文字，而不是一个空白框。"""
+    from PyQt5.QtWidgets import QWidget
+
+    from app.ui.cloud_backup_dialog import NO_PROFILE_TEXT, CloudBackupDialog
+
+    host = QWidget(); host.resize(900, 600)
+    dlg = CloudBackupDialog(host, get_config=lambda: CFG,
+                            on_restore=lambda cfg: None, profiles=[])
+    assert dlg.profile_combo.count() == 1
+    assert dlg.profile_combo.itemText(0) == NO_PROFILE_TEXT
+    assert dlg.profile_combo.isEnabled() is False
+    assert dlg.upload_btn.isEnabledTo(dlg.widget) is False
+    assert dlg.restore_btn.isEnabledTo(dlg.widget) is False
+    dlg.deleteLater(); host.deleteLater()
+
+
+def test_new_profile_defaults_name_from_code(qapp_session):
+    """新建档案时名称默认跟随提取码；用户改过之后不再覆盖。"""
+    from PyQt5.QtWidgets import QWidget
+
+    from app.ui.cloud_backup_dialog import _NewProfileDialog
+
+    host = QWidget(); host.resize(900, 600)
+    made = {}
+    dlg = _NewProfileDialog(host, [cb.DEFAULT_SERVER],
+                            lambda profile, pwd: made.update(profile=profile, pwd=pwd))
+    code = dlg.code_edit.text()
+    assert len(code) == cb.CODE_LEN
+    assert dlg.name_edit.text() == f"配置 {code}"
+
+    # 换一个提取码：名称跟着换
+    dlg._roll_code()
+    assert dlg.name_edit.text() == f"配置 {dlg.code_edit.text()}"
+
+    # 用户手动改名后，再换提取码不动名称
+    dlg.name_edit.setText("我的配置")
+    dlg._mark_name_touched()
+    dlg._roll_code()
+    assert dlg.name_edit.text() == "我的配置"
+
+    # 提交时空名称回落到「同提取码已有档案的名称」
+    dlg2 = _NewProfileDialog(host, [cb.DEFAULT_SERVER], lambda *a: None,
+                             existing=[{"code": "ABC234", "name": "团委主配置",
+                                        "server": cb.DEFAULT_SERVER, "ownerKey": ""}])
+    dlg2.code_edit.setText("ABC234")
+    dlg2._sync_default_name()
+    assert dlg2.name_edit.text() == "团委主配置"
+    dlg.deleteLater(); dlg2.deleteLater(); host.deleteLater()
+
+
+def test_action_buttons_are_spaced_and_equal(qapp_session):
+    """上传/拉取两个按钮：等宽分列，中间留出可点开的间隔（不贴边、不重叠）。"""
+    from PyQt5.QtWidgets import QWidget
+
+    from app.ui.cloud_backup_dialog import CloudBackupDialog
+
+    mine = {"name": "我的", "server": cb.DEFAULT_SERVER, "code": "ABC234",
+            "ownerKey": "a" * 64}
+    host = QWidget(); host.resize(900, 700)
+    dlg = CloudBackupDialog(host, get_config=lambda: CFG,
+                            on_restore=lambda cfg: None, profiles=[mine])
+    row = dlg.upload_btn.parentWidget()
+    lay = row.layout()
+    assert lay.count() == 2
+    assert lay.spacing() >= 10                       # 按钮之间要有可见间隔
+    for i in range(2):
+        assert lay.stretch(i) == 1                   # 等宽分列，不会一个挤另一个
+    assert dlg.upload_btn.minimumWidth() >= 100
+    assert dlg.restore_btn.minimumWidth() >= 100
+    dlg.deleteLater(); host.deleteLater()

@@ -47,6 +47,9 @@ class _Worker(QThread):
             self.failed.emit(str(exc))
 
 
+NO_PROFILE_TEXT = "还没有配置，点击新建或导入"
+
+
 def _profile_id(server: str, code: str) -> str:
     return f"{server}|{code}"
 
@@ -158,12 +161,15 @@ class _NewProfileDialog(ConfigDialog):
     确定时先向服务端查重（提取码撞车就拒绝），成功后回调把档案交还主弹层。
     """
 
-    def __init__(self, parent, servers: list[str], on_create):
+    def __init__(self, parent, servers: list[str], on_create, existing=None):
         super().__init__("新建云端配置", parent, width=460,
                          note="提取码在这个站点上重复时不会创建；成功后立即上传当前设置。")
         self._on_create = on_create
+        self._existing = list(existing or [])
+        self._name_touched = False
         self.name_edit = LineEdit(self.widget)
-        self.name_edit.setPlaceholderText("比如：学校电脑用的配置")
+        self.name_edit.setPlaceholderText("默认按提取码起名，可改")
+        self.name_edit.textEdited.connect(self._mark_name_touched)
         self.add_field("名称", self.name_edit)
 
         self.site_combo = SiteCombo(servers, self.widget)
@@ -171,8 +177,10 @@ class _NewProfileDialog(ConfigDialog):
         self.add_field("备份站点", self.site_combo)
 
         self.code_edit = LineEdit(self.widget)
+        self.code_edit.setText(cloud_backup.generate_code())
         self.code_edit.setPlaceholderText("留空自动生成")
         self.code_edit.setMaxLength(6)
+        self.code_edit.textEdited.connect(self._sync_default_name)
         code_box = QWidget(self.widget)
         row = QHBoxLayout(code_box)
         row.setContentsMargins(0, 0, 0, 0)
@@ -180,8 +188,7 @@ class _NewProfileDialog(ConfigDialog):
         row.addWidget(self.code_edit, 1)
         dice = ToolButton(FIF.SYNC, code_box)
         dice.setToolTip("随机生成提取码")
-        dice.clicked.connect(
-            lambda: self.code_edit.setText(cloud_backup.generate_code()))
+        dice.clicked.connect(self._roll_code)
         row.addWidget(dice)
         self.add_field("提取码（6 位）", code_box)
 
@@ -197,6 +204,27 @@ class _NewProfileDialog(ConfigDialog):
         except (RuntimeError, TypeError):
             pass
         self.yesButton.clicked.connect(self._submit)
+        self._sync_default_name()
+
+    def _roll_code(self):
+        self.code_edit.setText(cloud_backup.generate_code())
+        self._sync_default_name()
+
+    def _mark_name_touched(self, *_):
+        self._name_touched = True
+
+    def _default_name(self, code: str) -> str:
+        """名称默认取「同一提取码已有的那份配置」，没有就按提取码起名。"""
+        for p in self._existing:
+            if p.get("code") == code:
+                return str(p.get("name") or "")
+        return f"配置 {code}" if code else ""
+
+    def _sync_default_name(self, *_):
+        if self._name_touched:
+            return
+        raw = self.code_edit.text().strip().upper()
+        self.name_edit.setText(self._default_name(raw) if len(raw) == 6 else "")
 
     def _add_site(self, combo):
         _SiteAddDialog(self, lambda url: combo.add_server(url)).show()
@@ -209,7 +237,7 @@ class _NewProfileDialog(ConfigDialog):
         raw = self.code_edit.text().strip()
         code = cloud_backup.normalize_code(raw) if raw else cloud_backup.generate_code()
         password = cloud_backup.normalize_password(self.pwd_edit.text())
-        name = self.name_edit.text().strip()[:40] or f"配置 {code}"
+        name = self.name_edit.text().strip()[:40] or self._default_name(code)
         return {"name": name, "server": server, "code": code,
                 "ownerKey": cloud_backup.generate_owner_key()}, password
 
@@ -245,12 +273,15 @@ class _NewProfileDialog(ConfigDialog):
 class _JoinProfileDialog(ConfigDialog):
     """加入他人档案：只登记提取码，本地不留所有权凭据，只能拉取。"""
 
-    def __init__(self, parent, servers: list[str], on_join):
+    def __init__(self, parent, servers: list[str], on_join, existing=None):
         super().__init__("加入他人配置", parent, width=460,
                          note="只登记提取码；这份配置的所属人才能上传，你只能拉取恢复。")
         self._on_join = on_join
+        self._existing = list(existing or [])
+        self._name_touched = False
         self.name_edit = LineEdit(self.widget)
-        self.name_edit.setPlaceholderText("比如：年级组的配置")
+        self.name_edit.setPlaceholderText("默认按提取码起名，可改")
+        self.name_edit.textEdited.connect(self._mark_name_touched)
         self.add_field("名称", self.name_edit)
 
         self.site_combo = SiteCombo(servers, self.widget)
@@ -260,6 +291,7 @@ class _JoinProfileDialog(ConfigDialog):
         self.code_edit = LineEdit(self.widget)
         self.code_edit.setPlaceholderText("对方的 6 位提取码")
         self.code_edit.setMaxLength(6)
+        self.code_edit.textEdited.connect(self._sync_default_name)
         self.add_field("提取码", self.code_edit)
 
         self.cancelButton.setText("取消")
@@ -269,6 +301,21 @@ class _JoinProfileDialog(ConfigDialog):
         except (RuntimeError, TypeError):
             pass
         self.yesButton.clicked.connect(self._submit)
+
+    def _mark_name_touched(self, *_):
+        self._name_touched = True
+
+    def _default_name(self, code: str) -> str:
+        for p in self._existing:
+            if p.get("code") == code:
+                return str(p.get("name") or "")
+        return f"配置 {code}" if code else ""
+
+    def _sync_default_name(self, *_):
+        if self._name_touched:
+            return
+        raw = self.code_edit.text().strip().upper()
+        self.name_edit.setText(self._default_name(raw) if len(raw) == 6 else "")
 
     def _add_site(self, combo):
         _SiteAddDialog(self, lambda url: combo.add_server(url)).show()
@@ -280,7 +327,7 @@ class _JoinProfileDialog(ConfigDialog):
         except ValueError as exc:
             InfoBar.warning("还差一点", str(exc), duration=4000, parent=self)
             return
-        name = self.name_edit.text().strip()[:40] or f"配置 {code}"
+        name = self.name_edit.text().strip()[:40] or self._default_name(code)
         self.accept()
         self._on_join({"name": name, "server": server, "code": code,
                        "ownerKey": ""})
@@ -324,20 +371,16 @@ class CloudBackupDialog(ConfigDialog):
             lay1.addWidget(btn)
         self.add(row1)
 
-        # 第二行：站点下拉 + 状态文字
+        # 第二行：站点下拉（独占一行，状态文字另起一行，不挤占输入宽度）
         self.site_combo = SiteCombo(self._servers, self.widget)
         self.site_combo.on_add_requested(self._add_site)
         self.site_combo.currentIndexChanged.connect(self._server_changed)
-        row2 = QWidget(self.widget)
-        lay2 = QHBoxLayout(row2)
-        lay2.setContentsMargins(0, 0, 0, 0)
-        lay2.setSpacing(8)
-        lay2.addWidget(self.site_combo, 3)
+        self.add(self.site_combo)
+
         self.status = BodyLabel("", self.widget)
-        self.status.setMinimumHeight(24)
+        self.status.setMinimumHeight(22)
         self.status.setWordWrap(True)
-        lay2.addWidget(self.status, 2)
-        self.add(row2)
+        self.add(self.status)
 
         # 第三行：4 位密码
         self.pwd_edit = PasswordLineEdit(self.widget)
@@ -345,15 +388,16 @@ class CloudBackupDialog(ConfigDialog):
         self.pwd_edit.setMaxLength(4)
         self.add(self.pwd_edit)
 
-        # 动作
+        # 动作：两个按钮等宽分列，中间留出间距；不给满宽，避免贴边看起来像一块
         row3 = QWidget(self.widget)
         lay3 = QHBoxLayout(row3)
-        lay3.setContentsMargins(0, 0, 0, 0)
-        lay3.setSpacing(8)
+        lay3.setContentsMargins(0, 2, 0, 0)
+        lay3.setSpacing(12)
         self.upload_btn = PrimaryPushButton(FIF.CLOUD, "上传", row3)
         self.restore_btn = PushButton(FIF.DOWNLOAD, "拉取并恢复", row3)
-        lay3.addWidget(self.upload_btn)
-        lay3.addWidget(self.restore_btn)
+        for btn in (self.upload_btn, self.restore_btn):
+            btn.setMinimumWidth(120)
+            lay3.addWidget(btn, 1)
         self.add(row3)
 
         self.new_btn.clicked.connect(self._new_profile)
@@ -376,6 +420,14 @@ class CloudBackupDialog(ConfigDialog):
         wanted = keep if keep is not None else self._active_id
         self.profile_combo.blockSignals(True)
         self.profile_combo.clear()
+        if not self._profiles:
+            # 空下拉框会让人以为坏了：放一条说明当占位，按钮保持禁用
+            self.profile_combo.addItem(NO_PROFILE_TEXT, userData="")
+            self.profile_combo.setEnabled(False)
+            self.profile_combo.blockSignals(False)
+            self._active_id = ""
+            self._profile_changed(0)
+            return
         for p in self._profiles:
             self.profile_combo.addItem(
                 self._profile_text(p), userData=_profile_id(p["server"], p["code"]))
@@ -406,12 +458,12 @@ class CloudBackupDialog(ConfigDialog):
             self.status.setText(f"提取码 {profile['code']}"
                                 + ("" if mine else "，他人的配置只能拉取"))
         else:
-            self.status.setText("还没有配置：点 ＋ 新建，或点链形图标加入他人的")
+            self.status.setText(NO_PROFILE_TEXT)
         enabled = not self._running
         self.upload_btn.setEnabled(mine and enabled)
         self.restore_btn.setEnabled(bool(profile) and enabled)
         self.del_btn.setEnabled(bool(profile) and enabled)
-        self.profile_combo.setEnabled(enabled)
+        self.profile_combo.setEnabled(enabled and bool(self._profiles))
         self._save_state()
 
     def _server_changed(self, *_):
@@ -466,7 +518,8 @@ class CloudBackupDialog(ConfigDialog):
     # ---- 建档 / 加入 / 删除 --------------------------------------------------
 
     def _new_profile(self):
-        _NewProfileDialog(self, self._servers, self._created).show()
+        _NewProfileDialog(self, self._servers, self._created,
+                          existing=self._profiles).show()
 
     def _created(self, profile: dict, password: str):
         self._write_profile(profile)
@@ -474,7 +527,8 @@ class CloudBackupDialog(ConfigDialog):
         self._upload()
 
     def _join_profile(self):
-        _JoinProfileDialog(self, self._servers, self._joined).show()
+        _JoinProfileDialog(self, self._servers, self._joined,
+                           existing=self._profiles).show()
 
     def _joined(self, profile: dict):
         self._write_profile(profile)

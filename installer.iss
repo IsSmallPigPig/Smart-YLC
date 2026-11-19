@@ -108,7 +108,11 @@ Name: "{group}\{#AppName}"; Filename: "{app}\{#AppName}.exe"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppName}.exe"; Tasks: desktopicon
 
 [Run]
+; 交互安装：完成页的「立即运行」复选框（postinstall + skipifsilent 互斥着用）
 Filename: "{app}\{#AppName}.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; 静默安装：postinstall 项不会执行，单列一条只给静默模式跑的。
+; 用户点「更新」的预期是更新完继续用；新版本启动时读 updated.json 提示已更新。
+Filename: "{app}\{#AppName}.exe"; Flags: nowait skipifnotsilent
 
 [Code]
 { 勾选了「信任证书」时，单独提权跑 certutil：安装本身仍是每用户、不弹 UAC，

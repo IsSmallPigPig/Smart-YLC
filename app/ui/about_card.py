@@ -20,7 +20,7 @@ from qfluentwidgets import (
     PushButton,
 )
 
-from app import __version__
+from app import __version__, build_target
 from app.services import app_log, silent_update, update_check, updater
 from app.ui.mirror_combo import MirrorComboBox
 from app.ui.page import CONTROL_WIDTH, CollapsibleCard, SettingRow
@@ -128,8 +128,9 @@ class AboutCard(CollapsibleCard):
             status = update_check.last_check_text()
         except Exception as e:
             status = f"更新记录读取失败：{e}"
-        self.update_row.set_desc(
-            f"当前版本 {__version__}，来自 {updater.REPO}，{status}")
+        variant = build_target()
+        label = f"当前版本 {__version__}" + (f"（{variant}）" if variant else "")
+        self.update_row.set_desc(f"{label}，来自 {updater.REPO}，{status}")
 
     # ------------------------------------------------------------ 浮动进度
 
@@ -280,7 +281,10 @@ class AboutCard(CollapsibleCard):
         if not path:
             return
         self._pending_install = ""
+        version = getattr(self._info, "version", "") or ""
         try:
+            if version:
+                silent_update.mark_pending(version)
             silent_update.start(path)
         except Exception as e:
             self._close_toast()
@@ -298,12 +302,24 @@ class AboutCard(CollapsibleCard):
         self._quit_for_install()
 
     def _quit_for_install(self):
-        """安装要替换正在运行的程序：先让主程序退出，再由安装助手接管。"""
+        """安装要替换正在运行的程序：先让主程序彻底退出，再由安装器接管。
+
+        只调 QApplication.quit 不够——后台同步/上传线程还在跑时进程不会退出，
+        托盘图标也留在通知区，安装器随即撞上「文件被占用」以退出码 5 中止。
+        因此给一个兜底的硬退出：清理完托盘与浏览器窗口后，1.5 秒内进程必然结束。
+        """
+        import os
+
         from PyQt5.QtCore import QTimer
 
         quit_app = getattr(self.window(), "_quit_app", None)
-        if quit_app is not None:
-            QTimer.singleShot(1200, quit_app)
+        if quit_app is None:
+            # 没有主窗口（测试桩、独立卡片）就没有「退出应用」这回事，
+            # 不动进程：硬退会连带打掉宿主的事件循环。
+            return
+        QTimer.singleShot(1200, quit_app)
+        # 兜底：退出后 1.5 秒进程必须结束，否则 exe 仍被占用，安装器又回到退出码 5
+        QTimer.singleShot(2700, lambda: os._exit(0))
 
     def _on_download_failed(self, message: str):
         self.check_btn.setEnabled(True)

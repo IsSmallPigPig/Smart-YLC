@@ -412,24 +412,27 @@ class MainWindow(MSFluentWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = None
             return
-        from PyQt5.QtWidgets import QAction
-        from PyQt5.QtWidgets import QMenu
+        from qfluentwidgets import Action, FluentIcon as FIF, RoundMenu
 
         from app.ui.brand import app_icon
 
         self.tray = QSystemTrayIcon(app_icon(), self)
         self.tray.setToolTip("智慧团委")
-        menu = QMenu()
-        act_show = QAction("显示主界面", self)
+        # 与后台模式（app/tray.py）一致：Fluent 圆角菜单，不用系统原生的方形灰菜单。
+        # QSystemTrayIcon 不接管菜单所有权，必须自己留住引用，否则菜单被回收、
+        # 右键点了没反应。
+        menu = RoundMenu(parent=None)
+        act_show = Action(FIF.HOME, "显示主界面")
         act_show.triggered.connect(self._restore_from_tray)
-        act_sync = QAction("立即同步", self)
+        act_sync = Action(FIF.SYNC, "立即同步")
         act_sync.triggered.connect(self._sync_now)
-        act_quit = QAction("退出", self)
+        act_quit = Action(FIF.POWER_BUTTON, "退出")
         act_quit.triggered.connect(self._quit_app)
         menu.addAction(act_show)
         menu.addAction(act_sync)
         menu.addSeparator()
         menu.addAction(act_quit)
+        self.tray_menu = menu
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()

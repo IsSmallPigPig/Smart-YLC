@@ -45,6 +45,38 @@ def version() -> str:
     return __version__
 
 
+def write_build_target() -> str:
+    """把本次构建的系统变体写进 app/_build_target.py，随包进仓库外的源码目录。
+
+    更新器靠它挑安装包：Windows10-x64 的机器永远拿 Windows10-x64，
+    不再从运行时系统反推（Win7 包跑在 Win10 上会反推出错的那一份）。
+    CI 的矩阵已经给了 TARGET_OS / IS_64 环境变量，源码构建时按当前系统推断。
+    """
+    import platform
+
+    target_os = os.environ.get("TARGET_OS", "").strip()
+    if not target_os:
+        target_os = {"darwin": "macOS", "win32": "Windows10"}.get(sys.platform, "Linux")
+    is64 = os.environ.get("IS_64", "").strip()
+    if is64 in ("0", "1"):
+        arch = "x64" if is64 == "1" else "x86"
+    else:
+        machine = platform.machine().lower()
+        if machine.startswith(("arm", "aarch")):
+            arch = "arm64"
+        else:
+            arch = "x64" if platform.architecture()[0] == "64bit" else "x86"
+
+    path = ROOT / "app" / "_build_target.py"
+    path.write_text(
+        '"""构建目标（自动生成，不进仓库）。"""\n'
+        f'TARGET_OS = "{target_os}"\n'
+        f'TARGET_ARCH = "{arch}"\n',
+        encoding="utf-8",
+    )
+    return f"{target_os}-{arch}"
+
+
 def version_file_path() -> Path:
     """Windows 可执行文件版本资源；PyInstaller 要一份 VSVersionInfo 文本。"""
     return ROOT / "build" / "file_version.txt"
@@ -260,6 +292,8 @@ def main() -> int:
         return 0
 
     _strip_previous()
+    target = write_build_target()
+    print(f"构建目标：{target}", flush=True)
     if sys.platform == "win32":
         _write_version_file(version())
 
