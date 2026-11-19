@@ -69,7 +69,22 @@ def member_index(cache: dict) -> dict[str, set[tuple[str, str]]]:
 
 
 def pdf_page_count(path: str) -> int | None:
-    """读取 PDF 总页数；损坏或不是有效 PDF 返回 None。"""
+    """读取 PDF 总页数；损坏或不是有效 PDF 返回 None。
+
+    优先 PyMuPDF：它只解析 xref 就拿到页数（单份 ~1ms），而 pypdf 要建完整
+    的页对象树（~6ms）。上百份档案时这点差异就变成秒级。PyMuPDF 打不开
+    （加密/非常规结构）再退回 pypdf，两条路都失败才判 None。
+    """
+    try:
+        import pymupdf
+
+        doc = pymupdf.open(path)
+        try:
+            return doc.page_count
+        finally:
+            doc.close()
+    except Exception:
+        pass
     try:
         from pypdf import PdfReader
 
