@@ -426,6 +426,8 @@ class UploadPage(FluentPage):
         self._cell_skipped = 0
         self._cell_skip_reason = ""
         self._cell_toast: ProgressToast | None = None
+        # 被用户忽略漏填的档案路径：只影响提示，不影响能不能上传
+        self._ignored_blanks = {str(p) for p in (store.load().get("ignoredBlanks") or [])}
         self._dirs: list[str] = []          # 来源目录（配置文件里的 workspaceDirs）
         self._scans: list[FolderScan] = []  # 每个来源目录的扫描结果
         self._folder_cards: dict[str, CollapsibleCard] = {}
@@ -437,7 +439,6 @@ class UploadPage(FluentPage):
         # 头图通栏贴顶（overlay，不占布局），标题与操作控件叠在 banner 上
         self.header = PageBanner("上传档案", "拖入文件夹，自动检查并按支部分流", self.scrollWidget)
         self.banner = self.header
-        from app.services import store
         self.header.set_image_path(store.load().get("headerImage", ""))
         self._place_banner()
 
@@ -1089,6 +1090,8 @@ class UploadPage(FluentPage):
             self, path, name, expected_pages=self._expected_pages(),
             on_back=self._close_preview,
             on_mark_abnormal=lambda p, bad: self._mark_abnormal(p, bad),
+            on_ignore_blanks=self.ignore_blanks,
+            blanks_ignored=path in self._ignored_blanks,
         )
         if path in self._abnormal_paths:
             view._set_abnormal(True)
@@ -1109,6 +1112,16 @@ class UploadPage(FluentPage):
         view.stop_workers()
         window.stackedWidget.removeWidget(view)
         view.deleteLater()
+
+    def ignore_blanks(self, path: str):
+        """忽略这份档案的漏填提示：只影响提示，不影响上传判断。"""
+        path = str(path)
+        if path in self._ignored_blanks:
+            return
+        self._ignored_blanks.add(path)
+        store.update(lambda cfg: cfg.__setitem__(
+            "ignoredBlanks", sorted(self._ignored_blanks)))
+        self._rebuild_branches()
 
     def _mark_abnormal(self, path: str, bad: bool):
         """标记/取消异常：文件跟着搬进或搬出「异常档案」子文件夹。
@@ -1179,11 +1192,17 @@ class UploadPage(FluentPage):
         if not note:
             note = status.notice
         blanks = self._cell_counts.get(str(status.path))
+        ignored_blanks = str(status.path) in self._ignored_blanks
         extra_pills = []
         if blanks is not None:
-            hint = f"表格 {blanks} 处空格" if blanks > 0 else "表格无空格"
+            if blanks <= 0:
+                hint = "表格无空格"
+            elif ignored_blanks:
+                hint = f"已忽略 {blanks} 处空格"
+            else:
+                hint = f"表格 {blanks} 处空格"
             note = f"{note}，{hint}" if note else hint
-            if blanks > 0:
+            if blanks > 0 and not ignored_blanks:
                 # 漏填单独一个黄标签：档案本身可能只是「名单里没找到」，
                 # 跟表格漏填是两件事，混在一个红标签里看不出来
                 extra_pills.append(("漏填", "warning", "warning"))
@@ -1193,10 +1212,10 @@ class UploadPage(FluentPage):
         marked = str(status.path) in self._abnormal_paths
         if marked:
             note = f"{note}，已标记异常" if note else "已标记异常，不参与上传"
-        # 铺黄底的条件是「这一行是异常」，不只是「被移进异常档案」：
-        # 标「异常」的档案 tone 是 error，只有红标签没有底色时它在一片深灰行里
-        # 格外扎眼（用户说的「异常发亮」）。两档统一成暖色底。
-        abnormal = marked or status.tone == "error"
+        # 黄底只表示「这一行有漏填/被人工标记」。普通的结构异常（例如名单里
+        # 没找到该团员）已经有红色「异常」标签，整片铺黄反而把真正要看的
+        # 漏填盖住了。
+        abnormal = marked or (blanks is not None and blanks > 0 and not ignored_blanks)
         return {
             "title": status.name,
             "path": str(status.path),

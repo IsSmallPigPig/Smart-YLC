@@ -69,6 +69,7 @@ def _stub_page():
     stub = QWidget()
     stub._abnormal_paths = set()
     stub._cell_counts = {}
+    stub._ignored_blanks = set()
     stub._preview_view = None
     stub.refresh = lambda: None
     stub._refresh_abnormal_button = lambda: None
@@ -162,3 +163,45 @@ def test_row_item_adds_missing_cell_pill(app, tmp_path):
     clean = upload_page.UploadPage._row_item(
         stub, FileStatus(path=path, name=os.path.basename(path), pages=13))
     assert clean["extra_pills"] == []
+
+
+def test_row_item_ignores_blanks_after_user_ignores(app, tmp_path):
+    """忽略漏填后：不再铺黄底、不挂「漏填」标签，说明写「已忽略 N 处」。"""
+    from app.domain.upload_inspect import FileStatus
+    from app.ui import upload_page
+
+    path = _pdf(tmp_path / "高一1班")
+    stub = _stub_page()
+    stub._cell_counts = {path: 3}
+    status = FileStatus(path=path, name=os.path.basename(path), pages=13)
+
+    before = upload_page.UploadPage._row_item(stub, status)
+    assert before["abnormal"] is True
+    assert ("漏填", "warning", "warning") in before["extra_pills"]
+
+    stub._ignored_blanks = {path}
+    after = upload_page.UploadPage._row_item(stub, status)
+    assert after["abnormal"] is False
+    assert after["extra_pills"] == []
+    assert "已忽略 3 处空格" in after["note"]
+
+
+def test_ignore_blanks_persists_without_touching_usable(app, monkeypatch, tmp_path):
+    """忽略只写 ignoredBlanks，不改档案的可上传判定。"""
+    from app.domain.upload_inspect import FileStatus
+    from app.services import store
+    from app.ui import upload_page
+
+    path = _pdf(tmp_path / "高一1班")
+    stub = _stub_page()
+    stub._ignored_blanks = set()
+    stub._rebuild_branches = lambda: None
+    # 用临时配置文件，别写到 ~/.gd12355-helper/config.json
+    monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
+    store.save({"accounts": []})
+    upload_page.UploadPage.ignore_blanks(stub, path)
+
+    assert path in stub._ignored_blanks
+    assert path in (store.load().get("ignoredBlanks") or [])
+    assert FileStatus(path=path, name=os.path.basename(path),
+                      account="ssfz1").usable is True
