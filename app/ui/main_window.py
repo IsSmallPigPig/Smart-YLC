@@ -525,10 +525,15 @@ class MainWindow(MSFluentWindow):
         self.refresh_all(silent=True, fast=True)
 
     def _quit_app(self):
-        self._really_quit = True
+        """真退出：先收窗口与网页会话，再退事件循环（见 app.ui.quit）。
+
+        只调 QApplication.quit() 的话，工作线程与 WebEngine 会把进程拖住——
+        表现是托盘没了、窗口还在。"""
         if getattr(self, "tray", None) is not None:
             self.tray.hide()
-        QApplication.quit()
+        from app.ui.quit import quit_app
+
+        quit_app(self)
 
     def refresh_all(self, silent: bool = True, fast: bool = False) -> bool:
         """同步系统数据：成员缓存、站内信、组织状况统计，每轮都取数。

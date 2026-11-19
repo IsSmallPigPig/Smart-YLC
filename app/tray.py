@@ -120,8 +120,12 @@ class TrayDaemon(QObject):
             self.open_window()
 
     def quit(self):
+        """退出：先停定时器、收窗口，再退事件循环并兜底硬退（见 app.ui.quit）。"""
+        self.timer.stop()
         self.tray.hide()
-        self.app.quit()
+        from app.ui.quit import quit_app
+
+        quit_app(self.window)
 
 
 def run_tray() -> int:
