@@ -49,7 +49,9 @@ class SplashScreen(QWidget):
 
         self.ring = IndeterminateProgressRing(self)
         self.ring.setFixedSize(32, 32)
-        self.ring.setCustomBarColor(QColor("#0078d4"), QColor("#4aa3ff"))
+        from app.ui import palette as P
+
+        self.ring.setCustomBarColor(QColor(P.BRAND), QColor(P.BRAND_SOFT))
         lay.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignHCenter)
 
     def paintEvent(self, e):

@@ -71,8 +71,9 @@ class _DropZone(QWidget):
         f.setPixelSize(14)
         f.setWeight(QFont.Weight.DemiBold)
         title.setFont(f)
-        # 这是空态的主文案，不能跟说明一样灰：毛玻璃上会整行消失
-        title.setTextColor(QColor("#20242b"), QColor("#e6e9ee"))
+        # 这是空态的主文案，不能跟说明一样灰：毛玻璃上会整行消失。
+        # 颜色取 palette 的前景 token，不在页面里另写一套 hex
+        title.setTextColor(*P.text_colors("fg"))
         lay.addWidget(title, 0, Qt.AlignmentFlag.AlignHCenter)
         hint = note_label("支持多选，自动扫描子文件夹")
         hint.setWordWrap(False)   # 居中单行，折行会把这个框撑成两截
@@ -126,8 +127,8 @@ class _DropOverlay(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(box.adjusted(2, 2, -2, -2), 14, 14)
 
-        ink = QColor("#12212e") if not isDarkTheme() else QColor("#f2f2f2")
-        dim = QColor("#33495e") if not isDarkTheme() else QColor("#c8c8c8")
+        ink = P.fg("fg")
+        dim = P.fg("fg2")
 
         title_font = QFont(self.font())
         title_font.setPixelSize(15)
