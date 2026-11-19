@@ -39,10 +39,6 @@ def _fire_pending_click() -> None:
         pass
 
 
-def _escape(s: str) -> str:
-    return s.replace("\\", "\\\\").replace('"', '\\"')
-
-
 def _fallback_tray():
     """非 macOS 的托盘回落：拿不到就返回 None，由调用方判失败。"""
     global _FALLBACK_TRAY
@@ -80,12 +76,17 @@ def send(title: str, body: str, tray=None, on_click=None) -> bool:
             pass
         if on_click is not None:
             return False
+        # 标题/正文走 argv 而不是拼 AppleScript 字符串：中文与引号交给
+        # on the fly 的参数传递，不会被 shell 或 AppleScript 转义搞坏
         try:
             script = (
-                f'display notification "{_escape(body)}" '
-                f'with title "{_escape(title)}" sound name "default"'
+                'on run argv\n'
+                '  display notification (item 2 of argv) '
+                'with title (item 1 of argv) sound name "default"\n'
+                'end run'
             )
-            subprocess.run(["osascript", "-e", script], check=True, timeout=10)
+            subprocess.run(["osascript", "-e", script, title, body],
+                           check=True, timeout=10)
             return True
         except (subprocess.SubprocessError, OSError):
             return False

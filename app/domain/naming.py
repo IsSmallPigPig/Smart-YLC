@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -19,6 +20,11 @@ from app.constants import (
 MAX_BATCH = LIMITS["MAX_UPLOAD_PER_BATCH"]
 
 SPACE_RE = re.compile(r"[\s\u3000]", re.UNICODE)
+# 从微信/QQ/邮件附件存下来的文件名常带零宽字符与方向控制符：界面上完全看不见，
+# 却会让「姓名+手机号」的三段式解析失败，报「文件名无法解析」而用户一头雾水。
+_INVISIBLE_RE = re.compile("[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", re.UNICODE)
+# 全角数字：中文输入法下「１３８００１３８０００」很常见，逐个映射成半角
+_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
 DIGIT_RE = re.compile(r"\d", re.UNICODE)
 
 
@@ -66,7 +72,10 @@ def analyze_file_name(original_name: str, allow_alternate_separator: bool = Fals
     problems: list[str] = []
     reasons: list[str] = []
 
-    raw = original_name
+    # 先归一化再判：NFC 让 macOS/iPhone 存下的分解式字符与名单对得上，
+    # 去掉不可见字符，全角数字转半角
+    raw = unicodedata.normalize("NFC", _INVISIBLE_RE.sub("", original_name))
+    raw = raw.translate(_FULLWIDTH_DIGITS)
     has_pdf_ext = bool(PDF_EXT_RE.search(raw))
     base = PDF_EXT_RE.sub("", raw) if has_pdf_ext else raw
     normalized = _normalize_width(base)

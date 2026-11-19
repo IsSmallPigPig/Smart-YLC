@@ -196,17 +196,36 @@ def build_report(exc_type, exc_value, tb) -> str:
     return head + _read_recent()
 
 
+def _stderr(report: str) -> None:
+    """窗口模式（--windowed）下 sys.stderr 是 None，直接 print 会炸。
+
+    中文报告再叠一层编码坑：写文件永远 UTF-8；stderr 可用时也用
+    errors="replace" 兜底，控制台代码页解不了的字不炸程序。
+    """
+    try:
+        if sys.stderr is None:
+            sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+        print(report, file=sys.stderr)
+    except (OSError, ValueError, UnicodeError):
+        try:
+            os.makedirs(_log_dir(), exist_ok=True)
+            with open(_fault_file_path(), "a", encoding="utf-8") as f:
+                f.write(report + "\n")
+        except OSError:
+            pass
+
+
 def _show_crash_dialog(report: str) -> None:
     """弹崩溃窗口。QApplication 不存在（启动早期崩）时只写 stderr。"""
     try:
         from PyQt5.QtWidgets import QApplication, QMessageBox
     except ImportError:
-        print(report, file=sys.stderr)
+        _stderr(report)
         return
 
     app = QApplication.instance()
     if app is None:
-        print(report, file=sys.stderr)
+        _stderr(report)
         return
 
     box = QMessageBox()
@@ -252,7 +271,7 @@ def _crash_hook(exc_type, exc_value, tb) -> None:
     if _logger is not None:
         _logger.critical("未处理异常：\n%s", stack)
     else:
-        print(stack, file=sys.stderr)
+        _stderr(stack)
 
     try:
         report = build_report(exc_type, exc_value, tb)
