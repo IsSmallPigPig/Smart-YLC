@@ -197,6 +197,11 @@ class _FolderCard(CardWidget):
 # 站点单文件上限 10MB，统一压到 9.5MB 留余量；不再提供可选项
 COMPRESS_TARGET = LIMITS["PDF_DEFAULT_TARGET_BYTES"]
 MAX_BATCH = LIMITS["MAX_UPLOAD_PER_BATCH"]
+
+
+def _worker_count(cap: int) -> int:
+    """并发上限取 cap，同时留一个核给 UI，免得进度条卡住。"""
+    return min(cap, max(1, (os.cpu_count() or 4) - 1))
 RESULT_TONE = {"成功": "ok", "跳过": "warn", "失败": "error"}
 
 
@@ -296,14 +301,15 @@ class UploadWorker(QThread):
             return {}
         return {(m.name, m.mobile): m for m in members}
 
-    def _compress(self, job: dict, tmpdir: str) -> str | None:
+    def _compress(self, job: dict, tmpdir: str, seq: int) -> str | None:
         """超过目标大小的压到临时副本；返回上传用路径，失败返回 None。"""
         path = job["path"]
         if os.path.getsize(path) <= self.target:
             return path
         from app.services.compress import compress_pdf
 
-        tmp = os.path.join(tmpdir, os.path.basename(path))
+        # seq 保证同名档案各有各的临时副本，并发压缩不会互相覆盖
+        tmp = os.path.join(tmpdir, f"{seq}_{os.path.basename(path)}")
         try:
             result = compress_pdf(path, tmp, self.target)
         except Exception as e:
@@ -385,10 +391,10 @@ class UploadWorker(QThread):
             # 一、压缩：超过目标体积的才压，几份之间互不依赖，并行处理
             prepared: list[dict] = []
             if self.jobs:
-                workers = min(3, max(1, (os.cpu_count() or 4) - 1))
+                workers = _worker_count(3)
                 done = 0
                 with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {pool.submit(self._compress, job, tmpdir): (index, job)
+                    futures = {pool.submit(self._compress, job, tmpdir, index): (index, job)
                                for index, job in enumerate(self.jobs)}
                     for future in as_completed(futures):
                         index, job = futures[future]
@@ -1044,10 +1050,10 @@ class UploadPage(FluentPage):
 
             def run(inner):
                 # 逐格检查是 PyMuPDF 渲染 + OpenCV 形态学：两个库在算的时候都放
-                # GIL，用线程池能把多核吃满。实测 47 份从 4.6s 降到 1.4s。
+                # GIL，用线程池能吃满剩下的核。实测 47 份 4.61s→3.29s（1.4x）。
                 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                workers = min(4, max(1, (os.cpu_count() or 4) - 1))
+                workers = _worker_count(4)
                 with ThreadPoolExecutor(max_workers=workers) as pool:
                     futures = {pool.submit(check_cells, p): p for p in paths}
                     for future in as_completed(futures):
