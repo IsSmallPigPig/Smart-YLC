@@ -202,6 +202,33 @@ def test_home_and_upload_build(app, isolated_store):
     assert not upload.upload_btn.isEnabled()
 
 
+def test_save_config_keeps_workspace_dirs(app, isolated_store, tmp_path):
+    """保存设置不得把上传页加的来源目录清掉。
+
+    设置页只显示第一个目录，旧逻辑在「单值 ≠ 列表首项」时把列表收成单值：
+    上传页加的多目录、或移除过首个目录之后，下一次保存设置就会整列被覆盖，
+    表现是每次重新打开都要重选文件夹。列表必须以 workspaceDirs 为准。
+    """
+    from app.services import store, workspace
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir(); b.mkdir()
+    workspace.save_workspace_dirs([str(a), str(b)])
+
+    from app.ui.settings_page import SettingsPage
+
+    page = SettingsPage()
+    page.workspace_dir = ""            # 某处没同步过来的旧单值
+    page._save_config()
+    assert store.load()["workspaceDirs"] == [str(a), str(b)]
+
+    # 用户在设置页亲手选了目录，才收窄成这一个
+    page.workspace_dir = str(b)
+    page._ws_touched = True
+    page._save_config()
+    assert store.load()["workspaceDirs"] == [str(b)]
+
+
 def test_import_config_replaces_and_reloads(app, isolated_store, tmp_path):
     """导入配置 = 整份替换并即时重载；替换前留一份可回退的备份。"""
     from app.services import store
@@ -820,6 +847,34 @@ def test_browser_tab_click_does_not_start_drag(app, monkeypatch):
     blank = QPoint(560, 10)   # 标签段之外的空白
     row.mousePressEvent(press(blank))
     assert calls == [1], "标签段之外的空白仍应能拖动窗口"
+    row.deleteLater()
+
+
+def test_tab_bar_fills_row_and_keeps_add_button(app):
+    """标签条必须吃满可用宽度。
+
+    只按 sizeHint 给宽度（AlignLeft、不给 stretch）时，标签会被压到内容宽、
+    内置的 ＋ 按钮直接被挤出可见区——用户看到的就是「标签渲染不全、没有加号」。
+    """
+    from PyQt5.QtWidgets import QHBoxLayout
+
+    from app.ui.browser_page import TAB_HEIGHT, BranchTabBar, ChromeRow
+
+    row = ChromeRow()
+    row.setFixedSize(1000, TAB_HEIGHT + 4)
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(10, 4, 88, 0)
+    lay.setSpacing(4)
+    bar = BranchTabBar(row)
+    bar.add_tab("ssfz1", "普通高中高一1班")
+    lay.addWidget(bar, 1)
+    row.show()
+    app.processEvents()
+
+    assert bar.width() > 600, "标签条没有占满标题栏中间的空白"
+    assert bar.tabItem(0).width() == BranchTabBar.MAX_WIDTH, "标签没有被放宽到最大档"
+    assert bar.addButton.isVisible(), "＋ 按钮被挤出可见区域"
+    assert bar.addButton.x() + bar.addButton.width() <= bar.width()
     row.deleteLater()
 
 

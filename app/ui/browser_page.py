@@ -446,8 +446,11 @@ class BrowserWindow(FluentWindowBase):
         # 标签项会把按下事件转发到父级（TabItem 的行为），不豁免的话按在标签
         # 上也会发起窗口拖动，标签就点不动了
         self.tab_row.add_no_drag(self.tab_bar)
-        row.addWidget(self.tab_bar, 0, Qt.AlignmentFlag.AlignLeft)
-        row.addStretch(1)
+        # 标签条吃满「左边到导航按钮之间」的宽度：只按 sizeHint 给宽度的话，
+        # 标签会被压到内容宽、内置的 ＋ 按钮直接被挤出可见区域（标签宽度渲染
+        # 不全、加号消失）。标签本身仍靠左（TabBar 自己的 itemLayout 是 AlignLeft），
+        # 多出来的空间由 TabBar 内部的弹簧收掉。
+        row.addWidget(self.tab_bar, 1)
 
         # 导航与重新登录贴在窗口按钮左侧：标签再多也不会盖住它们
         self.back_btn = TransparentToolButton(FIF.LEFT_ARROW, self.tab_row)
