@@ -32,6 +32,22 @@ from urllib.parse import parse_qs, urlparse
 from app.services import phone_sync
 from app.services.lan_page import UPLOAD_PAGE
 
+class _LanHTTPServer(ThreadingHTTPServer):
+    """跳过 HTTPServer server_bind 里的 getfqdn 反向 DNS。
+
+    用 0.0.0.0 绑定时 getfqdn 会做 PTR 查询，在没有 DNS 的局域网里要等满
+    30 秒超时——用户按「开始接收」后界面就这么卡住。这里只要 server_port，
+    从不读 server_name，所以直接抄 socketserver 的 bind，不碰 DNS。
+    """
+
+    def server_bind(self):
+        import socketserver
+
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
+
+
 DEFAULT_PORT = 8765
 # 单次上传上限。入团志愿书扫描件实测 1.2~8MB，留到 40MB 足够，
 # 也挡住误传的大文件（全程流式写盘，不吃内存）
@@ -121,7 +137,7 @@ class LanShare:
         last_error: Exception | None = None
         for port in (self.port, 0):                   # 端口被占就交给系统分配
             try:
-                server = ThreadingHTTPServer(("0.0.0.0", port), handler)
+                server = _LanHTTPServer(("0.0.0.0", port), handler)
             except OSError as exc:
                 last_error = exc
                 continue

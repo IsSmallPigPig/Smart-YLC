@@ -146,3 +146,46 @@ def test_dialog_builds_and_toggles(qapp_session, tmp_path, monkeypatch):
     dlg.close()
     dlg.deleteLater()
     host.deleteLater()
+
+
+def test_start_does_not_do_reverse_dns(monkeypatch):
+    """0.0.0.0 的 PTR 查询在无 DNS 环境下卡 30 秒——start 绝不能触发它。
+
+    回归：HTTPServer.server_bind 默认调 getfqdn('0.0.0.0')，用户按「开始接收」
+    就卡半分钟。LanShare 用自己的 server 子类跳过反解。
+    """
+    import socket
+
+    from app.services import lan_share
+
+    def explode(host):
+        raise AssertionError(f"start 不该做反向 DNS 解析：{host!r}")
+
+    monkeypatch.setattr(socket, "getfqdn", explode)
+    share = lan_share.LanShare(port=0)
+    url = share.start()
+    try:
+        assert url.startswith("http://")
+    finally:
+        share.stop()
+
+
+def test_dialog_is_fluent_panel_not_toplevel(qapp_session, tmp_path, monkeypatch):
+    """手机同步必须是居中 Fluent 弹窗，不再是带系统标题栏的独立 QDialog。"""
+    monkeypatch.setattr(phone_sync, "sync_dir", lambda today=None: str(tmp_path))
+
+    from qfluentwidgets import MessageBoxBase
+
+    from app.ui.phone_sync_dialog import PhoneSyncDialog
+
+    from PyQt5.QtWidgets import QWidget
+
+    host = QWidget()
+    host.resize(900, 700)
+    dlg = PhoneSyncDialog(host, auto_start=False)
+    try:
+        assert isinstance(dlg, MessageBoxBase), "应复用 Fluent 弹窗基类"
+        # MaskDialogBase 会铺满父窗口做遮罩，所以 parent 必须就是主窗口
+        assert dlg.parent() is host
+    finally:
+        dlg._cleanup()
