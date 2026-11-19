@@ -451,7 +451,9 @@ class MainWindow(MSFluentWindow):
         self.tray_menu = menu
         from app.tray import bind_tray_menu
 
-        bind_tray_menu(self.tray, menu)
+        # 是否需要自己弹（见 bind_tray_menu）。macOS 上系统已经会弹，再自己弹
+        # 一次就会同时出现两个菜单。
+        self._tray_self_popup = bind_tray_menu(self.tray, menu)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
 
@@ -461,8 +463,9 @@ class MainWindow(MSFluentWindow):
         if reason in (QSystemTrayIcon.ActivationReason.Trigger,
                       QSystemTrayIcon.ActivationReason.DoubleClick):
             self._restore_from_tray()
-        elif reason == QSystemTrayIcon.ActivationReason.Context:
-            # Windows 没有 contextMenu 时右键才走到这里（见 bind_tray_menu）
+        elif (reason == QSystemTrayIcon.ActivationReason.Context
+              and getattr(self, "_tray_self_popup", False)):
+            # 只有没挂 contextMenu 的平台才自己弹（见 bind_tray_menu）
             from PyQt5.QtGui import QCursor
 
             self.tray_menu.exec(QCursor.pos())
