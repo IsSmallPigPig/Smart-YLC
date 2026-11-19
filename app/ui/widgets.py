@@ -23,7 +23,7 @@ from qfluentwidgets import (
     qconfig,
 )
 
-from app.ui.page import note_label, theme_font
+from app.ui.page import note_label, paint_tinted_card, theme_font
 
 from app.ui import palette as P
 
@@ -148,7 +148,8 @@ class StatusRow(CardWidget):
     状态标签用与组织管理成员标签同款的实心小标签（PillLabel：纯色底白字、4px 圆角），
     不再用左侧圆点 + 浅底软标签的混搭，跨页视觉统一。
 
-    item 结构：{title, note, tone, status, meta: [str], path: str（可点开预览）}
+    item 结构：{title, note, tone, status, meta: [str], path: str（可点开预览）,
+    abnormal: bool（被标记为异常：铺 warning 黄底，与组织管理页的异常支部同款）}
     """
 
     clicked = Signal(str)   # 带档案路径，点行即打开预览详情
@@ -156,6 +157,7 @@ class StatusRow(CardWidget):
     def __init__(self, item: dict, parent=None):
         super().__init__(parent)
         self.path = str(item.get("path") or "")
+        self.abnormal = bool(item.get("abnormal"))
         if self.path:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
         # 嵌在卡片里的小控件：半径按同心圆从卡片半径推出来，
@@ -189,6 +191,15 @@ class StatusRow(CardWidget):
         if self.path:
             self.clicked.emit(self.path)
         super().mousePressEvent(e)
+
+    def paintEvent(self, e):
+        """异常档案铺 warning 黄底：一眼能从正常的白底行里分出来。"""
+        super().paintEvent(e)
+        if not self.abnormal:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        paint_tinted_card(self, p, "warning", radius=self.getBorderRadius())
 
     def set_state(self, status: str, tone: str, note: str | None = None):
         if note is not None and self.note_lbl is not None:

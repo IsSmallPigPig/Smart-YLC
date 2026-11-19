@@ -18,6 +18,17 @@ from app.domain.naming import analyze_file_name
 # 系统/编辑器留下的垃圾目录，进不进都一样拖慢扫描
 SKIP_DIRS = {"__MACOSX", ".git", ".idea", ".vscode", "node_modules"}
 
+ABNORMAL_DIR_NAME = "异常档案"
+"""来源目录下的这个子文件夹是异常档案的存放处：标记异常=移进来，
+取消标记=移回上一层。扫描照常收这里的 PDF，但它们在界面上归入异常、
+不参与上传——「存在异常」按钮查的就是它。"""
+
+
+def is_abnormal_path(path: str) -> bool:
+    """路径是否落在「异常档案」文件夹里（任意一层）。"""
+    parts = os.path.normpath(path).split(os.sep)
+    return ABNORMAL_DIR_NAME in parts
+
 
 @dataclass
 class FolderScan:
@@ -74,3 +85,24 @@ def relative_to(root: str, path: str) -> str:
     except ValueError:
         return os.path.basename(path)
     return os.path.basename(path) if rel.startswith("..") else rel
+
+
+def abnormal_target(path: str) -> str:
+    """把档案移进「异常档案」后的目标路径：就地放——它现在在哪个文件夹，
+    异常文件夹就在哪个文件夹下（高一1班/张三.pdf → 高一1班/异常档案/张三.pdf）。"""
+    folder = os.path.dirname(path)
+    return os.path.join(folder, ABNORMAL_DIR_NAME, os.path.basename(path))
+
+
+def normal_target(path: str) -> str:
+    """把档案移出「异常档案」后的目标路径：回到异常文件夹的上一层。
+    同名已存在时加 (2)(3)…，与 phone_sync 的落盘规则一致。"""
+    abnormal_folder = os.path.dirname(path)
+    folder = os.path.dirname(abnormal_folder)
+    base, ext = os.path.splitext(os.path.basename(path))
+    target = os.path.join(folder, base + ext)
+    n = 2
+    while os.path.exists(target):
+        target = os.path.join(folder, f"{base}({n}){ext}")
+        n += 1
+    return target
