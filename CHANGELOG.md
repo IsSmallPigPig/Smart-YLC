@@ -7,6 +7,18 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.15
+
+- [1cfb1ab] fix(phone): 手机接收不再卡 30 秒；同步弹窗改为 Fluent 居中弹层
+- [77bf4d4] refactor(simplify): 收敛并发工具函数，修临时文件覆盖与失真的基准注释
+- [62be2d8] fix(upload): 提交阶段的进度文案改成「开始提交」与「已提交」
+- [61f618d] docs(copy): 引导页与行注释里与当前行为不一致的说明
+- [7aa1d8e] style(ui): 三处自写 hex 改用 palette token
+- [51767e8] refactor: 清理未使用的导入与死变量；修 fit_table_columns 忽略 skip_cols
+- [d48d6a1] perf(upload): 逐格检查与上传改并发；新增界面文案 lint
+
+@AnkoQAQ
+
 ## v1.0.14
 
 - [24403e0] fix(zh): 中文路径与中文文件名的四处故障
