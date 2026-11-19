@@ -104,13 +104,25 @@ def examine(path: str, expected_pages: int = 0) -> ArchiveExam:
                         pno, "no_image", "这一页没有图像，扫描可能缺失"))
                     continue
 
-                # 取第一张（扫描件每页一张）的实际像素尺寸
+                # 取第一张（扫描件每页一张）的实际像素尺寸。
+                # extract_image 会把整张 JPEG 解码再取宽高，单页 ~20ms；
+                # 直接读 Width/Height 键是纯元数据，快两个数量级。
                 xref = images[0][0]
-                info = doc.extract_image(xref)
-                w, h = info.get("width", 0), info.get("height", 0)
+                try:
+                    w = int(doc.xref_get_key(xref, "Width")[1] or 0)
+                    h = int(doc.xref_get_key(xref, "Height")[1] or 0)
+                except (ValueError, TypeError):
+                    w = h = 0
                 if w and h and (w < _MIN_IMG_PX or h < _MIN_IMG_PX):
                     exam.issues.append(PageIssue(
                         pno, "tiny", f"图像分辨率过低：{w}x{h}"))
+
+                tail = (exam.pages >= _TAIL_MIN_TOTAL
+                        and pno > exam.pages - _TAIL_PAGES)
+                if tail:
+                    # 末尾三页只做「有没有图像」的检查，不再渲染缩略图算灰度：
+                    # 空白提示已经在这几页关掉了，渲染纯属白跑（每页 ~4ms）
+                    continue
 
                 pix = page.get_pixmap(matrix=pymupdf.Matrix(_THUMB_SCALE, _THUMB_SCALE),
                                       colorspace=pymupdf.csGRAY)
@@ -119,9 +131,7 @@ def examine(path: str, expected_pages: int = 0) -> ArchiveExam:
                     exam.issues.append(PageIssue(pno, "broken", "页面渲染为空"))
                     continue
                 std = float(a.astype(float).std())
-                tail = (exam.pages >= _TAIL_MIN_TOTAL
-                        and pno > exam.pages - _TAIL_PAGES)
-                if std < _BLANK_STD and not tail:
+                if std < _BLANK_STD:
                     # 近乎纯白。13 页档案的第 11–13 页是备注与说明，按「空白」
                     # 提示只会让每份档案都挂着几条待确认，直接跳过；正文里的
                     # 签字页/盖章页同样常见近乎纯白，所以只提示、不拦截。
