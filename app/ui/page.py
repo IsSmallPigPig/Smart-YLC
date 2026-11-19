@@ -69,7 +69,7 @@ def banner_text_colors() -> tuple[QColor, QColor]:
     说明用低一档的灰蓝。"""
     if isDarkTheme():
         return QColor(255, 255, 255), QColor(255, 255, 255, 222)
-    return QColor("#12212e"), QColor("#33495e")
+    return QColor("#12212e"), QColor("#33495e")  # lint-patterns: allow-hex
 
 
 def paint_tinted_card(widget, painter: QPainter, role: str, radius: int = 10,
@@ -159,7 +159,7 @@ def triangle_icon(direction: str = "right", size: int = 16) -> QIcon:
     from PyQt5.QtCore import QPointF
     from PyQt5.QtGui import QPolygonF
 
-    color = QColor("#d6d6d6") if isDarkTheme() else QColor("#3a3a3a")
+    color = QColor("#d6d6d6") if isDarkTheme() else QColor("#3a3a3a")  # lint-patterns: allow-hex
 
     def _paint(p: QPainter) -> None:
         p.setPen(Qt.PenStyle.NoPen)

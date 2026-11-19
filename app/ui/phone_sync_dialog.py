@@ -126,8 +126,8 @@ class PhoneSyncDialog(FluentPanelDialog):
             self.qr_label.clear()
             return
         self.state_label.setText(
-            "手机与电脑连同一个 Wi-Fi，用手机相机或微信扫下面的二维码，"
-            "选好 PDF 后点「开始传输」。传输只在局域网内进行，不经过互联网。")
+            "手机与电脑连同一个 Wi-Fi，用 App 扫二维码配对后，"
+            "自动传输手机上还没传过的 PDF。全程只在局域网内进行。")
         self.addr_label.setText(url)
         self._show_qr(url)
         self._start_timer()
