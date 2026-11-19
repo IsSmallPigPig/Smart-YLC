@@ -7,6 +7,14 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.13
+
+- [6b582c0] fix(windows): 深色下关闭窗口材质，系统背板会把整窗刷白
+- [964c5f5] fix(build): 打包整包收集 numpy / cv2 / pymupdf
+- [2521d5e] fix(upload): 来源目录卡片不再等扫描完成才出现
+
+@AnkoQAQ
+
 ## v1.0.12
 
 - [24153c3] fix(ci): dmg 制作步骤加三次重试并保留 hdiutil 输出
