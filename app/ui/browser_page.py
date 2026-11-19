@@ -766,7 +766,10 @@ class BrowserWindow(FluentWindowBase):
         material = normalize(material)
         self._material = material
         if sys.platform == "darwin":
-            self._translucent = material != "none"
+            from qfluentwidgets import isDarkTheme as _dark
+
+            # 与主窗口一致：浅色下不开混合层
+            self._translucent = material != "none" and _dark()
         elif sys.platform == "win32":
             self._translucent = windows_material_available(material)
         else:

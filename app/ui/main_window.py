@@ -706,12 +706,15 @@ class MainWindow(MSFluentWindow):
         把原来「切一次主题重建上百个控件」的开销去掉，只更新按主题取色的文字。
         """
         self.update()
+        # 衬纸色按主题取（浅色近白 / 深色近黑）。不重设的话，切到浅色后窗口
+        # 还压着深色那层半透明底，整屏发灰、文字发虚——用户报的「可读性差」。
+        self._apply_window_background()
         page = getattr(self, "messages_page", None)
         if page is not None:
             page.apply_theme()
-        # 亚克力的衬纸色烘焙在 ACENT_POLICY 里，换主题得重下一遍；Mica 由基类
-        # （_onThemeChangedFinished）自己跟着重挂。浏览器窗口是独立窗口，一起换。
-        if sys.platform == "win32" and self._translucent:
+        # 换主题要重挂：Windows 的亚克力衬纸烘焙在 ACCENT_POLICY 里；macOS 上
+        # 材质本身跟着深浅开关（浅色关、深色开）。浏览器窗口是独立窗口，一起换。
+        if self._material != "none":
             self.apply_material(self._material)
     def apply_theme_async(self, mode: str, done=None):
         """切换明暗模式：画面淡出 → 换样式 → 淡入。
@@ -1079,8 +1082,11 @@ class MainWindow(MSFluentWindow):
         material = normalize(material)
         self._material = material
         if sys.platform == "darwin":
-            # 混合层只在 macOS / Windows 实现；其他平台保持纯色底（否则背景没人画，窗口发黑）
-            self._translucent = material != "none"
+            # macOS 的浅色亚克力透的是桌面壁纸，叠出来是一层灰雾，正文压不住
+            # （用户实测可读性差）；浅色一律铺不透明底，深色才走混合层。
+            from qfluentwidgets import isDarkTheme as _dark
+
+            self._translucent = material != "none" and _dark()
         elif sys.platform == "win32":
             self._translucent = windows_material_available(material)
         else:

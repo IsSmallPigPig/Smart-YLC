@@ -51,7 +51,10 @@ def window_background(translucent: bool) -> tuple[QColor, QColor]:
         return QColor(240, 244, 249), QColor(32, 32, 32)
     if sys.platform == "win32":
         return QColor(0, 0, 0, 0), QColor(0, 0, 0, 0)
-    return QColor(250, 251, 253, 96), QColor(20, 22, 26, 112)
+    # macOS 的混合层透的是桌面壁纸：只压四成白时，浅色下整屏变成一层灰雾，
+    # 正文压在灰上发虚、卡片边界也糊。浅色提到八成、深色提到六成，材质还在，
+    # 字和卡片回到能读的对比度。
+    return QColor(250, 251, 253, 205), QColor(20, 22, 26, 150)
 
 
 def banner_stops() -> tuple[QColor, QColor]:
