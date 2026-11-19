@@ -1074,28 +1074,23 @@ class UploadPage(FluentPage):
         self._show_preview(path, name)
 
     def _show_preview(self, path: str, name: str):
-        from app.ui.archive_preview import ArchivePreviewView
+        from app.ui.archive_preview import ArchivePreviewDialog
 
         if not os.path.isfile(path):
             InfoBar.warning("文件不在了", path, duration=4000, parent=self)
             return
         if self._preview_dialog is not None:
             self._preview_dialog.close()
-        dlg = QDialog(self.window())
-        dlg.setWindowTitle("档案详情")
-        dlg.resize(760, 900)
-        lay = QVBoxLayout(dlg)
-        lay.setContentsMargins(0, 0, 0, 0)
-        view = ArchivePreviewView(
+        # 单开窗口：用 Fluent 无边框对话框，材质跟着主窗口当前设置走
+        dlg = ArchivePreviewDialog(
             self, path, name, expected_pages=self._expected_pages(),
-            on_back=dlg.close,
             on_mark_abnormal=lambda p, bad: self._mark_abnormal(p, bad),
+            material=getattr(self.window_ref, "_material", "none"),
         )
-        lay.addWidget(view)
         if path in self._abnormal_paths:
-            view._set_abnormal(True)
+            dlg.view._set_abnormal(True)
         self._preview_dialog = dlg
-        self._preview_view = view
+        self._preview_view = dlg.view
 
         def _forget():
             self._preview_dialog = None

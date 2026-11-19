@@ -420,6 +420,57 @@ def test_upload_branch_cards_use_tags(app, isolated_store):
     assert upload.stat_values["branches"].text() == "1"
 
 
+def test_status_row_click_opens_without_signal_error(app):
+    """点一行不该崩：父类 CardWidget 的 clicked 是无参信号。
+
+    StatusRow 曾经把 clicked 重定义成 Signal(str)，父类 mouseReleaseEvent 里
+    `clicked.emit()` 少传一个参数，点任何一行都抛 TypeError。
+    """
+    from PyQt5.QtCore import QEvent, QPointF, Qt
+    from PyQt5.QtGui import QMouseEvent
+
+    from app.ui.widgets import StatusRow
+
+    row = StatusRow({"title": "张三", "path": "/tmp/a.pdf",
+                     "status": "可上传", "tone": "ok"})
+    got = []
+    row.opened.connect(got.append)
+
+    def mouse(kind, buttons, held):
+        return QMouseEvent(kind, QPointF(6, 6), QPointF(0, 0),
+                           buttons, held, Qt.KeyboardModifier.NoModifier)
+
+    row.mouseReleaseEvent(mouse(QEvent.Type.MouseButtonRelease,
+                               Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton))
+    row.mousePressEvent(mouse(QEvent.Type.MouseButtonPress,
+                             Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton))
+    assert got == ["/tmp/a.pdf"]
+    row.deleteLater()
+
+
+@pytest.mark.skipif(
+    sys.platform == "darwin" and os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"),
+    reason="无边框窗口要真实 NSWindow，离屏下 qframelesswindow 的原生钩子会崩",
+)
+def test_archive_preview_uses_fluent_dialog(app, tmp_path):
+    """档案详情是 Fluent 无边框窗口：没有系统标题栏，单开窗口就不放面包屑。"""
+    from PyQt5.QtWidgets import QWidget
+    from qfluentwidgets.window.fluent_window import MSFluentTitleBar
+
+    from app.ui.archive_preview import ArchivePreviewDialog
+
+    pdf = tmp_path / "张三+13800000000+入团志愿书.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    host = QWidget()
+    dlg = ArchivePreviewDialog(host, str(pdf), pdf.name, expected_pages=13)
+    assert isinstance(dlg.titleBar, MSFluentTitleBar)
+    assert not hasattr(dlg.view, "crumb"), "单开窗口不该有面包屑导航"
+    assert dlg.height() >= 720, "默认高度不能把预览压成一条"
+    dlg.close()
+    dlg.deleteLater()
+    host.deleteLater()
+
+
 @pytest.mark.skipif(
     sys.platform == "darwin" and os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"),
     reason="无边框窗口要真实 NSWindow，离屏下 qframelesswindow 的原生钩子会崩",

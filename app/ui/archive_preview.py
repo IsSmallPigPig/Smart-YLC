@@ -30,6 +30,7 @@ from qfluentwidgets import (
 from app.services.archive_exam import ArchiveExam, examine
 from app.services.form_cells import FormCellCheck, check as check_cells
 from app.ui import palette as P
+from app.ui.glass_window import GlassDialog
 from app.ui.org_manage_page import CrumbBar
 from app.ui.page import FluentPage, note_label, theme_font
 
@@ -98,7 +99,8 @@ class ArchivePreviewView(FluentPage):
     def __init__(self, upload_page, path: str, name: str,
                  expected_pages: int = 0,
                  on_back: Callable[[], None] | None = None,
-                 on_mark_abnormal: Callable[[str, bool], None] | None = None):
+                 on_mark_abnormal: Callable[[str, bool], None] | None = None,
+                 show_crumb: bool = True):
         super().__init__("page-archive-preview", upload_page)
         self.upload_page = upload_page
         self.path = path
@@ -117,12 +119,14 @@ class ArchivePreviewView(FluentPage):
         lay.setContentsMargins(32, 16, 32, 24)   # 子页面无 banner，顶部常规边距
         lay.setSpacing(10)
 
-        # 面包屑：上传档案 › 姓名（点击首页返回）
-        self.crumb = CrumbBar(self)
-        self.crumb.addItem("upload", "上传档案")
-        self.crumb.addItem("archive", name.replace("+入团志愿书.pdf", "").replace(".pdf", ""))
-        self.crumb.currentItemChanged.connect(self._on_crumb)
-        lay.addWidget(self.crumb)
+        # 面包屑只给「页内导航」那一版用；单开窗口有自己的标题栏和关闭按钮，
+        # 再放一条「上传档案 › 姓名」既占高度也点不出去
+        if show_crumb:
+            self.crumb = CrumbBar(self)
+            self.crumb.addItem("upload", "上传档案")
+            self.crumb.addItem("archive", name.replace("+入团志愿书.pdf", "").replace(".pdf", ""))
+            self.crumb.currentItemChanged.connect(self._on_crumb)
+            lay.addWidget(self.crumb)
 
         # 标题 + 操作
         head = QHBoxLayout()
@@ -163,6 +167,10 @@ class ArchivePreviewView(FluentPage):
         self.scroll = QScrollArea(self)
         self.scroll.setWidgetResizable(True)
         self.scroll.setWidget(self.preview_lbl)
+        # 滚动视口默认用 palette 的 base 填底（深色主题下是一整块近黑），
+        # 浅色窗口里看着像另一套皮肤；让它跟着窗口底色走
+        self.scroll.viewport().setAutoFillBackground(False)
+        self.scroll.viewport().setStyleSheet("background: transparent")
         lay.addWidget(self.scroll, 1)
 
         # 翻页
@@ -175,6 +183,7 @@ class ArchivePreviewView(FluentPage):
         self.next_btn.setToolTip("下一页")
         self.next_btn.clicked.connect(lambda: self.goto(self._page + 1))
         self.page_label = note_label("第 0 / 0 页")
+        self.page_label.setWordWrap(False)   # 换行会把「第 1 / 13 页」拆成两行
         nav.addStretch(1)
         nav.addWidget(self.prev_btn)
         nav.addWidget(self.page_label)
@@ -258,31 +267,37 @@ class ArchivePreviewView(FluentPage):
         self._worker.failed.connect(lambda m: self.preview_lbl.setText(f"渲染失败：{m}"))
         self._worker.start()
 
+    def _fit(self, pix: QPixmap) -> QPixmap:
+        """整页缩进可视区。
+
+        只按宽度缩的话，A4 扫描页的高度通常是可视区的两倍：翻到任何一页都只能
+        看到上半截，得靠滚动条一点点挪。按「宽高都不超过可视区」缩，一页一眼看完。
+        """
+        vp = self.scroll.viewport()
+        w = max(vp.width() - 24, 240)
+        h = max(vp.height() - 24, 300)
+        if pix.width() <= w and pix.height() <= h:
+            return pix
+        return pix.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio,
+                          Qt.TransformationMode.SmoothTransformation)
+
     def _show_image(self, img: QImage, page_no: int):
         if page_no != self._page:
             return
-        pix = QPixmap.fromImage(img)
-        # 窄窗口时缩到可视宽度，避免横向滚动
-        avail = max(self.scroll.viewport().width() - 24, 200)
-        if pix.width() > avail:
-            pix = pix.scaledToWidth(avail, Qt.TransformationMode.SmoothTransformation)
-        self._base_pixmap = pix
-        self.preview_lbl.setPixmap(self._with_blank_marks(pix, page_no))
+        self._full_pixmap = QPixmap.fromImage(img)
+        self._base_pixmap = self._fit(self._full_pixmap)
+        self.preview_lbl.setPixmap(self._with_blank_marks(self._base_pixmap, page_no))
         self.page_label.setText(f"第 {page_no} / {self._total or '?'} 页")
         self.prev_btn.setEnabled(page_no > 1)
         self.next_btn.setEnabled(not self._total or page_no < self._total)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        # 宽度变化后已有图片按比例重缩放，红框要一起重画
-        base = getattr(self, "_base_pixmap", None)
-        if base is not None:
-            avail = max(self.scroll.viewport().width() - 24, 200)
-            pix = base
-            if pix.width() > avail:
-                pix = pix.scaledToWidth(avail, Qt.TransformationMode.SmoothTransformation)
-            self._base_pixmap = pix
-            self.preview_lbl.setPixmap(self._with_blank_marks(pix, self._page))
+        # 尺寸变化后从原图重算，不在已经缩小过的图上二次缩放（会越缩越糊）
+        full = getattr(self, "_full_pixmap", None)
+        if full is not None and not full.isNull():
+            self._base_pixmap = self._fit(full)
+            self.preview_lbl.setPixmap(self._with_blank_marks(self._base_pixmap, self._page))
 
     def _refresh_overlay(self):
         base = getattr(self, "_base_pixmap", None)
@@ -373,3 +388,40 @@ class ArchivePreviewView(FluentPage):
 
 def set_tip(widget, text: str):
     widget.setToolTip(text)
+
+
+class ArchivePreviewDialog(GlassDialog):
+    """档案详情窗口：Fluent 无边框 + 跟随主窗口的毛玻璃材质。
+
+    以前是裸 QDialog：系统灰标题栏、系统边框，和主窗口不像一套东西；高度还写死
+    900，在笔记本上要么超出屏幕、要么刚好把预览压成一条。这里按可用屏幕取高度，
+    预览页整页缩放（见 ArchivePreviewView._fit），一页一眼看完。
+    """
+
+    def __init__(self, upload_page, path: str, name: str, expected_pages: int = 0,
+                 on_mark_abnormal: Callable[[str, bool], None] | None = None,
+                 material: str = "none"):
+        super().__init__("档案详情", upload_page.window(), material=material)
+        self.view = ArchivePreviewView(
+            upload_page, path, name, expected_pages=expected_pages,
+            on_mark_abnormal=on_mark_abnormal, show_crumb=False)
+        self.body.addWidget(self.view)
+        self._place_on_screen()
+
+    def _place_on_screen(self):
+        from PyQt5.QtWidgets import QApplication
+
+        screen = QApplication.primaryScreen()
+        area = screen.availableGeometry() if screen is not None else None
+        if area is None:
+            self.resize(820, 960)
+            return
+        # 预览是竖版 A4：窗口再宽也只是在两侧留白，收到 920 更紧凑；
+        # 高度取可用区的九成，同时保证整窗不会超出屏幕
+        width = min(920, max(680, int(area.width() * 0.72)), area.width() - 80)
+        height = min(1180, max(720, int(area.height() * 0.90)), area.height() - 80)
+        self.resize(width, height)
+        geo = self.frameGeometry()
+        geo.moveCenter(area.center())
+        self.move(geo.topLeft())
+
