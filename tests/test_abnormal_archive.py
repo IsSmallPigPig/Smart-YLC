@@ -72,7 +72,6 @@ def _stub_page():
     stub._ignored_blanks = set()
     stub._preview_view = None
     stub.refresh = lambda: None
-    stub._refresh_abnormal_button = lambda: None
     stub._mark_abnormal = lambda path, bad: upload_page.UploadPage._mark_abnormal(
         stub, path, bad)
     stub._relocate = lambda path, bad: upload_page.UploadPage._relocate(

@@ -458,9 +458,6 @@ class UploadPage(FluentPage):
         self.stop_btn = PushButton(FIF.PAUSE, "停止")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(lambda: self.worker and self.worker.stop())
-        self.abnormal_btn = PushButton(FIF.INFO, "存在异常")
-        set_tip(self.abnormal_btn, "查看被标记为异常的档案，这些档案不会上传")
-        self.abnormal_btn.clicked.connect(self._show_abnormal)
         # 电脑端是管理端，只收不发：手机扫码把档案汇总进来，不提供往手机推文件
         self.phone_btn = PushButton(FIF.DOWNLOAD, "手机接收")
         set_tip(self.phone_btn, "同一个 Wi-Fi 下，手机扫码把 PDF 传进这台电脑（只接收）")
@@ -468,7 +465,7 @@ class UploadPage(FluentPage):
         # 功能按钮统一落在 banner 右下角（不居中）。查空格不设按钮：扫描完自动跑，
         # 进度挂在右下角的浮动进度条上（见 _start_cell_check）
         for w in (self.pick_btn, self.rescan_btn, self.upload_btn,
-                  self.stop_btn, self.abnormal_btn, self.phone_btn):
+                  self.stop_btn, self.phone_btn):
             self.header.add_control(w)
 
         # 已知问题公告（banner 下方）：上传检查出的问题收进这里，不再重复弹窗
@@ -857,7 +854,6 @@ class UploadPage(FluentPage):
         auto = {str(s.path) for s in statuses if is_abnormal_path(str(s.path))}
         keep = {p for p in self._abnormal_paths if os.path.isfile(p)}
         self._abnormal_paths = auto | keep
-        self._refresh_abnormal_button()
 
     # ---------- 来源目录 ----------
 
@@ -1137,7 +1133,6 @@ class UploadPage(FluentPage):
                 self._abnormal_paths.add(path)
             else:
                 self._abnormal_paths.discard(path)
-            self._refresh_abnormal_button()
             return
 
         if self._preview_view is not None and self._preview_view.path == path:
@@ -1160,20 +1155,6 @@ class UploadPage(FluentPage):
                           duration=6000, parent=self)
             return None
         return target
-
-    def _refresh_abnormal_button(self):
-        n = len(self._abnormal_paths)
-        self.abnormal_btn.setText(f"存在异常 {n}" if n else "存在异常")
-
-    def _show_abnormal(self):
-        """「存在异常」按钮：有异常就打开第一份，没有就提示。"""
-        bad = [s for s in self.statuses
-               if str(s.path) in self._abnormal_paths or not s.usable]
-        if not bad:
-            InfoBar.success("没有异常", "所有档案都通过了检查", duration=3000, parent=self)
-            return
-        s = bad[0]
-        self._show_preview(str(s.path), s.name)
 
     def _row_item(self, status) -> dict:
         """把一份档案的状态翻译成折叠卡片里一行的展示数据。"""
