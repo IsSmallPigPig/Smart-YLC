@@ -161,10 +161,13 @@ def _install_dmg(path: str) -> None:
     """挂载 dmg，把里面的 .app 复制到「应用程序」，最后卸载镜像。"""
     proc = subprocess.run(
         ["hdiutil", "attach", "-nobrowse", "-noautoopen", path],
-        capture_output=True, text=True, check=True,
+        capture_output=True, check=True,
     )
+    # hdiutil 输出按 UTF-8 解：卷名可能就是「智慧团委」，text=True 会按
+    # locale 编码解（Windows 上是 cp936 之外的某些环境），中文卷名变乱码
+    stdout = proc.stdout.decode("utf-8", "replace")
     mount = None
-    for line in proc.stdout.splitlines():
+    for line in stdout.splitlines():
         candidate = line.split("\t")[-1].strip()
         if candidate.startswith("/Volumes/"):
             mount = Path(candidate)
