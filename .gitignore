@@ -11,3 +11,6 @@ dist/
 
 # 打包时生成的构建目标（版本号旁的那项系统变体信息）
 app/_build_target.py
+
+# codeview 本地代码健康报告（每次扫描重新生成）
+/.codeview/
