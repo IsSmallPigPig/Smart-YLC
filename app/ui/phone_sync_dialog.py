@@ -1,4 +1,4 @@
-"""手机同步对话框：局域网直传（首选），中转作为兜底。
+"""手机同步弹窗：局域网直传（首选），中转作为兜底。
 
 界面要解决的核心问题：让用户在两秒内知道「现在该怎么把手机上的 PDF 送进来」。
 所以顺序是：状态 → 二维码/地址 → 收到的文件；不做没用的设置项。
@@ -10,91 +10,92 @@
 from __future__ import annotations
 
 import io
+
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
-    QDialog,
+    QApplication,
     QHBoxLayout,
     QLabel,
-    QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
     BodyLabel,
     FluentIcon as FIF,
-    PrimaryPushButton,
-    PushButton,
     StrongBodyLabel,
     ToolButton,
 )
 
 from app.services.lan_share import LanShare, Received, lan_addresses
 from app.ui import palette as P
-from app.ui.page import note_label, theme_font
+from app.ui.dialogs import FluentPanelDialog
+from app.ui.page import theme_font
 
 
-class PhoneSyncDialog(QDialog):
-    """手机 → 电脑的局域网接收窗口。"""
+class PhoneSyncDialog(FluentPanelDialog):
+    """手机 → 电脑的局域网接收弹窗。
+
+    用 FluentPanelDialog（MessageBoxBase 子类）而不是顶层 QDialog：与主窗口同一套
+    遮罩、圆角、居中与主题，不再出现带系统标题栏的独立深色窗口。沿用项目的全局
+    约定——show() 非模态打开，绝不用 exec() 的嵌套事件循环。
+    """
 
     file_received = Signal(str)     # 落盘路径
 
     def __init__(self, parent=None, auto_start: bool = True):
         super().__init__(parent)
-        self.setWindowTitle("手机同步")
-        self.resize(520, 640)
+        self.widget.setMinimumWidth(480)
         self.share = LanShare(on_received=self._on_received)
         self._timer: QTimer | None = None
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 20, 24, 20)
-        lay.setSpacing(12)
+        self.viewLayout.setSpacing(12)
 
-        title = StrongBodyLabel("从手机传档案", self)
+        title = StrongBodyLabel("从手机传档案", self.widget)
         theme_font(title, P.FONT['title'], int(title.font().weight()))
-        lay.addWidget(title)
+        self.viewLayout.addWidget(title)
 
-        self.state_label = BodyLabel("正在准备…", self)
+        self.state_label = BodyLabel("正在准备…", self.widget)
         self.state_label.setWordWrap(True)
-        lay.addWidget(self.state_label)
+        self.viewLayout.addWidget(self.state_label)
 
         # 二维码：手机扫一下就能打开上传页，不用手输 IP
-        self.qr_label = QLabel(self)
+        self.qr_label = QLabel(self.widget)
         self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qr_label.setMinimumHeight(220)
-        lay.addWidget(self.qr_label, 1)
+        self.viewLayout.addWidget(self.qr_label, 1)
 
-        # 地址行：二维码扫不了时手输
-        addr_row = QWidget(self)
+        # 地址行：二维码扫不了时手输；两个图标按钮分别复制地址、打开同步文件夹
+        addr_row = QWidget(self.widget)
         addr_lay = QHBoxLayout(addr_row)
         addr_lay.setContentsMargins(0, 0, 0, 0)
         addr_lay.setSpacing(8)
-        self.addr_label = note_label("—")
+        self.addr_label = BodyLabel("—", addr_row)
         self.addr_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.copy_btn = ToolButton(FIF.COPY, addr_row)
         self.copy_btn.setToolTip("复制地址")
         self.copy_btn.clicked.connect(self._copy_address)
-        addr_lay.addWidget(self.addr_label)
+        self.folder_btn = ToolButton(FIF.FOLDER, addr_row)
+        self.folder_btn.setToolTip("打开同步文件夹")
+        self.folder_btn.clicked.connect(self._open_folder)
+        addr_lay.addWidget(self.addr_label, 1)
         addr_lay.addWidget(self.copy_btn)
-        addr_lay.addStretch(1)
-        lay.addWidget(addr_row)
+        addr_lay.addWidget(self.folder_btn)
+        self.viewLayout.addWidget(addr_row)
 
-        # 操作
-        btn_row = QWidget(self)
-        btn_lay = QHBoxLayout(btn_row)
-        btn_lay.setContentsMargins(0, 0, 0, 0)
-        btn_lay.setSpacing(12)
-        self.toggle_btn = PrimaryPushButton(FIF.DOWNLOAD, "开始接收", btn_row)
-        self.toggle_btn.clicked.connect(self._toggle)
-        self.open_btn = PushButton(FIF.FOLDER, "打开同步文件夹", btn_row)
-        self.open_btn.clicked.connect(self._open_folder)
-        for b in (self.toggle_btn, self.open_btn):
-            b.setMinimumWidth(140)
-            btn_lay.addWidget(b, 1)
-        lay.addWidget(btn_row)
-
-        self.result_label = BodyLabel("", self)
+        self.result_label = BodyLabel("", self.widget)
         self.result_label.setWordWrap(True)
-        lay.addWidget(self.result_label)
+        self.viewLayout.addWidget(self.result_label)
+
+        # 底部复用 MessageBoxBase 的按钮区：主按钮切接收、次按钮关闭。
+        # 断开 yesButton 默认的 accept——点「停止/开始接收」不能把弹窗关掉。
+        self.yesButton.clicked.disconnect()
+        self.yesButton.clicked.connect(self._toggle)
+        self.cancelButton.setText("关闭")
+        # 兼容旧引用：开关按钮现在复用弹窗的 yesButton
+        self.toggle_btn = self.yesButton
+
+        # 无论点关闭、Esc 还是代码 reject，都先停掉 HTTP 服务
+        self.finished.connect(self._cleanup)
 
         if auto_start:
             self._toggle()
@@ -108,14 +109,14 @@ class PhoneSyncDialog(QDialog):
             self.qr_label.clear()
             self.addr_label.setText("—")
             self.state_label.setText("已停止接收。点「开始接收」重新开始。")
-            self.toggle_btn.setText("开始接收")
+            self.yesButton.setText("开始接收")
             return
         try:
             url = self.share.start()
         except OSError as exc:
             self.state_label.setText(f"无法开启：{exc}")
             return
-        self.toggle_btn.setText("停止接收")
+        self.yesButton.setText("停止接收")
         if not url:
             # 服务起来了但没有局域网地址：典型是电脑没连 Wi-Fi
             self.state_label.setText(
@@ -145,16 +146,14 @@ class PhoneSyncDialog(QDialog):
             self.qr_label.setText("（未安装二维码组件，请手动输入下面的地址）")
 
     def _copy_address(self):
-        from PyQt5.QtWidgets import QApplication
-
         text = self.addr_label.text()
         if text and text != "—":
             QApplication.clipboard().setText(text)
             self.result_label.setText("地址已复制，发到手机上打开即可。")
 
     def _open_folder(self):
-        from PyQt5.QtGui import QDesktopServices
         from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
 
         from app.services.phone_sync import sync_dir
 
@@ -192,11 +191,16 @@ class PhoneSyncDialog(QDialog):
             self.share.stop()
             self._stop_timer()
             self.state_label.setText("半小时没有收到文件，已自动停止接收。")
-            self.toggle_btn.setText("开始接收")
+            self.yesButton.setText("开始接收")
 
-    def closeEvent(self, event):
+    def _cleanup(self):
+        """弹窗关闭时停服务，避免端口与后台线程留到下一次打开。"""
         self.share.stop()
         self._stop_timer()
+
+    def closeEvent(self, event):
+        # finished 未覆盖的场景（如窗口被外部销毁）也要停
+        self._cleanup()
         super().closeEvent(event)
 
 
