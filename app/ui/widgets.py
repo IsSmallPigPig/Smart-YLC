@@ -171,7 +171,7 @@ class StatusRow(CardWidget):
     不再用左侧圆点 + 浅底软标签的混搭，跨页视觉统一。
 
     item 结构：{title, note, tone, status, meta: [str], path: str（可点开预览）,
-    abnormal: bool（被标记为异常：铺 warning 黄底，与组织管理页的异常支部同款）}
+    abnormal: bool（该行需要黄底：被人工标记为异常，或表格有漏填）}
     """
 
     # 不能叫 clicked：父类 CardWidget 自带 clicked = Signal()，在 mouseReleaseEvent
@@ -223,7 +223,7 @@ class StatusRow(CardWidget):
         super().mousePressEvent(e)
 
     def paintEvent(self, e):
-        """异常档案铺 warning 黄底：一眼能从正常的白底行里分出来。"""
+        """需要关注的行铺 warning 黄底：一眼能从正常行里分出来。"""
         super().paintEvent(e)
         if not self.abnormal:
             return
