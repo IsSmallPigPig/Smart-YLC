@@ -771,7 +771,12 @@ class BrowserWindow(FluentWindowBase):
             # 与主窗口一致：浅色下不开混合层
             self._translucent = material != "none" and _dark()
         elif sys.platform == "win32":
-            self._translucent = windows_material_available(material)
+            # Windows 深色下系统背板会把整窗刷成白色（Win11 22H2 的
+            # DWMSBT_TRANSIENTWINDOW 拿不到暗色 tint），页面直接不可读。
+            # 与 macOS 浅色对称：深色铺不透明底，浅色才挂材质。
+            from qfluentwidgets import isDarkTheme as _dark
+
+            self._translucent = windows_material_available(material) and not _dark()
         else:
             self._translucent = False
         self._apply_background()
@@ -783,14 +788,20 @@ class BrowserWindow(FluentWindowBase):
             else:
                 disable_acrylic(self)
                 self._material_applied = True
-        elif sys.platform == "win32" and self._translucent:
+        elif sys.platform == "win32":
             from app.ui import palette as P
 
-            apply_rounded_corners(self, P.RADIUS["window"])
-            self._material_applied = apply_windows_effect(self, material)
-            if not self._material_applied:
-                self._translucent = False
-                self._apply_background()
+            if self._translucent:
+                apply_rounded_corners(self, P.RADIUS["window"])
+                self._material_applied = apply_windows_effect(self, material)
+                if not self._material_applied:
+                    self._translucent = False
+                    self._apply_background()
+            else:
+                from app.services.materials import remove_windows_effect
+
+                remove_windows_effect(self)     # 同上：深色下必须清掉旧背板
+                self._material_applied = True
         else:
             self._material_applied = True
         self.update()
