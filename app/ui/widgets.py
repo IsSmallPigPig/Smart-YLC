@@ -75,10 +75,15 @@ class PillLabel(QWidget):
         "ring-archive": (P.RING["archive"], "#1f2937"),
     }
 
-    def __init__(self, text: str = "", tone: str = "gray", parent=None):
+    def __init__(self, text: str = "", tone: str = "gray", parent=None,
+                 soft: str = ""):
         super().__init__(parent)
         self._text = text
         self._tone = tone
+        # soft 给「需要关注但不是错误」的标签用：底色取 TINT、文字取语义色，
+        # 深浅两套各用 DESIGN.md 定的那一组（浅 #FFF4CE 底/#A52D01 字，
+        # 深 #463414 底/#F9955C 字），不共用饱和徽章色
+        self._soft = soft
         self._dim = False
         self._fixed_w: int | None = None
         font = self.font()
@@ -119,16 +124,34 @@ class PillLabel(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bg, fg = self.TONES.get(self._tone, self.TONES["gray"])
-        # 深色下灰底提亮一档，避免灰块在深底上过重；彩色标签保持原色
-        color = QColor(bg)
-        if self._tone in ("gray", "darkgray"):
-            color = color.lighter(125) if isDarkTheme() else QColor(bg)
+        border = None
+        if self._soft:
+            # 软标签不能和它所在的行同一个 tint：异常行本来就铺了 warning 底，
+            # 标签再铺同色就糊在一起。浅色用浅黄实底 + 深橙字 + 同色描边；
+            # 深色反过来用亮橙实底 + 深字，暗底上才挑得出来。
+            if isDarkTheme():
+                color = P.fg(self._soft)
+                fg_color = QColor("#1c1208")
+            else:
+                color = P.tint(self._soft, 255)
+                fg_color = P.fg(self._soft)
+                border = fg_color
+        else:
+            bg, fg = self.TONES.get(self._tone, self.TONES["gray"])
+            fg_color = QColor(fg)
+            # 深色下灰底提亮一档，避免灰块在深底上过重；彩色标签保持原色
+            color = QColor(bg)
+            if self._tone in ("gray", "darkgray"):
+                color = color.lighter(125) if isDarkTheme() else QColor(bg)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(color)
         # 4px 圆角小标签，与组织管理成员标签（border-radius:4px）一致，不用满圆药丸
         p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 4, 4)
-        p.setPen(QColor(fg))
+        if border is not None:
+            p.setPen(border)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 4, 4)
+        p.setPen(fg_color)
         text = self._text
         if self._fixed_w:
             text = self.fontMetrics().elidedText(
@@ -189,6 +212,11 @@ class StatusRow(CardWidget):
         self.pill = PillLabel(str(status), item.get("tone", "muted")) if status else None
         if self.pill is not None:
             lay.addWidget(self.pill, 0, Qt.AlignmentFlag.AlignVCenter)
+        # 附加标签（如「漏填」）：状态标签只放一个，但一份档案可能同时有
+        # 两类问题，各自单独一个标签才分得清
+        for text_value, tone, soft in item.get("extra_pills") or []:
+            lay.addWidget(PillLabel(str(text_value), tone, soft=soft or ""),
+                          0, Qt.AlignmentFlag.AlignVCenter)
 
     def mousePressEvent(self, e):
         if self.path:

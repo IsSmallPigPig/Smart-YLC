@@ -1179,9 +1179,14 @@ class UploadPage(FluentPage):
         if not note:
             note = status.notice
         blanks = self._cell_counts.get(str(status.path))
+        extra_pills = []
         if blanks is not None:
             hint = f"表格 {blanks} 处空格" if blanks > 0 else "表格无空格"
             note = f"{note}，{hint}" if note else hint
+            if blanks > 0:
+                # 漏填单独一个黄标签：档案本身可能只是「名单里没找到」，
+                # 跟表格漏填是两件事，混在一个红标签里看不出来
+                extra_pills.append(("漏填", "warning", "warning"))
         # 已经按支部分组，行里不再重复「目标支部」；只有归不了组的才把支部当元信息
         if status.branch and status.problem:
             meta.append(status.branch)
@@ -1196,10 +1201,14 @@ class UploadPage(FluentPage):
             "title": status.name,
             "path": str(status.path),
             "note": note,
-            "tone": "warning" if abnormal else status.tone,
-            "status": "已标记" if abnormal else status.status_text,
+            # tone 只决定标签颜色，必须用 PillLabel 认识的取值（ok/warn/error/
+            # muted）。写 "warning" 会落进默认的灰色，标记异常的档案就认不出来
+            "tone": status.tone,
+            # 「已标记」只在真的移进异常档案时出现；结构异常仍是「异常」
+            "status": "已标记" if marked else status.status_text,
             "meta": meta,
             "abnormal": abnormal,
+            "extra_pills": extra_pills,
         }
 
     def _rebuild_branches(self, on_done=None):
