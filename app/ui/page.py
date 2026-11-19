@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import QHeaderView, QHBoxLayout, QTableView, QVBoxLayout, Q
 
 from app.ui.hidpi import hidpi_canvas, ui_dpr
 from app.ui import palette as P
-from qfluentwidgets import (Action, CaptionLabel, CardWidget, FluentIcon as FIF,
+from qfluentwidgets import (CaptionLabel, CardWidget, FluentIcon as FIF,
                             IconWidget, IndeterminateProgressRing, RoundMenu,
                             ScrollArea, StrongBodyLabel, TransparentToolButton,
                             isDarkTheme, qconfig)
@@ -676,13 +676,13 @@ def fit_table_columns(table: QTableView, stretch_last: bool = False,
     栈内 + 后台线程活跃时会触发 shiboken 空指针崩溃
     （QTableView::sizeHintForColumn → PepException_GetArgs，见 17:18/17:19 两份崩溃报告）。
     数据填充完成后调用一次即可。"""
-    from PyQt5.QtWidgets import QTableWidgetItem
-
     fm = QFontMetrics(table.font())
     header = table.horizontalHeader()
-    skip = skip_cols or set()
     cols = table.columnCount()
+    skip = skip_cols or set()      # 勾选框这类固定宽度列不参与重算
     for col in range(cols):
+        if col in skip:
+            continue
         mode = header.sectionResizeMode(col)
         if mode in (QHeaderView.ResizeMode.Fixed, QHeaderView.ResizeMode.Stretch):
             continue

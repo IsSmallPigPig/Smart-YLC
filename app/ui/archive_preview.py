@@ -12,17 +12,15 @@ PDF 渲染复用 pymupdf（项目已锁 1.24.11），缩略图用低 dpi 逐页�
 
 from __future__ import annotations
 
-import os
 from typing import Callable
 
 from PyQt5.QtCore import QEvent, Qt, QThread, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QFont, QImage, QPixmap
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QScrollArea
 from qfluentwidgets import (
     BodyLabel,
     FluentIcon as FIF,
-    PrimaryPushButton,
-    PushButton,
+        PushButton,
     StrongBodyLabel,
     ToolButton,
 )

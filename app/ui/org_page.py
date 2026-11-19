@@ -11,13 +11,12 @@ from datetime import datetime
 
 from PyQt5.QtCore import QRectF, Qt, QThread, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QColor, QFont, QPainter
-from PyQt5.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QSizePolicy,
+from PyQt5.QtWidgets import (QGridLayout, QHBoxLayout, QLabel,
                                QVBoxLayout, QWidget)
 
 from qfluentwidgets import (
     BodyLabel,
-    BreadcrumbBar,
-    CardWidget,
+        CardWidget,
     FluentIcon as FIF,
     InfoBar,
     PrimaryPushButton,
@@ -743,7 +742,7 @@ class OrgPage(FluentPage):
         # 一行读完：「6 / 6 正常」，有事才把待处理数点出来
         self._health_text.setText(f"{len(usable)} / {len(accounts)}")
         self._health_sub.setText(
-            f"全部可用" if not bad else f"{len(bad)} 个需重新登录，本轮统计会跳过")
+            "全部可用" if not bad else f"{len(bad)} 个需重新登录，本轮统计会跳过")
 
     def _local_roster_total(self) -> int:
         """本地名单（系统配置里导入的 xlsx）人数；没导入时为 0。"""

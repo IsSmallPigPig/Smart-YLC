@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal as Signal
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -498,7 +498,6 @@ class MessagesPage(FluentPage):
 
         unread_total = sum(1 for v in self._views if self._is_unread(v))
         group = [v for v in base if v.kind == kind]
-        pages = max(1, (len(group) + PAGE_SIZE - 1) // PAGE_SIZE)
         self._filtered = group
         self._page = 0  # 换页签、换已读状态或改搜索词都从头看
         self.header.set_desc(

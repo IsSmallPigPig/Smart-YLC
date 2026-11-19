@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEasingCurve, Qt, QTimer, QVariantAnimation
+from PyQt5.QtCore import QEasingCurve, Qt, QVariantAnimation
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 

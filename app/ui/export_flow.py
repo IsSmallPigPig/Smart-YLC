@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QFileDialog
 

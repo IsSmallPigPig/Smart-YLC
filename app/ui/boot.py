@@ -13,7 +13,7 @@ qfluentwidgets 导入、六个页面逐个构造。macOS 上量到 1.4 秒，Win
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QPointF, QRect, QRectF, Qt, QTimer
+from PyQt5.QtCore import QRect, QRectF, Qt, QTimer
 from PyQt5.QtGui import QColor, QFont, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import QWidget
 
@@ -54,7 +54,7 @@ def _is_dark() -> bool:
 
 
 def page_bg() -> QColor:
-    """与 home_page.page_bg_color 同一个公式：窗口底色叠一层半透明白。"""
+    """与 page.page_bg_color 同一个公式：窗口底色叠一层半透明白。"""
     dark = _is_dark()
     base = QColor(32, 32, 32) if dark else QColor(240, 244, 249)
     alpha = 8 if dark else 128

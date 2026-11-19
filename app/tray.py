@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 
-from PyQt5.QtCore import QObject, QTimer, QThread, pyqtSignal as Signal, Qt
+from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QGuiApplication, QIcon
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon
 

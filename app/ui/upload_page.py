@@ -1121,8 +1121,6 @@ class UploadPage(FluentPage):
 
     def _open_preview(self, path: str):
         """点档案行 -> 全屏详情页：面包屑 + PDF 预览 + 结构检查 + 异常标记。"""
-        from app.ui.archive_preview import ArchivePreviewView
-
         status = next((s for s in self.statuses if str(s.path) == path), None)
         name = status.name if status else os.path.basename(path)
         self._show_preview(path, name)
