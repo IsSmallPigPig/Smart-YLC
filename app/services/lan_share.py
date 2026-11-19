@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -101,6 +102,22 @@ class Received:
 
 
 @dataclass
+class PairSession:
+    """手机 App 扫码配对后建立的一次会话。
+
+    pin 是二维码里的短期口令（谁扫到都能用），token 是配对后换发的会话凭证，
+    只有token 能列清单、报进度、上传。配对码用一次即作废，防止二维码被人拍到后
+    反复使用。
+    """
+
+    token: str
+    device: str = ""             # 手机端自报的设备名，仅用于界面显示
+    created: float = 0.0
+    received: list[str] = field(default_factory=list)   # 已收文件名，供手机端对账
+    uploaded: set[str] = field(default_factory=set)     # 手机端声明已传的 sha256
+
+
+@dataclass
 class LanShare:
     """一个只服务于手机上传的本地 HTTP 服务。"""
 
@@ -111,6 +128,8 @@ class LanShare:
     _thread: threading.Thread | None = None
     _pin: str = ""
     _last_active: float = 0.0
+    _sessions: dict[str, PairSession] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
 
     # ---- 生命周期 ----
 
@@ -123,11 +142,16 @@ class LanShare:
         return self._pin
 
     def url(self) -> str:
-        """给手机输入的地址。没有局域网时返回空串。"""
+        """二维码载荷。没有局域网时返回空串。
+
+        浏览器打开就是上传网页（看 k），App 扫到同一串后读 v=1 走配对 API。
+        一份二维码两边都能用，不必为 App 单独再生成一张。
+        """
         addrs = lan_addresses()
         if not addrs or not self._server:
             return ""
-        return f"http://{addrs[0]}:{self._server.server_port}/?k={self._pin}"
+        return (f"http://{addrs[0]}:{self._server.server_port}/"
+                f"?k={self._pin}&v=1")
 
     def start(self) -> str:
         if self._server is not None:
@@ -165,6 +189,49 @@ class LanShare:
 
     def expired(self) -> bool:
         return self.running and time.time() - self._last_active > IDLE_TIMEOUT
+
+    # ---- App 配对（v1 协议）----
+
+    def pair(self, pin: str, device: str = "") -> PairSession | None:
+        """用二维码里的配对码换一个会话 token；配对码不对返回 None。
+
+        配对码不立即作废：同一二维码要给「先配对、失败重试」留余地，也兼容
+        浏览器网页继续用同一个码上传。真正的限制是 token 与空闲超时。
+        """
+        if not pin or pin.upper() != self.pin:
+            return None
+        sess = PairSession(token=secrets.token_urlsafe(24), device=device[:60],
+                           created=time.time())
+        with self._lock:
+            self._sessions[sess.token] = sess
+        self.touch()
+        return sess
+
+    def session(self, token: str) -> PairSession | None:
+        with self._lock:
+            return self._sessions.get(token)
+
+    def forget_session(self, token: str) -> None:
+        with self._lock:
+            self._sessions.pop(token, None)
+
+    def known_digests(self) -> list[str]:
+        """已经落盘的档案 sha256 列表，手机端据此跳过重复文件。
+
+        扫的是「同步自手机」下所有日期目录——同一份档案上周传过就不该再传一遍。
+        """
+        digests: list[str] = []
+        root = os.path.join(os.path.expanduser("~"), phone_sync.SYNC_FOLDER)
+        if not os.path.isdir(root):
+            return digests
+        for dirpath, _dirs, names in os.walk(root):
+            for name in names:
+                if name.lower().endswith(".pdf"):
+                    try:
+                        digests.append(phone_sync._digest(os.path.join(dirpath, name)))
+                    except OSError:
+                        continue
+        return digests
 
     # ---- 收文件 ----
 
@@ -245,6 +312,27 @@ def _make_handler(share: LanShare):
             self._send(status, json.dumps(payload, ensure_ascii=False).encode(),
                        "application/json; charset=utf-8")
 
+        def _json_body(self) -> dict | None:
+            """读 JSON 请求体；解析失败返回 None。上限 1MB（清单元数据用）。"""
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return None
+            if length <= 0 or length > (1 << 20):
+                return None
+            data = self._read_body(length)
+            if data is None:
+                return None
+            try:
+                obj = json.loads(data.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return None
+            return obj if isinstance(obj, dict) else None
+
+        def _session(self, query: dict) -> PairSession | None:
+            token = (query.get("token") or [""])[0]
+            return share.session(token) if token else None
+
         def do_GET(self):                    # noqa: N802 - BaseHTTPRequestHandler 约定
             if not self._client_ok():
                 self._json(403, {"ok": False, "error": "只允许局域网访问"})
@@ -255,7 +343,8 @@ def _make_handler(share: LanShare):
                            "text/html; charset=utf-8")
                 return
             if parsed.path == "/ping":
-                self._json(200, {"ok": True, "received": len(share.received)})
+                self._json(200, {"ok": True, "received": len(share.received),
+                                 "protocol": "1"})
                 return
             self._json(404, {"ok": False, "error": "没有这个地址"})
 
@@ -264,10 +353,81 @@ def _make_handler(share: LanShare):
                 self._json(403, {"ok": False, "error": "只允许局域网访问"})
                 return
             parsed = urlparse(self.path)
+            query = parse_qs(parsed.query)
+
+            # ---- v1 App 配对协议 ----
+            if parsed.path == "/api/pair":
+                body = self._json_body() or {}
+                sess = share.pair(str(body.get("pin") or ""),
+                                  str(body.get("device") or ""))
+                if sess is None:
+                    self._json(403, {"ok": False, "error": "配对码不对，刷新电脑上的二维码"})
+                    return
+                self._json(200, {"ok": True, "token": sess.token})
+                return
+
+            if parsed.path == "/api/manifest":
+                sess = self._session(query)
+                if sess is None:
+                    self._json(401, {"ok": False, "error": "会话无效，重新扫码配对"})
+                    return
+                self._json(200, {"ok": True, "digests": share.known_digests()})
+                return
+
+            if parsed.path == "/api/status":
+                sess = self._session(query)
+                if sess is None:
+                    self._json(401, {"ok": False, "error": "会话无效，重新扫码配对"})
+                    return
+                self._json(200, {"ok": True, "received": list(sess.received)})
+                return
+
+            if parsed.path == "/api/done":
+                sess = self._session(query)
+                if sess is None:
+                    self._json(401, {"ok": False, "error": "会话无效，重新扫码配对"})
+                    return
+                share.forget_session(sess.token)
+                share.touch()
+                self._json(200, {"ok": True, "received": len(sess.received)})
+                return
+
+            if parsed.path == "/api/upload":
+                sess = self._session(query)
+                if sess is None:
+                    self._json(401, {"ok": False, "error": "会话无效，重新扫码配对"})
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = 0
+                if length <= 0:
+                    self._json(400, {"ok": False, "error": "没有收到文件内容"})
+                    return
+                if length > MAX_UPLOAD:
+                    self._json(413, {"ok": False,
+                                     "error": f"文件超过 {MAX_UPLOAD // 1024 // 1024}MB"})
+                    return
+                data = self._read_body(length)
+                if data is None:
+                    self._json(400, {"ok": False, "error": "上传中断"})
+                    return
+                name = (query.get("name") or [""])[0]
+                digest = (query.get("sha256") or [""])[0].lower()
+                item = share.accept(name, data)
+                if item.status != "rejected" and digest:
+                    with share._lock:
+                        sess.uploaded.add(digest)
+                        sess.received.append(item.name)
+                self._json(200, {"ok": item.status != "rejected",
+                                 "status": item.status, "note": item.note,
+                                 "name": item.name})
+                return
+
+            # ---- 浏览器网页上传（pin 鉴权，保持兼容）----
             if parsed.path != "/upload":
                 self._json(404, {"ok": False, "error": "没有这个地址"})
                 return
-            query = parse_qs(parsed.query)
             if (query.get("k") or [""])[0].upper() != share.pin:
                 self._json(403, {"ok": False, "error": "口令不对，刷新电脑上的二维码重新打开"})
                 return

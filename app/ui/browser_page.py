@@ -490,7 +490,7 @@ class BrowserWindow(FluentWindowBase):
         self.progress.setFixedHeight(3)
         self.progress.setStyleSheet(
             "QProgressBar{border:none;background:transparent;}"
-            "QProgressBar::chunk{background:#0067f4;border-radius:1px;}")
+            "QProgressBar::chunk{background:#0067f4;border-radius:1px;}")  # lint-patterns: allow-hex
         lay.addWidget(self.progress, 0)
 
         # 浏览区改成手工叠放：标签页之间只换层级，不 hide/show。QStackedWidget 每次
