@@ -28,6 +28,7 @@ from qfluentwidgets import (
 )
 
 from app.services.archive_exam import ArchiveExam, examine
+from app.services.form_cells import FormCellCheck, check as check_cells
 from app.ui import palette as P
 from app.ui.org_manage_page import CrumbBar
 from app.ui.page import FluentPage, note_label, theme_font
@@ -74,6 +75,23 @@ class _ExamWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class _CellWorker(QThread):
+    """逐格检查（OpenCV），单页几十毫秒，整份 0.3~0.7 秒，放后台不挡翻页。"""
+
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, path: str, parent=None):
+        super().__init__(parent)
+        self.path = path
+
+    def run(self):
+        try:
+            self.done.emit(check_cells(self.path))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
 class ArchivePreviewView(FluentPage):
     """一份档案的详情页。由 UploadPage 压入 stackedWidget，返回时弹出。"""
 
@@ -92,6 +110,8 @@ class ArchivePreviewView(FluentPage):
         self._total = 0
         self._worker: QThread | None = None
         self._abnormal = False
+        self._cells: FormCellCheck | None = None
+        self._exam_result: ArchiveExam | None = None
 
         lay = self.vBoxLayout
         lay.setContentsMargins(32, 16, 32, 24)   # 子页面无 banner，顶部常规边距
@@ -107,7 +127,11 @@ class ArchivePreviewView(FluentPage):
         # 标题 + 操作
         head = QHBoxLayout()
         head.setSpacing(8)
-        title = StrongBodyLabel(name, self)
+        # 标题只显示人，全文件名放在悬停提示里：面包屑已经带了姓名+手机号，
+        # 标题再铺一遍 22 个字会把「核对信息」「存在异常」挤到第二行
+        short = name.split("+")[0] if "+" in name else name.replace(".pdf", "")
+        title = StrongBodyLabel(short, self)
+        title.setToolTip(name)
         theme_font(title, P.FONT['title'], int(QFont.Weight.DemiBold))
         title.setWordWrap(True)
         head.addWidget(title, 1)
@@ -126,6 +150,10 @@ class ArchivePreviewView(FluentPage):
         self.exam_label = BodyLabel("正在检查页面结构…", self)
         self.exam_label.setWordWrap(True)
         lay.addWidget(self.exam_label)
+
+        self.cell_label = BodyLabel("正在检查表格空格…", self)
+        self.cell_label.setWordWrap(True)
+        lay.addWidget(self.cell_label)
 
         # PDF 预览区：滚动容器里一张 QLabel，翻页时替换
         self.preview_lbl = QLabel(self)
@@ -155,6 +183,7 @@ class ArchivePreviewView(FluentPage):
         lay.addLayout(nav)
 
         self._start_exam()
+        self._start_cell_check()
         self._render()
 
     # ---- 面包屑 / 返回 ----
@@ -186,6 +215,32 @@ class ArchivePreviewView(FluentPage):
             # 异常档案默认标记不上传，用户仍可手动取消
             self._set_abnormal(True)
 
+    def _start_cell_check(self):
+        self._cells_worker = _CellWorker(self.path, self)
+        self._cells_worker.done.connect(self._cells_done)
+        self._cells_worker.failed.connect(
+            lambda m: self.cell_label.setText(f"表格检查失败：{m}"))
+        self._cells_worker.start()
+
+    def _cells_done(self, result: FormCellCheck):
+        self._cells = result
+        if result.skipped:
+            self.cell_label.setText(result.skipped)
+        elif result.blanks:
+            pages = sorted({c.page for c in result.blanks})
+            self.cell_label.setText(
+                f"表格里有 {len(result.blanks)} 处空格（第 "
+                f"{'、'.join(map(str, pages))} 页已用红框标出），请翻页核对这些格子是否漏填")
+        else:
+            self.cell_label.setText("表格里没有发现空格")
+        # 结果回来时当前页已经画好了，重画一次把红框补上
+        self._refresh_overlay()
+
+    def _bank_blanks_of(self, page_no: int):
+        if self._cells is None:
+            return []
+        return self._cells.by_page().get(page_no, [])
+
     # ---- PDF 渲染 ----
 
     def goto(self, page_no: int):
@@ -211,20 +266,51 @@ class ArchivePreviewView(FluentPage):
         avail = max(self.scroll.viewport().width() - 24, 200)
         if pix.width() > avail:
             pix = pix.scaledToWidth(avail, Qt.TransformationMode.SmoothTransformation)
-        self.preview_lbl.setPixmap(pix)
+        self._base_pixmap = pix
+        self.preview_lbl.setPixmap(self._with_blank_marks(pix, page_no))
         self.page_label.setText(f"第 {page_no} / {self._total or '?'} 页")
         self.prev_btn.setEnabled(page_no > 1)
         self.next_btn.setEnabled(not self._total or page_no < self._total)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        # 宽度变化后已有图片按比例重缩放
-        pix = self.preview_lbl.pixmap()
-        if pix is not None:
+        # 宽度变化后已有图片按比例重缩放，红框要一起重画
+        base = getattr(self, "_base_pixmap", None)
+        if base is not None:
             avail = max(self.scroll.viewport().width() - 24, 200)
+            pix = base
             if pix.width() > avail:
-                self.preview_lbl.setPixmap(
-                    pix.scaledToWidth(avail, Qt.TransformationMode.SmoothTransformation))
+                pix = pix.scaledToWidth(avail, Qt.TransformationMode.SmoothTransformation)
+            self._base_pixmap = pix
+            self.preview_lbl.setPixmap(self._with_blank_marks(pix, self._page))
+
+    def _refresh_overlay(self):
+        base = getattr(self, "_base_pixmap", None)
+        if base is not None:
+            self.preview_lbl.setPixmap(self._with_blank_marks(base, self._page))
+
+    def _with_blank_marks(self, pix: QPixmap, page_no: int) -> QPixmap:
+        """把这一页的空格用红框标出来。坐标从 1.0 倍渲染坐标换算到当前缩放。"""
+        blanks = self._bank_blanks_of(page_no)
+        if not blanks or self._cells is None:
+            return pix
+        size = self._cells.page_sizes.get(page_no)
+        if not size or not size[0]:
+            return pix
+        from PyQt5.QtGui import QColor, QPainter, QPen
+
+        ratio = pix.width() / float(size[0])
+        out = QPixmap(pix)
+        painter = QPainter(out)
+        pen = QPen(QColor(216, 58, 58, 220))
+        pen.setWidth(2)
+        painter.setPen(pen)
+        for cell in blanks:
+            x, y, w, h = cell.box
+            painter.drawRect(int(x * ratio), int(y * ratio),
+                             max(2, int(w * ratio)), max(2, int(h * ratio)))
+        painter.end()
+        return out
 
     # ---- OCR 信息核对（可选，慢） ----
 

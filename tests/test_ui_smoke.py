@@ -409,7 +409,7 @@ def test_browser_window_shell_builds(app, isolated_store):
     assert win.tab_row.height() == TAB_HEIGHT + TAB_TOP
     assert win.titleBar.height() == TITLE_BAR_HEIGHT
     assert win.titleBar.height() > win.tab_row.height()
-    plus = win.new_tab_btn.mapTo(win, win.new_tab_btn.rect().center()).y()
+    plus = win.tab_bar.addButton.mapTo(win, win.tab_bar.addButton.rect().center()).y()
     assert plus == TAB_TOP + TAB_HEIGHT // 2
     assert not win.back_btn.isEnabled()
     assert win.empty.isVisible()  # 没有标签时只有欢迎页
@@ -777,12 +777,50 @@ def test_browser_drag_hands_off_to_system(app, monkeypatch):
     row = browser_page.ChromeRow()
     row.mousePressEvent(type("E", (), {
         "button": lambda self: Qt.MouseButton.LeftButton,
+        "pos": lambda self: QPoint(400, 10),
         "globalPos": lambda self: QPoint(200, 120),
     })())
     assert len(calls) == 1, "标签条空白处没有发起系统拖动"
 
     # 自绘拖动类必须已经移除，别再偷偷回退
     assert not hasattr(browser_page, "_WindowDragger")
+
+
+def test_browser_tab_click_does_not_start_drag(app, monkeypatch):
+    """TabBar 的标签项会把按下事件转发给父级；落在标签段上的按下必须被
+    ChromeRow 豁免，否则点标签同时发起窗口拖动，标签就点不动了。"""
+    from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+    from PyQt5.QtGui import QMouseEvent
+
+    from app.ui import browser_page
+
+    calls = []
+    monkeypatch.setattr(browser_page, "_start_system_move",
+                        lambda host, pos: calls.append(1) or True)
+    row = browser_page.ChromeRow()
+    row.setFixedSize(600, 38)
+    bar = browser_page.BranchTabBar(row)
+    bar.add_tab("ssfz1", "普通高中高三十一班")
+    row.add_no_drag(bar)
+    row.show()
+    app.processEvents()
+
+    item = bar.tabItem(0)
+    on_tab = item.mapTo(row, QPoint(item.width() // 2, item.height() // 2))
+
+    def press(pos):
+        return QMouseEvent(
+            QEvent.Type.MouseButtonPress, QPointF(pos), QPointF(row.mapToGlobal(pos)),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier)
+
+    row.mousePressEvent(press(on_tab))
+    assert calls == [], "按在标签上不应发起窗口拖动"
+
+    blank = QPoint(560, 10)   # 标签段之外的空白
+    row.mousePressEvent(press(blank))
+    assert calls == [1], "标签段之外的空白仍应能拖动窗口"
+    row.deleteLater()
 
 
 def test_browser_drag_ignores_non_left_button(app, monkeypatch):
@@ -2387,14 +2425,15 @@ def test_browser_tab_aligns_to_system_button_and_retries(app, monkeypatch):
     assert host._metrics_pending is True
     assert host._tab_top == B.TAB_TOP
 
-    # 几何稳定：中线 20 → 上沿 = 20 - 16 = 4
+    # 几何稳定：中线 20 → 上沿 = 20 - TAB_HEIGHT/2
+    half = B.TAB_HEIGHT // 2
     host._win_h = 760
     B.BrowserWindow._sync_title_metrics(host)
-    assert host._tab_top == 4
-    assert host.titleBar.height() == 4 + B.TAB_HEIGHT + B.TITLE_BAR_PAD
+    assert host._tab_top == 20 - half
+    assert host.titleBar.height() == (20 - half) + B.TAB_HEIGHT + B.TITLE_BAR_PAD
     assert host._metrics_pending is False
 
     # 中线变了（不同 macOS 版本）要能重算
     monkeypatch.setattr(B, "native_button_center", lambda w: 24)
     B.BrowserWindow._sync_title_metrics(host)
-    assert host._tab_top == 8
+    assert host._tab_top == 24 - half

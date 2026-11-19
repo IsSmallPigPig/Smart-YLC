@@ -414,6 +414,10 @@ class UploadPage(FluentPage):
         # 被标记「存在异常」的档案不参与上传；结构检查发现的异常也会自动加进来
         self._abnormal_paths: set[str] = set()
         self._preview_dialog: QDialog | None = None
+        self._phone_dialog = None
+        # 逐格检查结果：{路径: 空格数}；-1 表示这项没查（缺 OpenCV 等）
+        self._cell_counts: dict[str, int] = {}
+        self._cell_worker = None
         self._dirs: list[str] = []          # 来源目录（配置文件里的 workspaceDirs）
         self._scans: list[FolderScan] = []  # 每个来源目录的扫描结果
         self._folder_cards: dict[str, CollapsibleCard] = {}
@@ -448,9 +452,16 @@ class UploadPage(FluentPage):
         self.abnormal_btn = PushButton(FIF.INFO, "存在异常")
         set_tip(self.abnormal_btn, "查看被标记为异常的档案，这些档案不会上传")
         self.abnormal_btn.clicked.connect(self._show_abnormal)
+        self.cells_btn = PushButton(FIF.SEARCH, "查空格")
+        set_tip(self.cells_btn, "逐格检查每份档案的表格，标出没填的格子")
+        self.cells_btn.clicked.connect(self._check_cells_all)
+        self.phone_btn = PushButton(FIF.SEND, "手机同步")
+        set_tip(self.phone_btn, "同一个 Wi-Fi 下，手机扫码把 PDF 传到这台电脑")
+        self.phone_btn.clicked.connect(self._open_phone_sync)
         # 功能按钮统一落在 banner 右下角（不居中）
         for w in (self.pick_btn, self.rescan_btn, self.upload_btn,
-                  self.stop_btn, self.abnormal_btn):
+                  self.stop_btn, self.abnormal_btn, self.cells_btn,
+                  self.phone_btn):
             self.header.add_control(w)
 
         # 已知问题公告（banner 下方）：上传检查出的问题收进这里，不再重复弹窗
@@ -915,6 +926,80 @@ class UploadPage(FluentPage):
         self._search = text
         self._rebuild_branches()
 
+    # ---------- 逐格检查（批量） ----------
+
+    def _check_cells_all(self):
+        """批量查表格空格：后台逐份跑，结果写进每一行的说明。"""
+        from app.services.form_cells import check as check_cells
+
+        paths = [str(s.path) for s in self.statuses]
+        if not paths:
+            InfoBar.info("没有可检查的档案", "先添加来源文件夹", duration=3000, parent=self)
+            return
+        if self._cell_worker is not None and self._cell_worker.isRunning():
+            return
+
+        self.cells_btn.setEnabled(False)
+        self.cells_btn.setText("查空格…")
+
+        class _Worker(QThread):
+            one = Signal(str, int)
+            finished_all = Signal()
+
+            def run(inner):
+                for path in paths:
+                    try:
+                        result = check_cells(path)
+                        count = -1 if result.skipped else len(result.blanks)
+                    except Exception:      # noqa: BLE001 - 单份失败不拖垮整批
+                        count = -1
+                    inner.one.emit(path, count)
+                inner.finished_all.emit()
+
+        worker = _Worker(self)
+        worker.one.connect(self._on_cell_count)
+        worker.finished_all.connect(self._on_cells_done)
+        self._cell_worker = worker
+        worker.start()
+
+    def _on_cell_count(self, path: str, count: int):
+        if count < 0:
+            return
+        self._cell_counts[path] = count
+
+    def _on_cells_done(self):
+        self.cells_btn.setEnabled(True)
+        self.cells_btn.setText("查空格")
+        # 用已有扫描结果重排卡片，不重新扫目录
+        self._rebuild_branches()
+        flagged = sum(1 for n in self._cell_counts.values() if n > 0)
+        if flagged:
+            InfoBar.info("逐格检查完成", f"{flagged} 份档案的表格里有空格，说明见每行下方",
+                         duration=5000, parent=self)
+        else:
+            InfoBar.success("逐格检查完成", "没有发现空格", duration=4000, parent=self)
+
+    # ---------- 手机同步 ----------
+
+    def _open_phone_sync(self):
+        """局域网直传：手机扫码上传，收到的 PDF 自动进待上传列表。"""
+        from app.ui.phone_sync_dialog import PhoneSyncDialog
+
+        if self._phone_dialog is not None and self._phone_dialog.isVisible():
+            self._phone_dialog.raise_()
+            self._phone_dialog.activateWindow()
+            return
+        dlg = PhoneSyncDialog(self.window())
+        dlg.file_received.connect(self._on_phone_file)
+        self._phone_dialog = dlg
+        dlg.show()
+
+    def _on_phone_file(self, path: str):
+        """手机传来的文件落到「同步自手机」后，立刻刷新列表让它出现在待上传里。"""
+        self.refresh()
+        InfoBar.success("已收到手机档案", os.path.basename(path),
+                        duration=4000, parent=self)
+
     # ---------- 档案预览详情 ----------
 
     def _open_preview(self, path: str):
@@ -986,6 +1071,10 @@ class UploadPage(FluentPage):
             note = "已自动改名"
         if not note:
             note = status.notice
+        blanks = self._cell_counts.get(str(status.path))
+        if blanks is not None:
+            hint = f"表格 {blanks} 处空格" if blanks > 0 else "表格无空格"
+            note = f"{note}，{hint}" if note else hint
         # 已经按支部分组，行里不再重复「目标支部」；只有归不了组的才把支部当元信息
         if status.branch and status.problem:
             meta.append(status.branch)
