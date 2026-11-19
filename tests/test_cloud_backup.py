@@ -339,3 +339,27 @@ def test_action_buttons_are_spaced_and_equal(qapp_session):
     assert abs(dlg.upload_btn.width() - dlg.restore_btn.width()) <= 1
     assert 140 <= dlg.upload_btn.width() <= 200
     dlg.deleteLater(); host.deleteLater()
+
+
+def test_empty_state_hides_the_rest_of_the_form(qapp_session):
+    """没配置时只留下拉提示与三个图标按钮，不留一片禁用灰控件。"""
+    from PyQt5.QtWidgets import QWidget
+
+    from app.ui.cloud_backup_dialog import CloudBackupDialog
+
+    host = QWidget()
+    empty = CloudBackupDialog(host, get_config=lambda: CFG,
+                              on_restore=lambda cfg: None, profiles=[])
+    assert empty.profile_combo.currentText() == "还没有配置，点击新建或导入"
+    # isHidden 只看控件自身，动作按钮是被整行藏起来的，用 isVisibleTo 看祖先
+    assert empty.site_combo.isHidden() and empty.pwd_edit.isHidden()
+    assert not empty.upload_btn.isVisibleTo(empty)
+    assert not empty.restore_btn.isVisibleTo(empty)
+
+    mine = {"name": "我的", "server": cb.DEFAULT_SERVER, "code": "ABC234",
+            "ownerKey": "a" * 64}
+    filled = CloudBackupDialog(host, get_config=lambda: CFG,
+                               on_restore=lambda cfg: None, profiles=[mine])
+    assert not filled.site_combo.isHidden() and not filled.pwd_edit.isHidden()
+    assert filled.upload_btn.isVisibleTo(filled)
+    empty.deleteLater(); filled.deleteLater(); host.deleteLater()
