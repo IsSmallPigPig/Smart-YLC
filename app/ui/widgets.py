@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import QRectF, Qt, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath,
-                           QRadialGradient)
+                           QPen, QRadialGradient)
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
@@ -406,7 +406,6 @@ class ProgressToast(QWidget):
 
     MARGIN = 16
     CARD_W, CARD_H = 320, 52
-    PAD = 10          # 四周留给投影的空白：靠阴影和页面分开，不画描边
 
     def __init__(self, title: str, parent=None, on_close=None):
         super().__init__(parent)
@@ -416,23 +415,16 @@ class ProgressToast(QWidget):
         self._indeterminate = False
         self._phase = 0.0
         self._on_close = on_close
-        self.setFixedSize(self.CARD_W + self.PAD * 2, self.CARD_H + self.PAD * 2)
+        self.setFixedSize(self.CARD_W, self.CARD_H)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        # 不用 QGraphicsDropShadowEffect：它把控件渲染到离屏图再合成，配合
+        # 透明背景在深色下会变成一块发亮的半透明板（用户说的「异常发亮」，
+        # 其它弹窗没有这个组合所以不受影响）。边界改用一圈极淡描边交代。
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-
-        from PyQt5.QtWidgets import QGraphicsDropShadowEffect
-
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(18)
-        shadow.setOffset(0, 3)
-        shadow.setColor(QColor(0, 0, 0, 90 if isDarkTheme() else 55))
-        self.setGraphicsEffect(shadow)
-        self._shadow = shadow
 
         lay = QHBoxLayout(self)
         # 文字这一行让开底部的进度线，垂直重心略偏上
-        lay.setContentsMargins(self.PAD + 12, self.PAD + 4,
-                               self.PAD + 8, self.PAD + 16)
+        lay.setContentsMargins(12, 4, 8, 16)
         lay.setSpacing(8)
         # 进度文本会高频跳数（42/260（16%）），等宽字族避免宽度抖动
         self._label = tabular_label(BodyLabel(title, self))
@@ -514,8 +506,8 @@ class ProgressToast(QWidget):
         parent = self.parentWidget()
         if parent is None:
             return
-        self.move(parent.width() - self.width() + self.PAD - self.MARGIN,
-                  parent.height() - self.height() + self.PAD - self.MARGIN)
+        self.move(parent.width() - self.width() - self.MARGIN,
+                  parent.height() - self.height() - self.MARGIN)
         self.raise_()
 
     def show(self):
@@ -541,13 +533,14 @@ class ProgressToast(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         dark = isDarkTheme()
-        card = QRectF(self.rect()).adjusted(self.PAD, self.PAD, -self.PAD, -self.PAD)
+        card = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
 
-        # 卡片不描边：深色主题上一圈 1px 浅色描边会显成「白边」，
-        # 边界交给投影（QGraphicsDropShadowEffect）来交代
+        # 卡片铺不透明底 + 一圈极淡描边：没有投影时靠这条线跟页面分开，
+        # 又不能亮成白边（深色下 20/255 的白就够）
         path = QPainterPath()
         path.addRoundedRect(card, 10, 10)
-        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setPen(QPen(QColor(255, 255, 255, 26) if dark
+                            else QColor(0, 0, 0, 22), 1))
         painter.setBrush(QColor(45, 45, 48) if dark else QColor(252, 252, 253))
         painter.drawPath(path)
 
