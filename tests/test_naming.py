@@ -88,3 +88,19 @@ def test_roster_mobile_mismatch():
     roster = Roster("r1", [RosterRow("张三", "13900000000")])
     build_naming_report("/tmp", issues, roster)
     assert "ROSTER_NAME_MOBILE_MISMATCH" in issues[0].codes
+
+
+def test_hidden_characters_and_fullwidth_digits_are_cleaned():
+    """微信/QQ 存下的文件名带零宽字符、BOM、全角数字，不该被判「无法解析」。"""
+    from app.domain.naming import analyze_file_name
+
+    for name in (
+        "\ufeff张三+13800138000+入团志愿书.pdf",
+        "张三+13800138000+入团志愿书\u200b.pdf",
+        "张三+13800138000+入团志愿书\u202e.pdf",
+    ):
+        parsed = analyze_file_name(name).parsed
+        assert parsed == ("张三", "13800138000"), name
+
+    parsed = analyze_file_name("张三＋１３８００１３８０００＋入团志愿书.pdf").parsed
+    assert parsed == ("张三", "13800138000")

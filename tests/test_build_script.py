@@ -158,3 +158,52 @@ def test_build_reports_missing_webengine_files(tmp_path, monkeypatch):
     dist.mkdir(parents=True)          # PyInstaller 5.x 平铺布局
     missing = build._ensure_webengine_files(dist)
     assert "resources/qtwebengine_resources.pak" in missing
+
+
+def test_utf8_paths_survive_subprocess_helpers():
+    """中文路径贯穿 subprocess 的三个关键点：argv 而非字符串拼接、显式 UTF-8 解码。"""
+    import subprocess
+
+    from app.services import notify, silent_update
+
+    # osascript：标题/正文走 argv，不再拼 AppleScript 字符串
+    src = (Path(__file__).resolve().parent.parent / "app/services/notify.py").read_text()
+    assert 'on run argv' in src, "osascript 必须用 argv 传中文标题/正文"
+    assert "_escape" not in src, "字符串拼接的转义函数应已删除"
+
+    # hdiutil attach 的输出不用 text=True（locale 解码会把中文卷名搞乱）
+    src = (Path(__file__).resolve().parent.parent
+           / "app/services/silent_update.py").read_text()
+    assert "capture_output=True, text=True" not in src
+    assert 'decode("utf-8", "replace")' in src
+
+    # 真实跑一次：中文标题 + 正文经 argv 传给 osascript 不炸
+    if sys.platform == "darwin":
+        script = ('on run argv\n'
+                  '  display notification (item 2 of argv) '
+                  'with title (item 1 of argv)\n'
+                  'end run')
+        subprocess.run(["osascript", "-e", script, "任思澳+13609089909",
+                        "中文正文（含括号）"], check=True, timeout=10)
+
+
+def test_crash_report_survives_windowed_stderr(tmp_path, monkeypatch):
+    """--windowed 下 sys.stderr 是 None：崩溃报告不能因此再抛一次。"""
+    from app.services import app_log
+
+    monkeypatch.setattr(app_log, "_fault_file_path", lambda: str(tmp_path / "fatal.log"))
+    monkeypatch.setattr(sys, "stderr", None)
+    app_log._stderr("中文崩溃报告")     # devnull 兜底路径，不该抛
+    assert sys.stderr is not None       # 被重开成 devnull
+
+    # stderr 写不了（编码错误 / 关闭）时落 fatal.log
+    class Broken:
+        def write(self, s):
+            raise UnicodeEncodeError("utf-8", "x", 0, 1, "bad")
+        def flush(self):
+            pass
+
+    sys.stderr = Broken()
+    app_log._stderr("fallback：中文路径报告")
+    assert (tmp_path / "fatal.log").read_text(encoding="utf-8").endswith(
+        "fallback：中文路径报告\n")
