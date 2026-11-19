@@ -28,6 +28,10 @@ _THUMB_SCALE = 0.15
 #   签字页/空白页 std 3.6（近乎纯白，属正常，只提示不拦截）
 # 真正该拦的「整页纯色/破损」std 会低于 2。
 _BLANK_STD = 5.0      # 低于此值：近乎纯白，提示确认是否漏页
+# 完整档案（>= 12 页）的末尾三页是备注与说明，纸质件本来就印灰底、手写也少，
+# 不参与「近乎空白」提示；短文档没有这种固定结构，仍照常判断。
+_TAIL_PAGES = 3
+_TAIL_MIN_TOTAL = 12
 _SOLID_STD = 1.5      # 低于此值：整页纯色，判破损拦截
 # 有效内容的最小图像边长（低于 300px 的缩略图分辨率不足）
 _MIN_IMG_PX = 200
@@ -115,10 +119,12 @@ def examine(path: str, expected_pages: int = 0) -> ArchiveExam:
                     exam.issues.append(PageIssue(pno, "broken", "页面渲染为空"))
                     continue
                 std = float(a.astype(float).std())
-                if std < _BLANK_STD:
-                    # 近乎纯白：签字页/盖章页常见，只提示不拦截。
-                    # 宁可多提示，也不能误拦正常档案——用户已验证的参考档案里
-                    # 第 10 页 std 3.6 属正常签字页。
+                tail = (exam.pages >= _TAIL_MIN_TOTAL
+                        and pno > exam.pages - _TAIL_PAGES)
+                if std < _BLANK_STD and not tail:
+                    # 近乎纯白。13 页档案的第 11–13 页是备注与说明，按「空白」
+                    # 提示只会让每份档案都挂着几条待确认，直接跳过；正文里的
+                    # 签字页/盖章页同样常见近乎纯白，所以只提示、不拦截。
                     exam.issues.append(PageIssue(
                         pno, "blank", f"近乎空白（灰度标准差 {std:.1f}），请确认是否漏页",
                         blocking=False))
