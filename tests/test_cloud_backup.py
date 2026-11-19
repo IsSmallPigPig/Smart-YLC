@@ -331,13 +331,12 @@ def test_action_buttons_are_spaced_and_equal(qapp_session):
                             on_restore=lambda cfg: None, profiles=[mine])
     row = dlg.upload_btn.parentWidget()
     lay = row.layout()
-    assert lay.spacing() >= 10                       # 按钮之间要有可见间隔
-    # 定宽居中：两边各留一段空白，不再各占一半撑满整行
-    assert lay.count() == 4
-    assert lay.itemAt(0).spacerItem() is not None
-    assert lay.itemAt(3).spacerItem() is not None
-    assert abs(dlg.upload_btn.width() - dlg.restore_btn.width()) <= 1
-    assert 140 <= dlg.upload_btn.width() <= 200
+    assert lay.spacing() == 12                       # 按钮之间要有可见间隔
+    # 与正文同宽：左右各让 32px，两个按钮各占一半
+    assert lay.contentsMargins().left() == 32
+    assert lay.contentsMargins().right() == 32
+    assert lay.count() == 2
+    assert lay.stretch(0) == 1 and lay.stretch(1) == 1
     dlg.deleteLater(); host.deleteLater()
 
 
@@ -352,7 +351,8 @@ def test_empty_state_hides_the_rest_of_the_form(qapp_session):
                               on_restore=lambda cfg: None, profiles=[])
     assert empty.profile_combo.currentText() == "还没有配置，点击新建或导入"
     # isHidden 只看控件自身，动作按钮是被整行藏起来的，用 isVisibleTo 看祖先
-    assert empty.site_combo.isHidden() and empty.pwd_edit.isHidden()
+    assert not empty.site_combo.isVisibleTo(empty)
+    assert not empty.pwd_edit.isVisibleTo(empty)
     assert not empty.upload_btn.isVisibleTo(empty)
     assert not empty.restore_btn.isVisibleTo(empty)
 

@@ -22,7 +22,6 @@ from qfluentwidgets import (
     InfoBar,
     LineEdit,
     PasswordLineEdit,
-    PrimaryPushButton,
     PushButton,
     ToolButton,
 )
@@ -353,6 +352,8 @@ class CloudBackupDialog(ConfigDialog):
         self._servers = cloud_backup.site_choices(self._custom_servers)
         self._active_id = active_id
         self._running = False
+        # 组与组之间比组内（标签与控件）松一档，表单才不会挤成一片
+        self.body.setSpacing(12)
 
         # 第一行：档案下拉 + 新建/加入/删除图标
         self.profile_combo = ComboBox(self.widget)
@@ -378,57 +379,63 @@ class CloudBackupDialog(ConfigDialog):
         self.status.setMinimumHeight(22)
         self.status.setWordWrap(True)
 
-        self.site_label = note_label("备份站点")
         self.site_combo = SiteCombo(self._servers, self.widget)
         self.site_combo.on_add_requested(self._add_site)
         self.site_combo.currentIndexChanged.connect(self._server_changed)
 
-        self.pwd_label = note_label("上传密码（4 位数字）")
         self.pwd_edit = PasswordLineEdit(self.widget)
         self.pwd_edit.setPlaceholderText("4 位数字密码")
         self.pwd_edit.setMaxLength(4)
 
         self.add(self.status)
-        self.add(self.site_label)
-        self.add(self.site_combo)
-        self.add(self.pwd_label)
-        self.add(self.pwd_edit)
+        self.site_group = self._group("备份站点", self.site_combo)
+        self.pwd_group = self._group("上传密码（4 位数字）", self.pwd_edit)
+        self.add(self.site_group)
+        self.add(self.pwd_group)
 
-        # 动作：两个按钮定宽居中，中间留 12px。以前各占一半、撑满整行，两个
-        # 按钮边框相接，看着像一整条，也分不清哪块能点。
-        row3 = QWidget(self.widget)
-        lay3 = QHBoxLayout(row3)
-        lay3.setContentsMargins(0, 4, 0, 0)
-        lay3.setSpacing(12)
-        self.upload_btn = PrimaryPushButton(FIF.CLOUD, "上传", row3)
-        self.restore_btn = PushButton(FIF.DOWNLOAD, "拉取并恢复", row3)
-        for btn in (self.upload_btn, self.restore_btn):
-            btn.setFixedWidth(176)
-        lay3.addStretch(1)
-        lay3.addWidget(self.upload_btn)
-        lay3.addWidget(self.restore_btn)
-        lay3.addStretch(1)
-        self.add(row3)
+        # 两个动作按钮直接占用对话框底部的按钮区（原来那一行只有「关闭」），
+        # 关闭改由点遮罩空白或 Esc 完成。两个都用次要样式（深色下是近黑的底），
+        # 不用主题色的主按钮——弹窗里两个动作是平级的，亮蓝太抢眼。
+        self.yesButton.hide()
+        self.cancelButton.hide()
+        self.upload_btn = PushButton(FIF.CLOUD, "上传", self.widget)
+        self.restore_btn = PushButton(FIF.DOWNLOAD, "拉取并恢复", self.widget)
+        self.upload_btn.clicked.connect(self._upload)
+        self.restore_btn.clicked.connect(self._restore)
+        self.setClosableOnMaskClicked(True)
 
-        self._form_widgets = [self.status, self.site_label, self.site_combo,
-                              self.pwd_label, self.pwd_edit, row3]
+        self._form_widgets = [self.status, self.site_group, self.pwd_group,
+                              self.upload_btn, self.restore_btn]
 
         self.new_btn.clicked.connect(self._new_profile)
         self.join_btn.clicked.connect(self._join_profile)
         self.del_btn.clicked.connect(self._delete_profile)
-        self.upload_btn.clicked.connect(self._upload)
-        self.restore_btn.clicked.connect(self._restore)
-        self.yesButton.hide()
-        self.cancelButton.setText("关闭")
-        self.cancelButton.show()
-        # 关闭按钮与上面两个动作按钮同宽同列，不再横贯整条底边
-        self.cancelButton.setFixedWidth(176)
+        # 左右各让出与正文一致的 32px，两个按钮各占一半、中间 12px：
+        # 这样按钮总宽和上方的输入框严格对齐，不再是一窄条悬在中间
         button_lay = getattr(self, "buttonLayout", None)
         if button_lay is not None:
-            button_lay.insertStretch(0, 1)
-            button_lay.addStretch(1)
+            button_lay.removeWidget(self.yesButton)
+            button_lay.removeWidget(self.cancelButton)
+            button_lay.setContentsMargins(32, 0, 32, 0)
+            button_lay.setSpacing(12)
+            button_lay.addWidget(self.upload_btn, 1)
+            button_lay.addWidget(self.restore_btn, 1)
 
         self._refresh_profiles()
+
+    def _group(self, label: str, widget) -> QWidget:
+        """「小标题 + 控件」一组：组内贴紧，组间由 ConfigDialog 的 body 间距拉开。"""
+        from PyQt5.QtWidgets import QVBoxLayout
+
+        box = QWidget(self.widget)
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lay.addWidget(note_label(label))
+        widget.setParent(box)
+        widget.show()
+        lay.addWidget(widget)
+        return box
 
     # ---- 档案状态 ----------------------------------------------------------
 
