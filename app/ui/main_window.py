@@ -1088,7 +1088,12 @@ class MainWindow(MSFluentWindow):
 
             self._translucent = material != "none" and _dark()
         elif sys.platform == "win32":
-            self._translucent = windows_material_available(material)
+            # Windows 深色下系统背板会把整窗刷成白色（Win11 22H2 的
+            # DWMSBT_TRANSIENTWINDOW 拿不到暗色 tint），页面直接不可读。
+            # 与 macOS 浅色对称：深色铺不透明底，浅色才挂材质。
+            from qfluentwidgets import isDarkTheme as _dark
+
+            self._translucent = windows_material_available(material) and not _dark()
         else:
             self._translucent = False
         self._apply_window_background()
@@ -1100,15 +1105,24 @@ class MainWindow(MSFluentWindow):
             else:
                 disable_acrylic(self)
                 self._material_applied = True
-        elif sys.platform == "win32" and self._translucent:
-            # 圆角与投影先设：addShadowEffect 会重设 frame 扩展（DwmExtendFrameIntoClientArea），
-            # 放在材质之后会把 Mica 自己的客户区 margins 顶掉，效果就没了。
-            apply_rounded_corners(self, P.RADIUS["window"])
-            self._material_applied = apply_windows_effect(self, material)
-            if not self._material_applied:
-                # 更老的系统挂不上，回退纯色底，不让窗口裸透明发黑
-                self._translucent = False
-                self._apply_window_background()
+        elif sys.platform == "win32":
+            if self._translucent:
+                # 圆角与投影先设：addShadowEffect 会重设 frame 扩展
+                # （DwmExtendFrameIntoClientArea），放在材质之后会把 Mica 自己的
+                # 客户区 margins 顶掉，效果就没了。
+                apply_rounded_corners(self, P.RADIUS["window"])
+                self._material_applied = apply_windows_effect(self, material)
+                if not self._material_applied:
+                    # 更老的系统挂不上，回退纯色底，不让窗口裸透明发黑
+                    self._translucent = False
+                    self._apply_window_background()
+            else:
+                # 深色下不挂材质（会白屏），但浅色时挂上的系统背板还在，
+                # 不清掉照样把整窗刷白
+                from app.services.materials import remove_windows_effect
+
+                remove_windows_effect(self)
+                self._material_applied = True
         else:
             self._material_applied = True
         # 关掉材质后清掉圆角缓存，下次开材质时重新按当前窗口状态设置

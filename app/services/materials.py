@@ -106,11 +106,15 @@ def material_hint(material: str) -> str:
     """
     material = normalize(material)
     if sys.platform == "darwin":
-        return "macOS 用系统毛玻璃，深浅模式各自取色"
+        if material != "none" and not _is_dark():
+            return "浅色下不启用：透出的桌面会压住正文"
+        return "macOS 用系统毛玻璃，深色模式生效"
     if sys.platform != "win32":
         return "当前系统没有可用的窗口透明接口"
     if material == "none":
         return "关闭后铺纯色底"
+    if not _is_dark():
+        return "深色下不启用：系统背板会把整窗刷白，改铺纯色底"
     if material == "mica":
         if win11_mica_available():
             return "Win11 系统背景，取桌面壁纸的色调"
