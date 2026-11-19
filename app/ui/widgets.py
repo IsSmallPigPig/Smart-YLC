@@ -152,7 +152,10 @@ class StatusRow(CardWidget):
     abnormal: bool（被标记为异常：铺 warning 黄底，与组织管理页的异常支部同款）}
     """
 
-    clicked = Signal(str)   # 带档案路径，点行即打开预览详情
+    # 不能叫 clicked：父类 CardWidget 自带 clicked = Signal()，在 mouseReleaseEvent
+    # 里无参 emit；同名改成带参信号会让那次 emit 直接抛
+    # 「signal has 1 argument(s) but 0 provided」，点一下行就崩。
+    opened = Signal(str)    # 带档案路径，点行即打开预览详情
 
     def __init__(self, item: dict, parent=None):
         super().__init__(parent)
@@ -189,7 +192,7 @@ class StatusRow(CardWidget):
 
     def mousePressEvent(self, e):
         if self.path:
-            self.clicked.emit(self.path)
+            self.opened.emit(self.path)
         super().mousePressEvent(e)
 
     def paintEvent(self, e):
@@ -234,7 +237,7 @@ class StatusList(QWidget):
         for data in items:
             row = StatusRow(data)
             if row.path:
-                row.clicked.connect(self.rowClicked.emit)
+                row.opened.connect(self.rowClicked.emit)
             self._rows.append(row)
             self._lay.addWidget(row)
         if not items:

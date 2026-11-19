@@ -1058,6 +1058,11 @@ class MainWindow(MSFluentWindow):
         browser = getattr(self, "browser_window", None)
         if browser is not None:
             browser.set_material(material)
+        # 开着的档案详情是独立窗口，有自己的混合层；不跟着换，用户会看到
+        # 「设置改了，那个窗口还是一块不透明底」
+        preview = getattr(getattr(self, "upload_page", None), "_preview_dialog", None)
+        if preview is not None and hasattr(preview, "apply_material"):
+            preview.apply_material(material)
 
     def set_material(self, material: str):
         """窗口背景透明材质：none 关闭（纯色底），acrylic/mica 为混合层。
