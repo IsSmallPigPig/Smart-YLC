@@ -82,14 +82,10 @@ macOS 的红绿灯由 AppKit 摆在窗口顶部往下约 21px 处，不是标题
 Windows 的自绘窗口按钮本身就是 32px，上下各留 3px 即居中。
 实际数值在 showEvent 里按系统按钮的真实位置再校一次。
 """
-TITLE_BAR_PAD = 9 if sys.platform == "darwin" else 3
-"""标签行下沿到标题栏底边的留白。
-
-标题栏因此比标签行高一截，页面不至于紧贴标签条。macOS 多留几像素：按钮已经
-钉在系统中线上，多出来的高度只能放在下面，放上面会把对齐破坏掉。
-"""
-TITLE_BAR_HEIGHT = TAB_TOP + TAB_HEIGHT + TITLE_BAR_PAD
-"""标题栏总高：macOS 46、Windows 38。"""
+# 标签行上下留白相等：标签上沿让出顶边一行，下沿同样留一行。
+# 以前只在底部多留几像素（macOS 9px），标签看着偏上、下沿空一块。
+TITLE_BAR_HEIGHT = TAB_TOP * 2 + TAB_HEIGHT
+"""标题栏总高：macOS 46、Windows 42。"""
 # macOS 的系统按钮画在标题栏最右侧（宽 75），标题栏内容要提前让开。
 SYSTEM_BUTTON_INSET = 88 if sys.platform == "darwin" else 8
 # 标题栏右侧的导航按钮：后退 / 前进 / 刷新 / 重新登录。
@@ -651,7 +647,8 @@ class BrowserWindow(FluentWindowBase):
             self._metrics_pending = True
             return
         top = max(0, center - TAB_HEIGHT // 2)
-        height = top + TAB_HEIGHT + TITLE_BAR_PAD
+        # 上下各留 top：标签中心才落在系统按钮中线上，且两侧间距一致
+        height = top * 2 + TAB_HEIGHT
         # 已经对齐且没有待处理标记时跳过；resizeEvent 传来的 pending 会强制重算
         if (top == self._tab_top and height == self.titleBar.height()
                 and not getattr(self, "_metrics_pending", False)):

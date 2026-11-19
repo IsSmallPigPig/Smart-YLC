@@ -2577,7 +2577,8 @@ def test_browser_tab_aligns_to_system_button_and_retries(app, monkeypatch):
     host._win_h = 760
     B.BrowserWindow._sync_title_metrics(host)
     assert host._tab_top == 20 - half
-    assert host.titleBar.height() == (20 - half) + B.TAB_HEIGHT + B.TITLE_BAR_PAD
+    # 标题栏 = 上留白 + 标签 + 下留白，上下相等
+    assert host.titleBar.height() == (20 - half) * 2 + B.TAB_HEIGHT
     assert host._metrics_pending is False
 
     # 中线变了（不同 macOS 版本）要能重算
