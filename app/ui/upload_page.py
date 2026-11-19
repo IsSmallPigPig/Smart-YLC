@@ -763,6 +763,9 @@ class UploadPage(FluentPage):
 
         self.branch_title.setVisible(True)
         self.summary_card.setVisible(True)
+        # 目录卡片按已保存的目录列表先画出来，不等扫描：扫描线程失败时（缺库、
+        # 目录被占用）它照样在，否则用户看到的是一片空态，以为目录没保存
+        self._rebuild_sources()
         self._set_stats(0, 0, 0, 0)
         self.rescan_btn.setEnabled(False)
         self._set_status("正在扫描来源目录…")
