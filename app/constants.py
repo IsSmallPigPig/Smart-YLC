@@ -70,3 +70,8 @@ import os as _os
 CONFIG_FILE = _os.path.join(
     _os.path.expanduser("~"), ".gd12355-helper", "config.json"
 )
+
+# 入团志愿书的默认页数。纸质件实测 13 页（封面 + 誓词 + 信息表 + 经历 +
+# 支部大会决议 + 志愿正文两页 + 审批 + 备注 + 说明两页）。
+# 设置里留空时按这个值核对，用户可自行改。
+DEFAULT_EXPECTED_PAGES = 13

@@ -23,12 +23,28 @@ class _Profile:
         self.dropped = True
 
 
-class _Tab:
-    def __init__(self, title: str):
-        self.title = title
+class _TabBar:
+    """假标签条：只实现 refresh_accounts / _set_status 用到的接口。"""
 
-    def set_title(self, title: str):
-        self.title = title
+    def __init__(self, users: list[str]):
+        self.titles: dict[str, str] = {}
+        self.tips: dict[str, str] = {}
+        self.order = list(users)
+
+    def set_tab_title(self, user: str, title: str):
+        self.titles[user] = title
+
+    def set_tab_tip(self, user: str, text: str):
+        self.tips[user] = text
+
+    def last_user(self) -> str:
+        return self.order[-1] if self.order else ""
+
+    def _index_of(self, user: str) -> int:
+        return self.order.index(user) if user in self.order else -1
+
+    def removeTab(self, index: int):
+        self.order.pop(index)
 
 
 class _FakeBrowser:
@@ -42,7 +58,7 @@ class _FakeBrowser:
         self.accounts = accounts
         self._views = {u: object() for u in open_users}
         self._labels = {u: u for u in open_users}
-        self._tabs = {u: _Tab(u) for u in open_users}
+        self.tab_bar = _TabBar(open_users)
         self._creds = {}
         self._state = {u: "ready" for u in open_users}
         self._login_token = {u: 1 for u in open_users}
@@ -57,7 +73,9 @@ class _FakeBrowser:
     def _close(self, user: str):
         self.closed.append(user)
         self._views.pop(user, None)
-        self._tabs.pop(user, None)
+        index = self.tab_bar._index_of(user)
+        if index >= 0:
+            self.tab_bar.removeTab(index)
 
     def _login(self, user: str):
         self.relogged.append(user)
@@ -82,7 +100,7 @@ def test_refresh_accounts_renames_tab_without_relogin():
     b._creds["ssfz1"] = ("p", "")
     b.accounts = [_acc("ssfz1", "高三9班")]
     b.refresh_accounts()
-    assert b._tabs["ssfz1"].title == "高三9班"
+    assert b.tab_bar.titles["ssfz1"] == "高三9班"
     assert b._labels["ssfz1"] == "高三9班"
     assert b.relogged == []
 

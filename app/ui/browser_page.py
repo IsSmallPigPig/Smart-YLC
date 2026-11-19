@@ -1,8 +1,11 @@
 """账号网页：独立的内嵌浏览器窗口，每个团支部一个标签、一份独立存储。
 
-窗口和主窗口一样接管系统标题栏：标签条就在标题栏里，左侧是标签，右侧依次是
-后退 / 前进 / 刷新 / 重新登录，再往右留给窗口控制按钮（macOS 是系统原生的红绿灯）。
-标签过多时按可用宽度等比缩小，标题文字随之渐隐，不会挤到右侧按钮下面。
+窗口和主窗口一样接管系统标题栏：标签条就在标题栏里，用的是 qfluentwidgets
+的 TabBar 控件（自带 ＋ 按钮、关闭叉与挤压收缩），右侧依次是后退 / 前进 /
+刷新 / 重新登录，再往右留给窗口控制按钮（macOS 是系统原生的红绿灯）。
+
+网页视图用 qframelesswindow 的 FramelessWebEngineView（官方「背景失效解决
+办法」的做法）：裸 QWebEngineView 的原生图层会把无边框窗口的背景与材质穿透。
 
 站点是单账号单会话：同一个浏览器里多个账号共享 cookie，后登录的会顶掉前一个。
 这里为每个账号建独立的 QWebEngineProfile（各自磁盘目录与 cookie 罐），标签之间
@@ -27,7 +30,7 @@ import re
 import sys
 from datetime import datetime
 
-from PyQt5.QtCore import QPoint, QRect, Qt, QTimer, QUrl, pyqtSignal as Signal
+from PyQt5.QtCore import QPoint, Qt, QTimer, QUrl, pyqtSignal as Signal
 from PyQt5.QtGui import QColor, QDesktopServices, QFont, QPainter
 from PyQt5.QtWidgets import (
     QApplication,
@@ -43,13 +46,13 @@ from qfluentwidgets import (
     InfoBar,
     InfoBarIcon,
     InfoBarPosition,
-    IconWidget,
     IndeterminateProgressRing,
     PrimaryPushButton,
+    TabBar,
     TransparentPushButton,
     TransparentToolButton,
-    isDarkTheme,
     qconfig,
+    setFont,
 )
 from qfluentwidgets.window.fluent_window import FluentWindowBase, MSFluentTitleBar
 
@@ -65,8 +68,12 @@ MAX_TABS = 6
 """登录等待页最多盖这么久。超时就把网页露出来，别让人对着转圈干等。"""
 LOGIN_TIMEOUT_MS = 25_000
 SITE_HOME = f"{SITE_BASE_URL}/bg/index_main.html"
-TAB_HEIGHT = 32
-"""标签与标题栏按钮的高度。"""
+TAB_HEIGHT = 36
+"""标签与标题栏按钮行的高度。
+
+TabItem 控件默认就是 36 高（qfluentwidgets 给页面内标签的档位），标题栏沿用它
+正好不用再压扁；比旧自绘的 32 高一档，文字也更有呼吸感。
+"""
 TAB_TOP = 5 if sys.platform == "darwin" else 3
 """标签行上沿离窗口顶边的距离。
 
@@ -115,143 +122,99 @@ def _is_home_page(url: QUrl) -> bool:
     return "12355.net" in (url.host() or "") and url.path() == "/bg/index_main.html"
 
 
-class WebTab(QWidget):
-    """标题栏里的标签：支部名 + 关闭叉，当前标签有底色。
+class BranchTabBar(TabBar):
+    """标题栏里的标签条：直接用 qfluentwidgets 的 TabBar，不再自绘。
 
-    宽度由窗口按可用空间分配：变窄时标题逐渐淡出，只留一个可读的最小宽度，
-    关闭叉始终在最右侧，不会随标题一起淡掉。"""
+    routeKey 用账号名；内置的 ＋ 按钮发 `tabAddRequested`、标签上的叉发
+    `tabCloseRequested(index)`，这里统一转成账号名再发给窗口。选中底色保持
+    与毛玻璃标题栏一致的半透明白——TabBar 默认的浅灰在没有云母的窗口上会
+    糊成一块白。
 
-    activated = Signal(str)
-    closed = Signal(str)
+    TabBar 默认整条 46 高、标签字号 12 常规体：12px 中文班名在标题栏里偏小，
+    46 的行高又要靠压缩才塞进系统按钮那条中线。这里统一放到 TabItem 的原生
+    36 高、字号 13 中黑、圆角 8（与旧自绘标签的观感对齐）。"""
 
-    MIN_WIDTH = 84
-    MAX_WIDTH = 216
+    add_requested = Signal()
+    tab_activated = Signal(str)
+    tab_closed = Signal(str)
 
-    def __init__(self, user: str, title: str, parent=None):
-        super().__init__(parent)
-        self.user = user
-        self._title = title or user
-        # 标签里只放班名：宽度有限，学段在提示与支部卡片上已有
-        self._short = split_branch_label(self._title)[1] or self._title
-        self._active = False
-        self._hover = False
-        font = self.font()
-        font.setPixelSize(12)
-        font.setWeight(QFont.Weight.Medium)
-        self.setFont(font)
-        self.setFixedHeight(32)
-        self.setFixedWidth(self.MAX_WIDTH)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_tip(self, f"{self._title}（{user}）")
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-
-    def set_title(self, title: str):
-        """备注改了就把标签名换掉：标签里只放班名，提示里保留学段与账号。"""
-        self._title = title or self.user
-        self._short = split_branch_label(self._title)[1] or self._title
-        set_tip(self, f"{self._title}（{self.user}）")
-        self.update()
-
-    def set_slot_width(self, width: int):
-        width = max(self.MIN_WIDTH, min(self.MAX_WIDTH, int(width)))
-        if width != self.width():
-            self.setFixedWidth(width)
-        self.update()
-
-    def set_active(self, value: bool):
-        self._active = bool(value)
-        self.update()
-
-    def enterEvent(self, e):
-        self._hover = True
-        self.update()
-
-    def leaveEvent(self, e):
-        self._hover = False
-        self.update()
-
-    def mouseReleaseEvent(self, e):
-        if e.button() != Qt.MouseButton.LeftButton:
-            return
-        if QRect(self.width() - 24, 0, 24, self.height()).contains(e.position().toPoint()):
-            self.closed.emit(self.user)
-        else:
-            self.activated.emit(self.user)
-
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h, dark = self.width(), self.height(), isDarkTheme()
-        if self._active:
-            bg = QColor(255, 255, 255, 34) if dark else QColor(255, 255, 255)
-        elif self._hover:
-            bg = QColor(255, 255, 255, 22) if dark else QColor(15, 23, 42, 26)
-        else:
-            bg = QColor(255, 255, 255, 12) if dark else QColor(15, 23, 42, 14)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(bg)
-        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
-        if self._active:
-            # 浅色底上白色标签和窗口底色太接近，加一圈细边才看得出是当前标签
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QColor(255, 255, 255, 26) if dark else QColor(15, 23, 42, 46))
-            p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
-            p.setPen(Qt.PenStyle.NoPen)
-
-        # 标题随宽度渐隐：宽 132 全显示，窄到 84 只剩关闭叉
-        fade = max(0.0, min(1.0, (w - self.MIN_WIDTH) / 48))
-        if fade > 0:
-            fm = self.fontMetrics()
-            text_w = max(8, w - 11 - 24)
-            p.setOpacity(fade)
-            p.setPen(QColor("#f2f3f5") if dark else QColor("#1f2328"))
-            p.drawText(QRect(11, 0, text_w, h),
-                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                       fm.elidedText(self._short, Qt.TextElideMode.ElideRight, text_w))
-            p.setOpacity(1.0)
-
-        p.setPen(QColor(205, 208, 214, 220) if dark else QColor(96, 102, 112, 220))
-        cx, cy = w - 13, h // 2
-        p.drawLine(cx - 3, cy - 3, cx + 3, cy + 3)
-        p.drawLine(cx - 3, cy + 3, cx + 3, cy - 3)
-
-
-class PlusButton(QWidget):
-    """标题栏里的新建标签按钮：自绘加号，避开标题栏样式表给按钮加的底色。"""
-
-    clicked = Signal()
+    MIN_WIDTH = 96
+    MAX_WIDTH = 230
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(32, 32)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_tip(self, "新建标签：选择要访问的支部")
-        self._hover = False
+        self.setFixedHeight(TAB_HEIGHT)
+        self.itemLayout.setContentsMargins(5, 0, 5, 0)
+        self.setTabMinimumWidth(self.MIN_WIDTH)
+        self.setTabMaximumWidth(self.MAX_WIDTH)
+        self.setTabsClosable(True)
+        self.setTabShadowEnabled(False)
+        self.setTabSelectedBackgroundColor(QColor(255, 255, 255, 125),
+                                           QColor(255, 255, 255, 50))
+        self.tabAddRequested.connect(self.add_requested)
+        self.tabCloseRequested.connect(self._emit_closed)
+        # TabItem 按下时 TabBar 先更新选中项再发 currentChanged，
+        # 从这里取 routeKey 就是刚被点的那个账号
+        self.currentChanged.connect(
+            lambda i: self.tab_activated.emit(self.tab_route(i)))
 
-    def enterEvent(self, e):
-        self._hover = True
-        self.update()
+    def _emit_closed(self, index: int):
+        route = self.tab_route(index)
+        if route:
+            self.tab_closed.emit(route)
 
-    def leaveEvent(self, e):
-        self._hover = False
-        self.update()
+    def add_tab(self, user: str, title: str):
+        """新标签：显示班名（学段在提示里），提示带完整支部名与账号。"""
+        item = self.addTab(routeKey=user,
+                           text=split_branch_label(title)[1] or title)
+        # TabItem 默认 12px 常规体、圆角 5：中文班名看着挤，方块感也重。
+        # 加宽一档字号、提一档字重、圆角对齐窗口其余控件。
+        from app.ui import palette as P
 
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+        setFont(item, 13, QFont.Weight.Medium)
+        item.setBorderRadius(P.RADIUS["control"])
+        self.setTabToolTip(self._index_of(user), f"{title}（{user}）")
+        return item
 
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        dark = isDarkTheme()
-        if self._hover:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(255, 255, 255, 22) if dark else QColor(15, 23, 42, 26))
-            p.drawRoundedRect(self.rect(), 8, 8)
-        p.setPen(QColor("#f2f3f5") if dark else QColor("#1f2328"))
-        c = self.rect().center()
-        p.drawLine(c.x() - 5, c.y(), c.x() + 5, c.y())
-        p.drawLine(c.x(), c.y() - 5, c.x(), c.y() + 5)
+    def set_tab_title(self, user: str, title: str):
+        """备注改了就把标签名换掉：标签里只放班名，提示里保留学段与账号。"""
+        index = self._index_of(user)
+        if index < 0:
+            return
+        self.setTabText(index, split_branch_label(title)[1] or title)
+        self.setTabToolTip(index, f"{title}（{user}）")
+
+    def set_tab_tip(self, user: str, text: str):
+        index = self._index_of(user)
+        if index >= 0:
+            self.setTabToolTip(index, text)
+
+    def tab_route(self, index: int) -> str:
+        item = self.tabItem(index)
+        return item.routeKey() if item is not None else ""
+
+    def current_user(self) -> str:
+        item = self.currentTab()
+        return item.routeKey() if item is not None else ""
+
+    def user_at(self, order: int) -> str:
+        """按打开顺序取第 order 个标签的账号（越界返回空串）。"""
+        if 0 <= order < len(self.items):
+            return self.items[order].routeKey()
+        return ""
+
+    def last_user(self) -> str:
+        """最近打开的标签（最后一个）的账号。"""
+        return self.user_at(len(self.items) - 1)
+
+    def has_tab(self, user: str) -> bool:
+        return user in self.itemMap
+
+    def _index_of(self, user: str) -> int:
+        item = self.tab(user)
+        return self.items.index(item) if item is not None else -1
+
+
 
 
 def native_button_center(window) -> int | None:
@@ -308,12 +271,37 @@ def _start_system_move(host: QWidget, global_pos: QPoint) -> bool:
 class ChromeRow(QWidget):
     """标签条的空白处：按在空白处就拖动窗口。
 
-    标签、加号、导航按钮都是子控件，自己吃掉按下事件，不受影响。
+    加号、导航按钮都是子控件，自己吃掉按下事件，不受影响。
     拖动交给系统接管（见 _start_system_move），不再自己算位移。
+
+    TabBar 是个例外：它的标签项（TabItem）会把按下事件原样转发给父级——事件
+    从标签一路冒泡到这里，按在标签上也会发起系统拖动，标签就点不动了。
+    官方示例是在标题栏的 canDrag 里排除 `tabRegion()`，这里是同一思路：
+    注册进来的控件所占区域不算拖动区（add_no_drag）。
     """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._no_drag: list[QWidget] = []
+
+    def add_no_drag(self, tab_bar: BranchTabBar):
+        self._no_drag.append(tab_bar)
+
+    def _in_no_drag(self, pos) -> bool:
+        for bar in self._no_drag:
+            if not bar.isVisible():
+                continue
+            # tabRegion 是「有标签的那一段」（控件视口坐标）；标签条右侧的空白
+            # 仍然算拖动区，跟旧自绘标签时的手感一致
+            region = bar.tabRegion()
+            region.moveTopLeft(region.topLeft() + bar.viewport().mapTo(self, QPoint(0, 0)))
+            if region.contains(pos):
+                return True
+        return False
 
     def mousePressEvent(self, e):
         if (e.button() == Qt.MouseButton.LeftButton
+                and not self._in_no_drag(e.pos())
                 and _start_system_move(self, e.globalPos())):
             return
         super().mousePressEvent(e)
@@ -383,7 +371,6 @@ class BrowserWindow(FluentWindowBase):
 
         self._views: dict[str, object] = {}
         self._profiles: dict[str, object] = {}
-        self._tabs: dict[str, WebTab] = {}
         self._labels: dict[str, str] = {}
         self._state: dict[str, str] = {}  # login | home | checking | ready
         self._loadings: dict[str, LoginView] = {}
@@ -451,14 +438,15 @@ class BrowserWindow(FluentWindowBase):
 
         # 标签靠左，窗口按钮始终在最右侧；垂直位置由 _sync_title_metrics
         # 按系统按钮中线校准（见 showEvent）——标签与红黄绿按钮要在同一条水平线上。
-        # 标签自己排一行；宽度由 _relayout_tabs 按剩余空间算，不参与布局伸缩
-        self.tab_lay = QHBoxLayout()
-        self.tab_lay.setContentsMargins(0, 0, 0, 0)
-        self.tab_lay.setSpacing(4)
-        row.addLayout(self.tab_lay, 0)
-        self.new_tab_btn = PlusButton(self.tab_row)
-        self.new_tab_btn.clicked.connect(self.pick_new_tab)
-        row.addWidget(self.new_tab_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        # TabBar 自带 ＋ 按钮与关闭叉，标签挤压收缩也由控件自己管
+        self.tab_bar = BranchTabBar(self.tab_row)
+        self.tab_bar.add_requested.connect(self.pick_new_tab)
+        self.tab_bar.tab_activated.connect(self._on_tab_activated)
+        self.tab_bar.tab_closed.connect(self._close)
+        # 标签项会把按下事件转发到父级（TabItem 的行为），不豁免的话按在标签
+        # 上也会发起窗口拖动，标签就点不动了
+        self.tab_row.add_no_drag(self.tab_bar)
+        row.addWidget(self.tab_bar, 0, Qt.AlignmentFlag.AlignLeft)
         row.addStretch(1)
 
         # 导航与重新登录贴在窗口按钮左侧：标签再多也不会盖住它们
@@ -922,9 +910,7 @@ class BrowserWindow(FluentWindowBase):
             label = str(acc.get("remark") or user)
             if label != self._labels.get(user):
                 self._labels[user] = label
-                tab = self._tabs.get(user)
-                if tab is not None:
-                    tab.set_title(label)
+                self.tab_bar.set_tab_title(user, label)
             sig = self._cred_sig(acc)
             if sig == self._creds.get(user):
                 continue
@@ -936,27 +922,29 @@ class BrowserWindow(FluentWindowBase):
     def _cred_sig(self, acc: dict) -> tuple[str, str]:
         return (str(acc.get("password") or ""), str(acc.get("loginValidCode") or ""))
 
+    def _on_tab_activated(self, user: str):
+        """标签条里点选：只在和当前不是同一个时切换（程序里 setCurrentTab 也走这里）。"""
+        if user and user != self._current:
+            self._activate(user)
+
     def _activate(self, user: str):
         view = self._views.get(user)
         if view is None:
             return
         self._current = user
-        for name, tab in self._tabs.items():
-            tab.set_active(name == user)
+        self.tab_bar.setCurrentTab(user)
         self._raise_page(user)
         self._sync_nav()
 
     def _close(self, user: str):
         view = self._views.pop(user, None)
-        tab = self._tabs.pop(user, None)
         self._labels.pop(user, None)
         self._state.pop(user, None)
         self._creds.pop(user, None)
         self._login_token.pop(user, None)
-        if tab is not None:
-            self.tab_lay.removeWidget(tab)
-            tab.setParent(None)
-            tab.deleteLater()
+        index = self.tab_bar._index_of(user)
+        if index >= 0:
+            self.tab_bar.removeTab(index)
         loading = self._loadings.pop(user, None)
         if loading is not None:
             loading.setParent(None)
@@ -965,32 +953,19 @@ class BrowserWindow(FluentWindowBase):
             view.setParent(None)
             view.deleteLater()
         if self._views:
-            self._activate(next(reversed(self._views)))
+            self._activate(self.tab_bar.last_user() or next(reversed(self._views)))
         else:
             self._current = ""
             self._status = ""
             self._raise_page("")
         self._sync_nav()
-        self._relayout_tabs()
 
     def _short_name(self, user: str) -> str:
         """标签与提示统一用班名：学段在 tooltip 与本页标题里已有。"""
-        tab = self._tabs.get(user)
-        return getattr(tab, "_short", "") or self._labels.get(user, user)
-
-    def _relayout_tabs(self):
-        """按可用宽度分配标签宽度：挤不下就等比缩小，最小 84px，右侧按钮永不被盖。"""
-        n = len(self._tabs)
-        if not n:
-            return
-        margins = self.tab_row.layout().contentsMargins()
-        spacing = self.tab_row.layout().spacing()
-        reserved = (self.new_tab_btn.width() + 5 * NAV_BUTTON
-                    + spacing * (6 + n))
-        space = self.tab_row.width() - margins.left() - margins.right() - reserved
-        slot = max(WebTab.MIN_WIDTH, min(WebTab.MAX_WIDTH, space // n))
-        for tab in self._tabs.values():
-            tab.set_slot_width(slot)
+        label = self._labels.get(user)
+        if label:
+            return split_branch_label(label)[1] or label
+        return user
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -998,7 +973,6 @@ class BrowserWindow(FluentWindowBase):
         # 若 height() 还小于 100，_sync_title_metrics 会提前返回，
         # 标签行就一直停在常量位置，跟红黄绿按钮差几像素、看着没排齐。
         QTimer.singleShot(0, self._sync_title_metrics)
-        QTimer.singleShot(0, self._relayout_tabs)
 
     def _sync_nav(self):
         view = self._views.get(self._current)
@@ -1105,10 +1079,16 @@ class BrowserWindow(FluentWindowBase):
         return profile
 
     def _ensure_view(self, user: str):
-        from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineView
+        from PyQt5.QtWebEngineWidgets import QWebEnginePage
+        # 官方「背景失效解决办法」要求：窗口里有 QWebEngineView 时，改用
+        # qframelesswindow 的 FramelessWebEngineView——它构造时先 setHtml("") 垫一层
+        # 底（否则 Chromium 原生图层刚挂上会把窗口背景/材质穿透成白块），并主动
+        # 调 window().updateFrameless() 重新接管无边框。本窗口在 Win11/macOS 走自管
+        # 材质，视图建好后另有一拍 _apply_native_chrome 重挂（见下），两者配合。
+        from qframelesswindow.webengine import FramelessWebEngineView
 
         profile = self._profile(user)
-        view = QWebEngineView(self.area)
+        view = FramelessWebEngineView(self.area)
         view.setPage(QWebEnginePage(profile, view))
         view.loadProgress.connect(self._on_progress)
         view.loadFinished.connect(lambda ok, u=user: self._on_loaded(u, ok))
@@ -1119,12 +1099,7 @@ class BrowserWindow(FluentWindowBase):
 
         label = self._label_of(user)
         self._labels[user] = label
-        tab = WebTab(user, label, self.tab_row)
-        tab.activated.connect(self._activate)
-        tab.closed.connect(self._close)
-        self._tabs[user] = tab
-        self.tab_lay.addWidget(tab, 0, Qt.AlignmentFlag.AlignVCenter)
-        QTimer.singleShot(0, self._relayout_tabs)
+        self.tab_bar.add_tab(user, label)
         # 网页视图是原生图层，创建后会重设一次窗口样式，标题栏要重新接管
         QTimer.singleShot(0, self._apply_native_chrome)
         return view
@@ -1213,6 +1188,10 @@ class BrowserWindow(FluentWindowBase):
     def _on_loaded(self, user: str, ok: bool):
         view = self._views.get(user)
         if view is None:
+            return
+        if view.url().toString() == "about:blank":
+            # FramelessWebEngineView 构造时的 setHtml("") 垫底页：不是登录响应，
+            # 直接忽略，否则空正文会被 parse 成失败，把自动登录打断
             return
         state = self._state.get(user)
         if state == "login":
@@ -1304,6 +1283,8 @@ class BrowserWindow(FluentWindowBase):
         """状态只挂在标签的悬停提示上：窗口里不占一行，也不再弹提示条。"""
         self._status = text
         user = self._current
-        tab = self._tabs.get(user) if user else None
-        if tab is not None:
-            set_tip(tab, f"{text}\n{user}" if text else f"{self._labels.get(user, user)}（{user}）")
+        if not user:
+            return
+        tip = (f"{text}\n{user}" if text
+               else f"{self._labels.get(user, user)}（{user}）")
+        self.tab_bar.set_tab_tip(user, tip)

@@ -120,6 +120,7 @@ def build_command() -> list[str]:
         # qfluentwidgets 包内带字体和资源，PyInstaller 默认不收第三方包数据
         "--collect-all=qfluentwidgets",
         "--hidden-import=PyQt5.QtSvg",
+        "--hidden-import=cv2",
         # 云端备份的加密调用全在函数体内按需 import，静态分析收不到；
         # cryptography 的 Rust 原生扩展（_rust）也必须显式带上，
         # Windows 冻结包里缺它就是运行时报「未导入加密模块」。

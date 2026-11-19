@@ -43,6 +43,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
+from app.constants import DEFAULT_EXPECTED_PAGES
 from app.ui import dialogs
 from app.ui.browser_page import MAX_TABS as MAX_WEB_TABS
 from app.ui.combo import ComboBox
@@ -406,7 +407,8 @@ class SettingsPage(FluentPage):
                                    icon=FIF.CODE, control=controls(self.rule_btn))
         row(rule_card, self.rule_row)
         self.expected_pages_edit = LineEdit()
-        self.expected_pages_edit.setPlaceholderText("如 4")
+        self.expected_pages_edit.setPlaceholderText(
+            str(DEFAULT_EXPECTED_PAGES))
         self.expected_pages_edit.editingFinished.connect(self._save_config)
         row(rule_card, SettingRow("预期页数", desc="入团志愿书的页数，留空则不核对",
                                   icon=FIF.DOCUMENT,
@@ -630,8 +632,10 @@ class SettingsPage(FluentPage):
             self.workspace_row.set_desc("尚未选择")
 
         # 文档检查：预期页数
-        pages = cfg.get("expectedPages", "")
-        self.expected_pages_edit.setText(str(pages) if pages else "")
+        pages = cfg.get("expectedPages", DEFAULT_EXPECTED_PAGES)
+        if pages in ("", None):
+            pages = DEFAULT_EXPECTED_PAGES
+        self.expected_pages_edit.setText(str(pages))
 
         # 团支部编号规则
         self._update_rule_preview()
@@ -661,12 +665,14 @@ class SettingsPage(FluentPage):
         self._update_rule_preview()
 
     def expected_pages(self) -> int:
-        """文档检查的预期页数；未填或非法时返回 0（不核对页数）。"""
+        """文档检查的预期页数。留空按 DEFAULT_EXPECTED_PAGES（13 页）。"""
         t = self.expected_pages_edit.text().strip()
+        if not t:
+            return DEFAULT_EXPECTED_PAGES
         try:
             return max(0, int(t))
         except ValueError:
-            return 0
+            return DEFAULT_EXPECTED_PAGES
 
     def _save_config(self):
         # 载入过程中不许回写。_load_config 里 setCurrentIndex 会触发
