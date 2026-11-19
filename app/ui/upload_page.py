@@ -423,14 +423,14 @@ class UploadWorker(QThread):
 
             if groups:
                 workers = min(3, len(groups))
-                finished = 0
                 with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {pool.submit(self._upload_account, account, jobs): account
-                               for account, jobs in groups.items()}
+                    futures = {}
+                    for account, jobs in groups.items():
+                        self.stage.emit(f"提交 {account}（{len(jobs)} 份）")
+                        futures[pool.submit(self._upload_account, account, jobs)] = account
                     for future in as_completed(futures):
                         account = futures[future]
-                        finished += 1
-                        self.stage.emit(f"提交 {finished}/{len(groups)}：{account}")
+                        self.stage.emit(f"{account} 已提交")
                         try:
                             counts = future.result()
                         except Exception as exc:      # noqa: BLE001
