@@ -7,10 +7,19 @@
   Windows  exe（Inno Setup）/ msi  —— 全静默参数，不弹界面、不自动重启
   macOS   dmg（挂载后复制 .app 到「应用程序」）/ pkg
 其它类型或没有权限时，明确通知用户手动安装，不假装成功。
+
+Windows 有两条硬约束，决定了这里的实现：
+  1. 安装程序要替换正在运行的 exe。任何还活着的 SmartYouth 进程都会锁住它，
+     Inno 的「文件被占用」对话框在 /SUPPRESSMSGBOXES 下默认选「中止」，
+     安装器就以退出码 5 结束——这正是「托盘还在、更新失败」的现场。
+  2. 因此安装助手不能是自家 exe：从安装目录再起一个 SmartYouth.exe，等于
+     自己锁自己。改用 cmd 延迟脚本拉起安装器，进程模型与本程序彻底脱钩。
 """
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -42,10 +51,12 @@ def helper_command(path: str) -> list[str]:
 
 
 def start(path: str) -> bool:
-    """拉起独立安装进程。主程序随后退出，由助手接管安装与完成通知。"""
+    """拉起安装流程；主程序随后退出。Windows 与 macOS 走不同进程模型。"""
     target = Path(path)
     if not target.is_file():
         raise SilentInstallError("更新包不存在，可能已被移动或删除")
+    if sys.platform == "win32":
+        return _start_windows(target)
 
     kwargs = {
         "stdin": subprocess.DEVNULL,
@@ -69,6 +80,67 @@ def start(path: str) -> bool:
     return True
 
 
+# 更新标记：安装前写下目标版本，装完新版本启动时据此提示「已更新」。
+def _marker_path() -> Path:
+    return Path(os.path.expanduser("~")) / ".gd12355-helper" / "updated.json"
+
+
+def mark_pending(version: str) -> None:
+    """安装前记录目标版本；新版本第一次启动时消费它。"""
+    path = _marker_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": version}), encoding="utf-8")
+
+
+def take_updated(version: str) -> str:
+    """如果这次启动是更新后的第一次，返回被替换的旧版本号，并清掉标记。
+
+    只有当前版本 >= 标记版本才消费——安装失败时标记留着，
+    下次启动还能提醒去手动装。
+    """
+    from app import __version__
+
+    path = _marker_path()
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        target = str(data.get("version") or "")
+    except (OSError, ValueError):
+        path.unlink(missing_ok=True)
+        return ""
+    from app.services.updater import parse_version
+
+    if target and parse_version(version) >= parse_version(target):
+        path.unlink(missing_ok=True)
+        return target
+    return ""
+
+
+def _start_windows(target: Path) -> bool:
+    """直接拉起安装器，然后由调用方退出主程序。
+
+    不用「自家 exe 当助手」：从安装目录再起一个 SmartYouth.exe，等于自己锁住
+    正在被替换的文件，安装器的「文件被占用」在静默模式下默认选中止，退出码 5。
+
+    也不再写 .cmd 做延迟：路径里可能有中文用户名，批处理按控制台代码页解析，
+    写错编码就静默失败。安装器的 /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS
+    本来就会等（必要时强制关闭）仍占用文件的进程，比脚本 sleep 更可靠。
+    """
+    log = Path(os.path.expanduser("~")) / ".gd12355-helper" / "updates" / "install.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    args = ["/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES", "/NOCANCEL",
+            "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", f"/LOG={log}"]
+    flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
+             | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    subprocess.Popen([str(target), *args], cwd=str(target.parent),
+                     stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=flags, close_fds=True)
+    return True
+
+
 def installer_command(path: str) -> list[str] | None:
     """返回静默安装命令；dmg 没有现成安装器，返回 None 走复制分支。"""
     suffix = Path(path).suffix.lower()
@@ -76,7 +148,7 @@ def installer_command(path: str) -> list[str] | None:
         if suffix == ".exe":
             return [
                 path, "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES",
-                "/NOCANCEL", "/CLOSEAPPLICATIONS",
+                "/NOCANCEL", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS",
             ]
         if suffix == ".msi":
             return ["msiexec", "/i", path, "/qn", "/norestart"]

@@ -25,7 +25,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from app import __version__
+from app import BUILD_TARGET_ARCH, BUILD_TARGET_OS, __version__
 
 REPO = "IsSmallPigPig/Smart-YLC"
 REPO_URL = "https://github.com/IsSmallPigPig/Smart-YLC.git"
@@ -370,20 +370,39 @@ def _pick_asset(assets: list[dict], platform: str | None = None) -> dict | None:
 def _arch_markers(p: str) -> tuple[str, ...]:
     """本机该优先匹配的文件名片段，按优先级排列。
 
+    来源优先级：
+      1. 打包时写进代码的构建目标（BUILD_TARGET_OS / BUILD_TARGET_ARCH）——
+         装的是哪一份，升级就拿同一份，不靠运行时系统反推；
+      2. 源码运行时没有构建目标，按当前系统与位数推断。
+
     macOS：M 系列认 arm64，Intel 认 x86_64（沿用历史命名）。
-    Windows：先认本系统世代的包，再退到另一位宽的包——Win10+ 的 64 位机器
-    可以跑 Win7 包与 32 位包，反过来不行。产物名统一带系统世代与位宽
-    （SmartYouth-Windows10-x64-setup.exe），标记得与文件名保持一致。"""
+    Windows：产物名形如 SmartYouth-Windows10-x64-setup.exe。先认同名变体，
+    再退到同世代另一位宽（Win10 x64 机器能跑 Win10 x86 包），绝不跨世代
+    往下退——Win7 包在 Win10 上能跑，但拿它升级等于把系统要求降级。"""
     if p == "darwin":
+        if BUILD_TARGET_ARCH == "arm64":
+            return ("arm64",)
+        if BUILD_TARGET_ARCH == "x64":
+            return ("x86_64",)
         return ("arm64",) if platform_module.machine().startswith("arm") else ("x86_64",)
     if p == "win32":
-        is64 = platform_module.architecture()[0] == "64bit"
-        win7 = _is_windows7()
-        # 产物名形如 SmartYouth-Windows10-x64-setup.exe / SmartYouth-Windows7-x86-setup.exe
-        if win7:
-            return ("windows7-x64", "windows7-x86") if is64 else ("windows7-x86",)
-        return ("windows10-x64", "windows10-x86") if is64 else ("windows10-x86",)
+        generation, arch = _windows_variant()
+        other = "x86" if arch == "x64" else "x64"
+        return (f"{generation}-{arch}", f"{generation}-{other}")
     return ()
+
+
+def _windows_variant() -> tuple[str, str]:
+    """(windows10|windows7, x64|x86)：先看构建目标，源码运行再按系统推断。"""
+    generation = ""
+    if BUILD_TARGET_OS in ("Windows10", "Windows7"):
+        generation = BUILD_TARGET_OS.lower()
+    if not generation:
+        generation = "windows7" if _is_windows7() else "windows10"
+    arch = BUILD_TARGET_ARCH if BUILD_TARGET_ARCH in ("x64", "x86") else ""
+    if not arch:
+        arch = "x64" if platform_module.architecture()[0] == "64bit" else "x86"
+    return generation, arch
 
 
 def _is_windows7() -> bool:

@@ -254,6 +254,23 @@ def run() -> int:
         boot.close()
         raise
 
+    # 静默更新装完后，安装器会直接拉起新版本：消费标记，告诉用户已经更新。
+    # 标记只在「当前版本 >= 目标版本」时消费，安装失败时留着，下次启动仍能提醒。
+    from app import __version__ as _running_version
+    from app.services.silent_update import take_updated
+
+    _updated_from = take_updated(_running_version)
+    if _updated_from:
+        log_info(f"更新完成：{_updated_from} → {_running_version}")
+
+        def _announce_updated():
+            from qfluentwidgets import InfoBar
+
+            InfoBar.success("已更新", f"已从 {_updated_from} 更新到 {_running_version}",
+                            duration=6000, parent=w)
+
+        QTimer.singleShot(1800, _announce_updated)
+
     # 启动公告：经 GitHub 加速站拉 JSON，有新公告才弹窗；拉取失败只记日志
     from app.services.announcement_check import check_on_login
 

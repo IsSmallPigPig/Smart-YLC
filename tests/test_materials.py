@@ -34,8 +34,11 @@ class FakeEffect:
     def addShadowEffect(self, hwnd):
         self.calls.append(("shadow", int(hwnd)))
 
-    def DwmSetWindowAttribute(self, *args):
-        self.calls.append(("dwm",))
+    def DwmSetWindowAttribute(self, hwnd, attr, value, size):
+        self.calls.append(("dwm", int(attr)))
+
+    def DwmExtendFrameIntoClientArea(self, hwnd, margins):
+        self.calls.append(("extend", int(hwnd)))
 
 
 class FakeWindow:
@@ -130,3 +133,33 @@ def test_legacy_material_values_map_to_acrylic():
     assert materials.normalize("hud") == "acrylic"
     assert materials.normalize("whatever") == "none"
     assert materials.normalize(None) == "none"
+
+
+def test_acrylic_on_win11_uses_system_backdrop(win32):
+    """Win11 22H2 之后 WCA_ACRYLIC 已失效：必须走 DWMSBT_TRANSIENTWINDOW。
+
+    旧通路在深色模式下只剩一片纯色（看着像坏掉），浅色模式因为 tint 近似白色
+    干脆看不出效果——这就是「深色异常、浅色无效果」的根因。
+    """
+    window, effect = win32(22621)
+    assert materials.apply_windows_effect(window, "acrylic") is True
+    assert ("mica", False) in window.calls       # 先摘掉 Fluent 的 Mica，免得被顶掉
+    assert ("extend", 42) in effect.calls         # 背板要铺满客户区
+    assert ("dwm", materials.DWMWA_SYSTEMBACKDROP_TYPE) in effect.calls
+    assert not any(c[0] == "acrylic" for c in effect.calls), "旧通路不该再被调用"
+
+
+def test_acrylic_on_win10_keeps_legacy_path(win32):
+    """Win10 没有系统背板，继续用 blur behind + 亚克力 tint。"""
+    window, effect = win32(19045)
+    assert materials.apply_windows_effect(window, "acrylic") is True
+    assert ("blur-on", 42) in effect.calls
+    assert any(c[0] == "acrylic" for c in effect.calls)
+    assert ("dwm", materials.DWMWA_SYSTEMBACKDROP_TYPE) not in effect.calls
+
+
+def test_none_clears_system_backdrop_on_win11(win32):
+    """关材质要把系统背板重置成 AUTO，否则窗口仍然是半透明的。"""
+    window, effect = win32(22621)
+    assert materials.apply_windows_effect(window, "none") is False
+    assert ("dwm", materials.DWMWA_SYSTEMBACKDROP_TYPE) in effect.calls

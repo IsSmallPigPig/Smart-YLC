@@ -27,6 +27,14 @@ WINDOWS_MICA_BUILD = 22000
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_ROUND = 2
 
+# 系统背板（Win11 22H2 起）：1=自动 2=Mica 3=亚克力(Transient) 4=Tabbed
+DWMWA_SYSTEMBACKDROP_TYPE = 38
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMSBT_AUTO = 0
+DWMSBT_TRANSIENTWINDOW = 3
+# 22H2（22621）起 SystemBackdrop 稳定；更早的 Win11 仍走 WCA 旧通路
+WINDOWS_BACKDROP_BUILD = 22621
+
 
 def normalize(material: str | None) -> str:
     """任意历史取值 → none/acrylic/mica；未知值按关闭处理，不静默自造材质。"""
@@ -135,18 +143,67 @@ def _acrylic_tint() -> str:
         return ACRYLIC_TINT_LIGHT
 
 
+def _is_dark() -> bool:
+    try:
+        from qfluentwidgets import isDarkTheme
+
+        return bool(isDarkTheme())
+    except Exception:
+        return True
+
+
+def _margins_full():
+    """DwmExtendFrameIntoClientArea 要的 MARGINS，-1 表示整窗扩展。"""
+    from ctypes import Structure, c_int
+
+    class _Margins(Structure):
+        _fields_ = [("left", c_int), ("right", c_int),
+                    ("top", c_int), ("bottom", c_int)]
+
+    return _Margins(-1, -1, -1, -1)
+
+
+def _set_backdrop(window, value: int) -> bool:
+    """写 DWMWA_SYSTEMBACKDROP_TYPE；Win11 22H2 前不支持，返回 False。"""
+    try:
+        from ctypes import byref, c_int
+
+        effect = _window_effect(window)
+        hwnd = int(window.winId())
+        if hwnd == 0:
+            return False
+        effect.DwmExtendFrameIntoClientArea(hwnd, byref(_margins_full()))
+        effect.DwmSetWindowAttribute(
+            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+            byref(c_int(1 if _is_dark() else 0)), 4)
+        effect.DwmSetWindowAttribute(
+            hwnd, DWMWA_SYSTEMBACKDROP_TYPE, byref(c_int(value)), 4)
+        return True
+    except Exception:
+        return False
+
+
 def _apply_acrylic(window) -> bool:
-    """真亚克力：先给整个客户区开 DWM 模糊，再把亚克力合成叠上去。
+    """亚克力背景。Win11 22H2 起走系统背板，更早的 Windows 走 WCA 旧通路。
 
-    只用 ACCENT_ENABLE_ACRYLICBLURBEHIND 而不开 blur behind 的话，Win10 上拿到
-    的是一片纯色 tint；两个一起下才是 Fluent 那种透过窗口看后面的观感。
+    为什么必须分两条：
+      * Win11 22H2 之后 ACCENT_ENABLE_ACRYLICBLURBEHIND 已失效——再调用只会
+        得到一片没有模糊的纯色（深色模式下看起来像坏掉的纯黑，浅色模式下
+        因为 tint 接近白色，干脆看不出效果）。这正是用户报的「深色异常、
+        浅色无效果」。新系统改用 DWMSBT_TRANSIENTWINDOW，由 DWM 真正合成亚克力。
+      * Win10 仍然只有旧通路：blur behind + 亚克力 tint 两个一起下才有观感。
 
-    同时把 Fluent 自己的 Mica 开关关掉：它在主题切换（_onThemeChangedFinished）
-    时会重挂系统背景，把刚设好的亚克力顶掉。"""
+    两种情况下都先关掉 Fluent 自己的 Mica 开关，否则主题切换时
+    （_onThemeChangedFinished）它会重挂系统背景，把亚克力顶掉。"""
     try:
         window.setMicaEffectEnabled(False)
     except Exception:
         pass
+
+    if win11_build() >= WINDOWS_BACKDROP_BUILD and _set_backdrop(
+            window, DWMSBT_TRANSIENTWINDOW):
+        return True
+
     try:
         effect = _window_effect(window)
         hwnd = int(window.winId())
@@ -290,7 +347,9 @@ def apply_rounded_corners(window, radius: int = 10) -> bool:
 
 
 def remove_windows_effect(window) -> None:
-    """撤掉两条通路：系统背景与 DWM 模糊都要关，否则关材质后仍透出桌面。"""
+    """撤掉三条通路：系统背板、系统背景与 DWM 模糊，否则关材质后仍透出桌面。"""
+    if win11_build() >= WINDOWS_BACKDROP_BUILD:
+        _set_backdrop(window, DWMSBT_AUTO)
     try:
         effect = _window_effect(window)
         hwnd = int(window.winId())

@@ -775,3 +775,70 @@ def test_pick_asset_windows_falls_back_when_only_one_package(monkeypatch):
     monkeypatch.setattr(updater, "_is_windows7", lambda: False)
     assets = [{"name": "SmartYouth-Windows10-x64-setup.exe", "browser_download_url": "u1"}]
     assert updater._pick_asset(assets, "win32")["name"] == "SmartYouth-Windows10-x64-setup.exe"
+
+
+def test_windows_asset_follows_build_target(monkeypatch):
+    """打包目标写在代码里：Win7-x86 的包升级时必须拿 Win7-x86。
+
+    运行时反推在「Win10 机器上跑 Win7 包」这类情况下会拿错，装完系统要求就降级了。
+    """
+    from app.services import updater as up
+
+    assets = [
+        {"name": "SmartYouth-Windows10-x64-setup.exe"},
+        {"name": "SmartYouth-Windows10-x86-setup.exe"},
+        {"name": "SmartYouth-Windows7-x64-setup.exe"},
+        {"name": "SmartYouth-Windows7-x86-setup.exe"},
+    ]
+
+    monkeypatch.setattr(up, "BUILD_TARGET_OS", "Windows7")
+    monkeypatch.setattr(up, "BUILD_TARGET_ARCH", "x86")
+    assert [a["name"] for a in [up._pick_asset(assets, "win32")]] == [
+        "SmartYouth-Windows7-x86-setup.exe"]
+
+    monkeypatch.setattr(up, "BUILD_TARGET_OS", "Windows10")
+    monkeypatch.setattr(up, "BUILD_TARGET_ARCH", "x64")
+    assert up._pick_asset(assets, "win32")["name"] == "SmartYouth-Windows10-x64-setup.exe"
+
+
+def test_windows_asset_falls_back_within_same_generation(monkeypatch):
+    """同世代另一位宽可以退，跨世代不行。"""
+    from app.services import updater as up
+
+    monkeypatch.setattr(up, "BUILD_TARGET_OS", "Windows10")
+    monkeypatch.setattr(up, "BUILD_TARGET_ARCH", "x64")
+    only_x86 = [{"name": "SmartYouth-Windows10-x86-setup.exe"},
+                {"name": "SmartYouth-Windows7-x64-setup.exe"}]
+    assert up._pick_asset(only_x86, "win32")["name"] == "SmartYouth-Windows10-x86-setup.exe"
+
+
+def test_updated_marker_only_consumed_when_version_reached(tmp_path, monkeypatch):
+    """装完才有提示：版本没到目标时标记要留着，别把失败当成功。"""
+    from app.services import silent_update as su
+
+    monkeypatch.setattr(su, "_marker_path", lambda: tmp_path / "updated.json")
+    su.mark_pending("1.1.0")
+    assert su.take_updated("1.0.10") == ""          # 还是旧版本：不消费
+    assert (tmp_path / "updated.json").exists()
+    assert su.take_updated("1.1.0") == "1.1.0"      # 已到目标：消费并返回
+    assert not (tmp_path / "updated.json").exists()
+    assert su.take_updated("1.1.0") == ""
+
+
+def test_windows_installer_forces_close_and_logs(monkeypatch, tmp_path):
+    """安装参数必须带 /FORCECLOSEAPPLICATIONS：托盘进程没退干净时由安装器强关。
+
+    少了它，Inno 的「文件被占用」提示在 /SUPPRESSMSGBOXES 下默认选中止，
+    安装器以退出码 5 结束——就是用户看到的「托盘还在、更新失败」。
+    """
+    import types
+
+    from app.services import silent_update as su
+
+    monkeypatch.setattr(su, "sys", types.SimpleNamespace(platform="win32"))
+    cmd = su.installer_command(str(tmp_path / "SmartYouth-Windows10-x64-setup.exe"))
+    assert cmd is not None
+    assert cmd[0].endswith(".exe")
+    for flag in ("/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES",
+                 "/NOCANCEL", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS"):
+        assert flag in cmd, flag
