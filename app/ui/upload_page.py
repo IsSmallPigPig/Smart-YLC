@@ -461,8 +461,9 @@ class UploadPage(FluentPage):
         self.abnormal_btn = PushButton(FIF.INFO, "存在异常")
         set_tip(self.abnormal_btn, "查看被标记为异常的档案，这些档案不会上传")
         self.abnormal_btn.clicked.connect(self._show_abnormal)
-        self.phone_btn = PushButton(FIF.SEND, "手机同步")
-        set_tip(self.phone_btn, "同一个 Wi-Fi 下，手机扫码把 PDF 传到这台电脑")
+        # 电脑端是管理端，只收不发：手机扫码把档案汇总进来，不提供往手机推文件
+        self.phone_btn = PushButton(FIF.DOWNLOAD, "手机接收")
+        set_tip(self.phone_btn, "同一个 Wi-Fi 下，手机扫码把 PDF 传进这台电脑（只接收）")
         self.phone_btn.clicked.connect(self._open_phone_sync)
         # 功能按钮统一落在 banner 右下角（不居中）。查空格不设按钮：扫描完自动跑，
         # 进度挂在右下角的浮动进度条上（见 _start_cell_check）

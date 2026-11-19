@@ -319,7 +319,7 @@ def test_new_profile_defaults_name_from_code(qapp_session):
 
 
 def test_action_buttons_are_spaced_and_equal(qapp_session):
-    """上传/拉取两个按钮：等宽分列，中间留出可点开的间隔（不贴边、不重叠）。"""
+    """上传/拉取两个按钮：定宽居中、等宽，中间留出能点开的间隔（不贴边、不重叠）。"""
     from PyQt5.QtWidgets import QWidget
 
     from app.ui.cloud_backup_dialog import CloudBackupDialog
@@ -331,10 +331,11 @@ def test_action_buttons_are_spaced_and_equal(qapp_session):
                             on_restore=lambda cfg: None, profiles=[mine])
     row = dlg.upload_btn.parentWidget()
     lay = row.layout()
-    assert lay.count() == 2
     assert lay.spacing() >= 10                       # 按钮之间要有可见间隔
-    for i in range(2):
-        assert lay.stretch(i) == 1                   # 等宽分列，不会一个挤另一个
-    assert dlg.upload_btn.minimumWidth() >= 100
-    assert dlg.restore_btn.minimumWidth() >= 100
+    # 定宽居中：两边各留一段空白，不再各占一半撑满整行
+    assert lay.count() == 4
+    assert lay.itemAt(0).spacerItem() is not None
+    assert lay.itemAt(3).spacerItem() is not None
+    assert abs(dlg.upload_btn.width() - dlg.restore_btn.width()) <= 1
+    assert 140 <= dlg.upload_btn.width() <= 200
     dlg.deleteLater(); host.deleteLater()

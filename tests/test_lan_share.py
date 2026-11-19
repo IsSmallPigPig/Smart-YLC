@@ -142,7 +142,7 @@ def test_dialog_builds_and_toggles(qapp_session, tmp_path, monkeypatch):
         assert "Wi-Fi" in dlg.state_label.text()
         dlg._toggle()
         assert dlg.share.running is False
-        assert dlg.toggle_btn.text() == "开启接收"
+        assert dlg.toggle_btn.text() == "开始接收"
     dlg.close()
     dlg.deleteLater()
     host.deleteLater()
