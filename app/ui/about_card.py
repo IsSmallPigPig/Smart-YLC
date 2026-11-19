@@ -71,6 +71,12 @@ class AboutCard(CollapsibleCard):
             "了解作者", desc=self.CREDIT, icon=FIF.PEOPLE,
             control=_fill(author_btn)))
 
+        guide_btn = _button(FIF.HELP, "查看引导")
+        guide_btn.clicked.connect(self._open_guide)
+        self.body_lay.addWidget(SettingRow(
+            "使用引导", desc="要配置什么、能做什么，每学年 9 月 1 日后会自动再提示一次",
+            icon=FIF.HELP, control=_fill(guide_btn)))
+
         license_btn = _button(FIF.CERTIFICATE, "GPL-3.0")
         license_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl(updater.REPO_PAGE + "/blob/main/LICENSE")))
@@ -101,6 +107,14 @@ class AboutCard(CollapsibleCard):
         self._refresh_status()
 
     # ------------------------------------------------------------ 运行日志
+
+    def _open_guide(self):
+        """再读一遍使用引导（不写回展示时间：不影响下一学年的自动提示）。"""
+        from app.ui.guide_dialog import GuideDialog
+
+        dlg = GuideDialog(self.window())
+        dlg.show()
+        self._guide = dlg      # 留着引用，避免被回收
 
     def _export_logs(self):
         """导出全部滚动日志到用户指定位置。日志可能含路径等信息，但不包含配置里的密码。"""

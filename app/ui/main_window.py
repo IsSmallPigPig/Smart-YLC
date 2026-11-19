@@ -245,6 +245,22 @@ class MainWindow(MSFluentWindow):
         # 界面已经露面，趁空闲把内嵌浏览器的引擎拉起来：第一次建默认 profile 要
         # 几百毫秒，以前这笔开销落在「打开账号网页」那一拍上，窗口就定住一下。
         QTimer.singleShot(3000, self.warm_web_engine)
+        # 使用引导：首次启动、或进入新学年（9 月 1 日起）弹一次
+        QTimer.singleShot(1200, self.show_guide_if_due)
+
+    def show_guide_if_due(self):
+        """该弹引导就弹：从没弹过，或已经进了比上次更晚的学年。"""
+        from datetime import datetime
+
+        from app.ui.guide_dialog import GuideDialog, mark_guide_shown, should_show_guide
+
+        now = datetime.now()
+        if not should_show_guide(store.load(), now):
+            return
+        dlg = GuideDialog(self)
+        dlg.finished.connect(lambda _code: mark_guide_shown(now))
+        self._guide_dialog = dlg
+        dlg.show()
 
     def warm_web_engine(self):
         """预热 Chromium（只建默认 profile，不碰各账号的存储分区）。

@@ -103,6 +103,9 @@ def test_dismiss_splash_is_idempotent():
         def warm_web_engine(self):
             self.warmed.append("warm")
 
+        def show_guide_if_due(self):
+            self.warmed.append("guide")
+
     stub = Stub()
     MainWindow._dismiss_splash(stub)
     MainWindow._dismiss_splash(stub)
