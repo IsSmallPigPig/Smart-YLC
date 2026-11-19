@@ -7,6 +7,13 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.12
+
+- [24153c3] fix(ci): dmg 制作步骤加三次重试并保留 hdiutil 输出
+- [4e5afb5] feat(upload): 去掉工具栏的「存在异常」按钮
+
+@AnkoQAQ
+
 ## v1.0.11
 
 - [927ea55] feat(ui): 备份弹窗动作按钮移到底部按钮区；浅色下关闭毛玻璃
