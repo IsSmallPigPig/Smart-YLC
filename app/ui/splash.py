@@ -13,7 +13,7 @@ from qfluentwidgets import CaptionLabel, IndeterminateProgressRing, TitleLabel
 
 from app.ui.anim import fade_out
 from app.ui.brand import app_pixmap
-from app.ui.home_page import page_bg_color
+from app.ui.page import page_bg_color
 
 
 class SplashScreen(QWidget):

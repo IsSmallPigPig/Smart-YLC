@@ -9,15 +9,14 @@ from __future__ import annotations
 from PyQt5.QtCore import QRectF, Qt, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPainterPath,
                            QPen, QRadialGradient)
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
     CaptionLabel,
     FluentIcon,
-    IconWidget,
-    StrongBodyLabel,
+        StrongBodyLabel,
     TitleLabel,
     isDarkTheme,
     qconfig,

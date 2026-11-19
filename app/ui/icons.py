@@ -10,11 +10,9 @@
 
 from __future__ import annotations
 
-import sys
 from functools import lru_cache
 from pathlib import Path
 
-from PyQt5.QtCore import Qt
 from PyQt5.QtCore import QRectF
 from PyQt5.QtGui import QIcon, QPainter, QPixmap
 

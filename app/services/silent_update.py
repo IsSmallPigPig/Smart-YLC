@@ -98,8 +98,6 @@ def take_updated(version: str) -> str:
     只有当前版本 >= 标记版本才消费——安装失败时标记留着，
     下次启动还能提醒去手动装。
     """
-    from app import __version__
-
     path = _marker_path()
     if not path.is_file():
         return ""

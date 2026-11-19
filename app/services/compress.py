@@ -12,7 +12,7 @@ import os
 import pymupdf
 from PIL import Image
 
-from app.constants import LIMITS, MB
+from app.constants import LIMITS
 
 MAX_ITERS = LIMITS["MAX_COMPRESS_ITERATIONS"]
 MIN_DPI = LIMITS["MIN_DPI"]

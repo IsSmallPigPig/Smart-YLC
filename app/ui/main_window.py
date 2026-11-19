@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from PyQt5.QtCore import QEvent, QPoint, Qt, QTimer
+from PyQt5.QtCore import QEvent, QPoint, QThread, Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import QApplication, QWidget
 from qfluentwidgets import FluentIcon as FIF
@@ -23,8 +23,9 @@ from app.domain.account_health import excluded_summary, split_accounts
 from app.services import store
 from app.services.notices import NoticeCenter
 from app.ui.browser_page import BrowserWindow
-from app.ui.home_page import HomePage, page_bg_color
+from app.ui.home_page import HomePage
 from app.ui.org_manage_page import OrgManagePage
+from app.ui.page import page_bg_color
 from app.ui.org_page import OrgPage
 from app.ui.settings_page import SettingsPage
 from app.ui.messages_page import MessagesPage

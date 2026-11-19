@@ -330,7 +330,7 @@ class LoginView(QWidget):
 
     def paintEvent(self, e):
         """自己铺底色：下面就是那段 JSON 正文，透出来就露馅了。"""
-        from app.ui.home_page import page_bg_color
+        from app.ui.page import page_bg_color
 
         painter = QPainter(self)
         painter.fillRect(self.rect(), page_bg_color())
@@ -749,7 +749,7 @@ class BrowserWindow(FluentWindowBase):
         """没有材质时自己铺底色：Fluent 的透明窗口没人画底就会露出黑色。"""
         super().paintEvent(e)
         if not self._translucent or not self._material_applied:
-            from app.ui.home_page import page_bg_color
+            from app.ui.page import page_bg_color
 
             painter = QPainter(self)
             painter.fillRect(self.rect(), page_bg_color())

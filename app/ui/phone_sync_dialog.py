@@ -10,8 +10,6 @@
 from __future__ import annotations
 
 import io
-import os
-
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (

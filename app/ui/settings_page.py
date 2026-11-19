@@ -13,16 +13,14 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from PyQt5.QtCore import QThread, QTimer, pyqtSignal as Signal, Qt, QUrl
-from PyQt5.QtGui import QColor, QDesktopServices
+from PyQt5.QtCore import QThread, QTimer, pyqtSignal as Signal, Qt
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
-    QSizePolicy,
-    QStyle,
+        QStyle,
     QStyleOptionButton,
     QTableWidgetItem,
     QWidget,
@@ -1034,7 +1032,6 @@ class SettingsPage(FluentPage):
         from qfluentwidgets import LineEdit, PushButton
 
         from app.ui.combo import ComboBox
-        from app.ui.page import note_label
 
         dialog = self._config_dialog("通知设置", "每天一次按时间点推送；按间隔则从上次推送起算")
         time_edit = LineEdit(dialog)

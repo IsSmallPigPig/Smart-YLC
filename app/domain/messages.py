@@ -10,8 +10,7 @@ data-mobile（团员手机号）——仅用于卡片上显示团员姓名；点
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-
+from dataclasses import dataclass
 KIND_LABEL = {"report": "报到申请", "transfer": "转接申请", "other": "其他消息"}
 KIND_COLOR = {"report": "#1565c0", "transfer": "#2e7d32", "other": "#6b7280"}
 # 站点把「报到」错打成「报道」，两种写法都要认；关系转接含 转出/转入 两种审核提醒

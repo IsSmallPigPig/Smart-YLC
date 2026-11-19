@@ -20,13 +20,10 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
-from qfluentwidgets import CardWidget, FluentIcon as FIF
-from qfluentwidgets import SubtitleLabel, TitleLabel, isDarkTheme
-
+from qfluentwidgets import CardWidget, SubtitleLabel, TitleLabel
 from app.ui.anim import fade_out
 from app.ui.charts import BarRowWidget, ProgressDonut
-from app.ui.page import (BusyOverlay, FluentPage, banner_stops, note_label,
-                         page_bg_color)
+from app.ui.page import BusyOverlay, FluentPage, banner_stops, note_label
 from app.ui.widgets import StatTile
 from app.ui import palette as P
 

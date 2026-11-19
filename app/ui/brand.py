@@ -16,7 +16,7 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-from PyQt5.QtCore import QRect, QRectF, QSize, Qt
+from PyQt5.QtCore import QRect, QRectF, Qt
 from PyQt5.QtGui import QIcon, QImage, QPainter, QPainterPath, QPixmap
 
 from app.ui.hidpi import hidpi_canvas, scale_to, ui_dpr
