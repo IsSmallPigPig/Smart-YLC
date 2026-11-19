@@ -454,6 +454,10 @@ class SettingsPage(FluentPage):
         # 工作目录只作为值保存：以前这个无父 LineEdit 是隐藏的游离顶层窗口，
         # 一旦哪里 setVisible(True) 就会像「08:00」输入框那样弹出独立小窗。
         self.workspace_dir = ""
+        # 只有用户在设置页亲手选过目录，才允许把列表收成这一个；其余任何一次
+        # _save_config 都必须以 workspaceDirs 为准，否则上传页加的多目录会被这里
+        # 用「第一个目录」的单值反推回去、甚至整列清空（每次启动都要重选）。
+        self._ws_touched = False
         self.ws_btn = PushButton(FIF.FOLDER, "选择目录")
         self.ws_btn.clicked.connect(self._pick_workspace)
         self.workspace_row = SettingRow(
@@ -622,6 +626,7 @@ class SettingsPage(FluentPage):
 
         ws_dirs = load_workspace_dirs(cfg)
         self._ws_dirs = ws_dirs
+        self._ws_touched = False      # 以磁盘上的列表为准，没动过就不收窄
         self.workspace_dir = ws_dirs[0] if ws_dirs else ""
         if ws_dirs:
             self._setup_watcher(ws_dirs)
@@ -683,16 +688,20 @@ class SettingsPage(FluentPage):
             return
 
         def _write(cfg: dict):
-            ws = self.workspace_dir.strip()
             dirs = list(cfg.get("workspaceDirs") or [])
-            if ws != (dirs[0] if dirs else ""):
-                # 输入框被改过：这就是「只用一个目录」的意图，列表收成这一个
-                dirs = [ws] if ws else []
+            if getattr(self, "_ws_touched", False):
+                # 刚在设置页选了目录：这就是「只用一个目录」的明确意图
+                dirs = [self.workspace_dir.strip()] if self.workspace_dir.strip() else []
+                self._ws_touched = False
+            elif dirs:
+                # 列表是唯一真相（上传页可以加多个、也可以移除）；输入框只显示第一个，
+                # 不参与反推，避免某处忘了同步就把列表覆盖掉
+                self.workspace_dir = dirs[0]
             cfg.update({
                 "activeUser": self.active_user,
                 "accounts": self.accounts,
                 "rosters": dict(self._roster_paths),
-                "workspaceDir": ws,
+                "workspaceDir": dirs[0] if dirs else "",
                 "workspaceDirs": dirs,
                 "notifyTime": self._notify_time,
                 "notifyMode": self._notify_mode(),
@@ -2004,6 +2013,7 @@ class SettingsPage(FluentPage):
         if not d:
             return
         self.workspace_dir = d
+        self._ws_touched = True
         self._ws_dirs = [d]
         self._setup_watcher(self._ws_dirs)
         self._save_config()

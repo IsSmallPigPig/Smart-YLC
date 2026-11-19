@@ -645,11 +645,7 @@ class UploadPage(FluentPage):
             return 0
 
         self._dirs = save_workspace_dirs(current + added)
-        # 设置页只有「一个目录」的输入框，这里跟着同步，两处不打架
-        settings = getattr(self.window_ref, "settings_page", None)
-        if settings is not None and hasattr(settings, "_setup_watcher"):
-            settings.workspace_dir = self._dirs[0] if self._dirs else ""
-            settings._setup_watcher(self._dirs)
+        self._sync_settings_dirs()
         if skipped:
             InfoBar.info("已跳过重复目录", f"新增 {len(added)} 个，跳过 {skipped} 个",
                          duration=4000, parent=self)
@@ -659,7 +655,19 @@ class UploadPage(FluentPage):
     def remove_dir(self, path: str):
         """从列表移除一个来源目录；磁盘上的文件一个都不动。"""
         self._dirs = save_workspace_dirs([d for d in self._dirs if d != path])
+        self._sync_settings_dirs()
         self.refresh()
+
+    def _sync_settings_dirs(self):
+        """把目录列表的变更同步给设置页：那里只显示第一个目录、负责挂文件监听。
+
+        不这么做，设置页缓存的还是旧的单值，下一次保存设置就会拿它反推列表。
+        """
+        settings = getattr(self.window_ref, "settings_page", None)
+        if settings is None or not hasattr(settings, "_setup_watcher"):
+            return
+        settings.workspace_dir = self._dirs[0] if self._dirs else ""
+        settings._setup_watcher(self._dirs)
 
     # 拖放：窗口任意位置都能接住文件夹（也接住 PDF，按它所在的文件夹算）
 
