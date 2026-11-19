@@ -30,6 +30,7 @@ from qfluentwidgets import (
 from app.services import cloud_backup
 from app.ui.combo import ComboBox
 from app.ui.dialogs import ConfigDialog
+from app.ui.page import note_label
 
 
 class _Worker(QThread):
@@ -340,7 +341,7 @@ class CloudBackupDialog(ConfigDialog):
                  custom_servers: list[str] | None = None,
                  on_change: Callable[[dict], None] | None = None):
         super().__init__("云端备份", parent, width=520,
-                         note="每份配置一个提取码；上传要再验一次 4 位密码，防止误覆盖。")
+                         note="每份配置一个提取码；上传前再验一次密码，防止误覆盖。")
         self._get_config = get_config
         self._on_restore = on_restore
         self._on_change = on_change or (lambda patch: None)
@@ -371,21 +372,26 @@ class CloudBackupDialog(ConfigDialog):
             lay1.addWidget(btn)
         self.add(row1)
 
-        # 第二行：站点下拉（独占一行，状态文字另起一行，不挤占输入宽度）
-        self.site_combo = SiteCombo(self._servers, self.widget)
-        self.site_combo.on_add_requested(self._add_site)
-        self.site_combo.currentIndexChanged.connect(self._server_changed)
-        self.add(self.site_combo)
-
+        # 以下三组只在「有配置」时出现。没有配置时整片表单都是禁用灰控件，
+        # 看上去像坏了；空态只留下拉里的提示和三个图标按钮就够了。
         self.status = BodyLabel("", self.widget)
         self.status.setMinimumHeight(22)
         self.status.setWordWrap(True)
-        self.add(self.status)
 
-        # 第三行：4 位密码
+        self.site_label = note_label("备份站点")
+        self.site_combo = SiteCombo(self._servers, self.widget)
+        self.site_combo.on_add_requested(self._add_site)
+        self.site_combo.currentIndexChanged.connect(self._server_changed)
+
+        self.pwd_label = note_label("上传密码（4 位数字）")
         self.pwd_edit = PasswordLineEdit(self.widget)
         self.pwd_edit.setPlaceholderText("4 位数字密码")
         self.pwd_edit.setMaxLength(4)
+
+        self.add(self.status)
+        self.add(self.site_label)
+        self.add(self.site_combo)
+        self.add(self.pwd_label)
         self.add(self.pwd_edit)
 
         # 动作：两个按钮定宽居中，中间留 12px。以前各占一半、撑满整行，两个
@@ -404,6 +410,9 @@ class CloudBackupDialog(ConfigDialog):
         lay3.addStretch(1)
         self.add(row3)
 
+        self._form_widgets = [self.status, self.site_label, self.site_combo,
+                              self.pwd_label, self.pwd_edit, row3]
+
         self.new_btn.clicked.connect(self._new_profile)
         self.join_btn.clicked.connect(self._join_profile)
         self.del_btn.clicked.connect(self._delete_profile)
@@ -412,6 +421,12 @@ class CloudBackupDialog(ConfigDialog):
         self.yesButton.hide()
         self.cancelButton.setText("关闭")
         self.cancelButton.show()
+        # 关闭按钮与上面两个动作按钮同宽同列，不再横贯整条底边
+        self.cancelButton.setFixedWidth(176)
+        button_lay = getattr(self, "buttonLayout", None)
+        if button_lay is not None:
+            button_lay.insertStretch(0, 1)
+            button_lay.addStretch(1)
 
         self._refresh_profiles()
 
@@ -463,6 +478,9 @@ class CloudBackupDialog(ConfigDialog):
                                 + ("" if mine else "，他人的配置只能拉取"))
         else:
             self.status.setText(NO_PROFILE_TEXT)
+        has_profile = profile is not None
+        for widget in getattr(self, "_form_widgets", []):
+            widget.setVisible(has_profile)
         enabled = not self._running
         self.upload_btn.setEnabled(mine and enabled)
         self.restore_btn.setEnabled(bool(profile) and enabled)
