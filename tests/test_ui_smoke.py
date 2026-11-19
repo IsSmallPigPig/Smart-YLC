@@ -448,26 +448,24 @@ def test_status_row_click_opens_without_signal_error(app):
     row.deleteLater()
 
 
-@pytest.mark.skipif(
-    sys.platform == "darwin" and os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"),
-    reason="无边框窗口要真实 NSWindow，离屏下 qframelesswindow 的原生钩子会崩",
-)
-def test_archive_preview_uses_fluent_dialog(app, tmp_path):
-    """档案详情是 Fluent 无边框窗口：没有系统标题栏，单开窗口就不放面包屑。"""
+def test_archive_preview_has_crumb_and_back(app, tmp_path):
+    """档案详情是上传页内的子页面：面包屑负责返回，不另开窗口。"""
     from PyQt5.QtWidgets import QWidget
-    from qfluentwidgets.window.fluent_window import MSFluentTitleBar
 
-    from app.ui.archive_preview import ArchivePreviewDialog
+    from app.ui.archive_preview import ArchivePreviewView
 
     pdf = tmp_path / "张三+13800000000+入团志愿书.pdf"
     pdf.write_bytes(b"%PDF-1.4\n")
+    back = []
     host = QWidget()
-    dlg = ArchivePreviewDialog(host, str(pdf), pdf.name, expected_pages=13)
-    assert isinstance(dlg.titleBar, MSFluentTitleBar)
-    assert not hasattr(dlg.view, "crumb"), "单开窗口不该有面包屑导航"
-    assert dlg.height() >= 720, "默认高度不能把预览压成一条"
-    dlg.close()
-    dlg.deleteLater()
+    view = ArchivePreviewView(host, str(pdf), pdf.name, expected_pages=13,
+                              on_back=lambda: back.append(1))
+    view.stop_workers()
+    assert hasattr(view, "crumb"), "子页面必须有面包屑导航"
+    assert view.crumb.itemMap.get("upload") is not None
+    view._on_crumb("upload")
+    assert back == [1]
+    view.deleteLater()
     host.deleteLater()
 
 

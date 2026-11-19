@@ -20,7 +20,7 @@ import tempfile
 
 from PyQt5.QtCore import QRectF, Qt, QThread, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
-from PyQt5.QtWidgets import QDialog, QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from qfluentwidgets import (
     BodyLabel,
@@ -414,7 +414,6 @@ class UploadPage(FluentPage):
         self._drop_overlay: _DropOverlay | None = None
         # 被标记「存在异常」的档案不参与上传；结构检查发现的异常也会自动加进来
         self._abnormal_paths: set[str] = set()
-        self._preview_dialog: QDialog | None = None
         self._preview_view = None
         self._phone_dialog = None
         # 逐格检查结果：{路径: 空格数}；-1 表示这项没查（缺 OpenCV 等）
@@ -1074,30 +1073,42 @@ class UploadPage(FluentPage):
         self._show_preview(path, name)
 
     def _show_preview(self, path: str, name: str):
-        from app.ui.archive_preview import ArchivePreviewDialog
+        """点档案行 -> 上传页内的子页面：面包屑 + PDF 预览 + 结构检查 + 异常标记。
+
+        不开独立窗口：子页面压进主窗口的页面栈，返回走面包屑「上传档案」。
+        这一层不挂 banner——头图只属于上传列表。
+        """
+        from app.ui.archive_preview import ArchivePreviewView
 
         if not os.path.isfile(path):
             InfoBar.warning("文件不在了", path, duration=4000, parent=self)
             return
-        if self._preview_dialog is not None:
-            self._preview_dialog.close()
-        # 单开窗口：用 Fluent 无边框对话框，材质跟着主窗口当前设置走
-        dlg = ArchivePreviewDialog(
+        if self._preview_view is not None:
+            self._close_preview()
+        view = ArchivePreviewView(
             self, path, name, expected_pages=self._expected_pages(),
+            on_back=self._close_preview,
             on_mark_abnormal=lambda p, bad: self._mark_abnormal(p, bad),
-            material=getattr(self.window_ref, "_material", "none"),
         )
         if path in self._abnormal_paths:
-            dlg.view._set_abnormal(True)
-        self._preview_dialog = dlg
-        self._preview_view = dlg.view
+            view._set_abnormal(True)
+        window = self.window_ref
+        window.stackedWidget.addWidget(view)
+        window.switchTo(view)
+        self._preview_view = view
 
-        def _forget():
-            self._preview_dialog = None
-            self._preview_view = None
-
-        dlg.finished.connect(lambda _code: _forget())
-        dlg.show()
+    def _close_preview(self):
+        """从详情页回到上传列表，并把子页面连同后台线程一起收掉。"""
+        view = self._preview_view
+        self._preview_view = None
+        if view is None:
+            return
+        window = self.window_ref
+        if window.stackedWidget.currentWidget() is view:
+            window.switchTo(self)
+        view.stop_workers()
+        window.stackedWidget.removeWidget(view)
+        view.deleteLater()
 
     def _mark_abnormal(self, path: str, bad: bool):
         """标记/取消异常：文件跟着搬进或搬出「异常档案」子文件夹。
@@ -1174,9 +1185,13 @@ class UploadPage(FluentPage):
         # 已经按支部分组，行里不再重复「目标支部」；只有归不了组的才把支部当元信息
         if status.branch and status.problem:
             meta.append(status.branch)
-        abnormal = str(status.path) in self._abnormal_paths
-        if abnormal:
+        marked = str(status.path) in self._abnormal_paths
+        if marked:
             note = f"{note}，已标记异常" if note else "已标记异常，不参与上传"
+        # 铺黄底的条件是「这一行是异常」，不只是「被移进异常档案」：
+        # 标「异常」的档案 tone 是 error，只有红标签没有底色时它在一片深灰行里
+        # 格外扎眼（用户说的「异常发亮」）。两档统一成暖色底。
+        abnormal = marked or status.tone == "error"
         return {
             "title": status.name,
             "path": str(status.path),
