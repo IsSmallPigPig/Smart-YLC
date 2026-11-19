@@ -37,7 +37,8 @@ from qfluentwidgets import (
 
 from app.constants import LIMITS, MB
 from app.domain.account_health import excluded_summary, split_accounts
-from app.domain.archive_scan import FolderScan, relative_to, scan_folders
+from app.domain.archive_scan import (FolderScan, abnormal_target, is_abnormal_path,
+                                     normal_target, relative_to, scan_folders)
 from app.domain.naming import analyze_file_name
 from app.domain.upload_inspect import (archived_index, group_by_branch, inspect,
                                        member_index,
@@ -50,7 +51,7 @@ from app.ui import palette as P
 from app.ui.page import (BatchedBuild, BusyOverlay, CollapsibleCard, FluentPage,
                          PageBanner, note_label, page_bg_color,
                          section_title, set_tip)
-from app.ui.widgets import PillLabel, StatusList
+from app.ui.widgets import PillLabel, ProgressToast, StatusList
 
 
 class _DropZone(QWidget):
@@ -414,10 +415,18 @@ class UploadPage(FluentPage):
         # 被标记「存在异常」的档案不参与上传；结构检查发现的异常也会自动加进来
         self._abnormal_paths: set[str] = set()
         self._preview_dialog: QDialog | None = None
+        self._preview_view = None
         self._phone_dialog = None
         # 逐格检查结果：{路径: 空格数}；-1 表示这项没查（缺 OpenCV 等）
         self._cell_counts: dict[str, int] = {}
+        # 按 (路径, 修改时间) 缓存：同一份档案没改过就不重复扫
+        self._cell_cache: dict[tuple[str, float], int] = {}
         self._cell_worker = None
+        self._cell_total = 0
+        self._cell_done = 0
+        self._cell_skipped = 0
+        self._cell_skip_reason = ""
+        self._cell_toast: ProgressToast | None = None
         self._dirs: list[str] = []          # 来源目录（配置文件里的 workspaceDirs）
         self._scans: list[FolderScan] = []  # 每个来源目录的扫描结果
         self._folder_cards: dict[str, CollapsibleCard] = {}
@@ -452,16 +461,13 @@ class UploadPage(FluentPage):
         self.abnormal_btn = PushButton(FIF.INFO, "存在异常")
         set_tip(self.abnormal_btn, "查看被标记为异常的档案，这些档案不会上传")
         self.abnormal_btn.clicked.connect(self._show_abnormal)
-        self.cells_btn = PushButton(FIF.SEARCH, "查空格")
-        set_tip(self.cells_btn, "逐格检查每份档案的表格，标出没填的格子")
-        self.cells_btn.clicked.connect(self._check_cells_all)
         self.phone_btn = PushButton(FIF.SEND, "手机同步")
         set_tip(self.phone_btn, "同一个 Wi-Fi 下，手机扫码把 PDF 传到这台电脑")
         self.phone_btn.clicked.connect(self._open_phone_sync)
-        # 功能按钮统一落在 banner 右下角（不居中）
+        # 功能按钮统一落在 banner 右下角（不居中）。查空格不设按钮：扫描完自动跑，
+        # 进度挂在右下角的浮动进度条上（见 _start_cell_check）
         for w in (self.pick_btn, self.rescan_btn, self.upload_btn,
-                  self.stop_btn, self.abnormal_btn, self.cells_btn,
-                  self.phone_btn):
+                  self.stop_btn, self.abnormal_btn, self.phone_btn):
             self.header.add_control(w)
 
         # 已知问题公告（banner 下方）：上传检查出的问题收进这里，不再重复弹窗
@@ -819,11 +825,30 @@ class UploadPage(FluentPage):
 
         self._empty_text = "还没有可上传的档案"
         self.upload_btn.setEnabled(any(s.usable for s in statuses))
+        self._sync_abnormal(statuses)
+        alive = {str(s.path) for s in statuses}
+        self._cell_counts = {p: n for p, n in self._cell_counts.items() if p in alive}
+        self._cell_cache = {k: n for k, n in self._cell_cache.items() if k[0] in alive}
         self._rebuild_sources()
         # 卡片建完再收起加载遮罩，避免中途露出半截内容导致闪屏
-        self._rebuild_branches(on_done=self._hide_busy)
+        self._rebuild_branches(on_done=self._after_branches)
         self._set_missing_notice(stats["missing"])
         self._set_duplicate_notice(stats["duplicate"])
+
+    def _after_branches(self):
+        """卡片建完：收起加载遮罩，接着自动跑逐格检查（不占按钮、不锁交互）。"""
+        self._hide_busy()
+        self._start_cell_check()
+
+    def _sync_abnormal(self, statuses):
+        """异常以磁盘位置为准：「异常档案」文件夹里的一律算异常。
+
+        标记异常会把文件移进去，所以每次扫描都按路径重建；移动失败（只读盘等）
+        时退回内存标记，这里把还存在的旧路径保留下来，别被重扫冲掉。"""
+        auto = {str(s.path) for s in statuses if is_abnormal_path(str(s.path))}
+        keep = {p for p in self._abnormal_paths if os.path.isfile(p)}
+        self._abnormal_paths = auto | keep
+        self._refresh_abnormal_button()
 
     # ---------- 来源目录 ----------
 
@@ -926,24 +951,39 @@ class UploadPage(FluentPage):
         self._search = text
         self._rebuild_branches()
 
-    # ---------- 逐格检查（批量） ----------
+    # ---------- 逐格检查（扫描后自动跑） ----------
 
-    def _check_cells_all(self):
-        """批量查表格空格：后台逐份跑，结果写进每一行的说明。"""
+    def _cell_key(self, path: str) -> tuple[str, float]:
+        """缓存键：路径 + 修改时间。档案没改过就不重复扫几百页。"""
+        try:
+            return (path, os.path.getmtime(path))
+        except OSError:
+            return (path, 0.0)
+
+    def _start_cell_check(self):
+        """逐格查表格空格：扫描完自动在后台跑，结果写进每行说明。
+
+        进度挂在右下角浮动进度条上（ProgressToast），不占页面、不锁交互。
+        同一份档案按 (路径, 修改时间) 缓存，没改过就跳过。"""
         from app.services.form_cells import check as check_cells
 
-        paths = [str(s.path) for s in self.statuses]
+        paths = [str(s.path) for s in self.statuses
+                 if self._cell_key(str(s.path)) not in self._cell_cache]
         if not paths:
-            InfoBar.info("没有可检查的档案", "先添加来源文件夹", duration=3000, parent=self)
             return
         if self._cell_worker is not None and self._cell_worker.isRunning():
             return
 
-        self.cells_btn.setEnabled(False)
-        self.cells_btn.setText("查空格…")
+        self._cell_total = len(paths)
+        self._cell_done = 0
+        self._cell_skipped = 0
+        self._cell_skip_reason = ""
+        self._cell_toast = ProgressToast("查空格", self.window())
+        self._cell_toast.set_progress(0, self._cell_total)
+        self._cell_toast.show()
 
         class _Worker(QThread):
-            one = Signal(str, int)
+            one = Signal(str, int, str)   # path, 空格数（-1=没查成）, 跳过原因
             finished_all = Signal()
 
             def run(inner):
@@ -951,9 +991,10 @@ class UploadPage(FluentPage):
                     try:
                         result = check_cells(path)
                         count = -1 if result.skipped else len(result.blanks)
-                    except Exception:      # noqa: BLE001 - 单份失败不拖垮整批
-                        count = -1
-                    inner.one.emit(path, count)
+                        reason = result.skipped
+                    except Exception as exc:   # noqa: BLE001 - 单份失败不拖垮整批
+                        count, reason = -1, str(exc)
+                    inner.one.emit(path, count, reason)
                 inner.finished_all.emit()
 
         worker = _Worker(self)
@@ -962,18 +1003,31 @@ class UploadPage(FluentPage):
         self._cell_worker = worker
         worker.start()
 
-    def _on_cell_count(self, path: str, count: int):
-        if count < 0:
-            return
-        self._cell_counts[path] = count
+    def _on_cell_count(self, path: str, count: int, reason: str = ""):
+        if count >= 0:
+            self._cell_counts[path] = count
+            self._cell_cache[self._cell_key(path)] = count
+        else:
+            self._cell_skipped += 1
+            self._cell_skip_reason = reason or self._cell_skip_reason
+        self._cell_done += 1
+        if self._cell_toast is not None:
+            self._cell_toast.set_progress(self._cell_done, self._cell_total)
 
     def _on_cells_done(self):
-        self.cells_btn.setEnabled(True)
-        self.cells_btn.setText("查空格")
+        if self._cell_toast is not None:
+            self._cell_toast.finish()
+            self._cell_toast = None
         # 用已有扫描结果重排卡片，不重新扫目录
         self._rebuild_branches()
+        checked = self._cell_total - self._cell_skipped
         flagged = sum(1 for n in self._cell_counts.values() if n > 0)
-        if flagged:
+        if not checked:
+            # 一份都没查成是环境问题（缺渲染组件），不能报「没有空格」
+            InfoBar.warning("逐格检查没跑起来",
+                            self._cell_skip_reason or "缺少 PDF 渲染组件或 OpenCV",
+                            duration=6000, parent=self)
+        elif flagged:
             InfoBar.info("逐格检查完成", f"{flagged} 份档案的表格里有空格，说明见每行下方",
                          duration=5000, parent=self)
         else:
@@ -1032,14 +1086,52 @@ class UploadPage(FluentPage):
         if path in self._abnormal_paths:
             view._set_abnormal(True)
         self._preview_dialog = dlg
+        self._preview_view = view
+
+        def _forget():
+            self._preview_dialog = None
+            self._preview_view = None
+
+        dlg.finished.connect(lambda _code: _forget())
         dlg.show()
 
     def _mark_abnormal(self, path: str, bad: bool):
-        if bad:
-            self._abnormal_paths.add(path)
-        else:
-            self._abnormal_paths.discard(path)
-        self._refresh_abnormal_button()
+        """标记/取消异常：文件跟着搬进或搬出「异常档案」子文件夹。
+
+        异常状态不另存清单——文件夹就是清单：拷走来源目录、换电脑都带着走，
+        扫描时该文件夹下的一律归入异常。"""
+        if bad == is_abnormal_path(path):
+            return
+        target = self._relocate(path, bad)
+        if target is None:
+            # 移动失败（只读盘、文件被占用）退回内存标记：至少这一轮不上传
+            if bad:
+                self._abnormal_paths.add(path)
+            else:
+                self._abnormal_paths.discard(path)
+            self._refresh_abnormal_button()
+            return
+
+        if self._preview_view is not None and self._preview_view.path == path:
+            self._preview_view.retarget(target)
+        self._cell_counts.pop(path, None)      # 路径变了，旧的空格结果作废
+        InfoBar.success("已移入「异常档案」" if bad else "已移出「异常档案」",
+                        os.path.basename(target), duration=3000, parent=self)
+        self.refresh()
+
+    def _relocate(self, path: str, bad: bool) -> str | None:
+        """把档案搬进/搬出「异常档案」；返回新路径，失败提示并返回 None。"""
+        import shutil
+
+        target = abnormal_target(path) if bad else normal_target(path)
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.move(path, target)
+        except OSError as exc:
+            InfoBar.error("移动失败", f"{os.path.basename(path)}：{exc}",
+                          duration=6000, parent=self)
+            return None
+        return target
 
     def _refresh_abnormal_button(self):
         n = len(self._abnormal_paths)
@@ -1078,13 +1170,17 @@ class UploadPage(FluentPage):
         # 已经按支部分组，行里不再重复「目标支部」；只有归不了组的才把支部当元信息
         if status.branch and status.problem:
             meta.append(status.branch)
+        abnormal = str(status.path) in self._abnormal_paths
+        if abnormal:
+            note = f"{note}，已标记异常" if note else "已标记异常，不参与上传"
         return {
             "title": status.name,
             "path": str(status.path),
             "note": note,
-            "tone": status.tone,
-            "status": status.status_text,
+            "tone": "warning" if abnormal else status.tone,
+            "status": "已标记" if abnormal else status.status_text,
             "meta": meta,
+            "abnormal": abnormal,
         }
 
     def _rebuild_branches(self, on_done=None):
