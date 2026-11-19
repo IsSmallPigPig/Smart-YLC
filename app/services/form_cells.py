@@ -37,8 +37,11 @@ _MIN_CELL_W = 18
 _MIN_CELL_H = 10
 # 页面上至少这么多格才认为是表格页，否则跳过（正文页、封面页）
 _MIN_CELLS_PER_PAGE = 6
-# 每份档案只看前几页：主信息表在前 4 页，后面的志愿正文是整段手写
-_MAX_PAGES = 4
+# 只看主信息表所在的第 1、2 页。第 3、4 页是经历与志愿正文：表格线少、
+# 手写段落多，逐格判据在那里基本失效，报出来的空格要人工一个个排除。
+# 宁可少提示几处，也不让一张表挂满红框。
+_CHECK_PAGES = (1, 2)
+# 显式传 max_pages 的调用按「前 N 页」处理（调试/回归用）
 
 
 @dataclass
@@ -199,8 +202,10 @@ def check_page(gray, page_no: int = 1) -> list[BlankCell]:
     return blanks
 
 
-def check(path: str, max_pages: int = _MAX_PAGES) -> FormCellCheck:
-    """检查档案前几页的表格空格。只读，不改文件。"""
+def check(path: str, max_pages: int | None = None) -> FormCellCheck:
+    """检查主信息表（第 1、2 页）的表格空格。只读，不改文件。
+
+    `max_pages` 仅供调试：给出时按「前 N 页」检查，默认只看 _CHECK_PAGES。"""
     import time
 
     t0 = time.perf_counter()
@@ -227,16 +232,20 @@ def check(path: str, max_pages: int = _MAX_PAGES) -> FormCellCheck:
 
     try:
         result.pages = len(doc)
-        for pno in range(min(len(doc), max_pages)):
-            pix = doc[pno].get_pixmap(matrix=pymupdf.Matrix(_SCALE, _SCALE),
-                                      colorspace=pymupdf.csGRAY)
+        pages = (list(_CHECK_PAGES) if max_pages is None
+                 else list(range(1, min(len(doc), max_pages) + 1)))
+        for pno in pages:
+            if pno > len(doc):
+                break
+            pix = doc[pno - 1].get_pixmap(matrix=pymupdf.Matrix(_SCALE, _SCALE),
+                                          colorspace=pymupdf.csGRAY)
             if pix.width == 0 or pix.height == 0:
                 continue
             gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
                 pix.height, pix.width)
-            result.checked_pages.append(pno + 1)
-            result.page_sizes[pno + 1] = (pix.width, pix.height)
-            result.blanks.extend(check_page(gray, pno + 1))
+            result.checked_pages.append(pno)
+            result.page_sizes[pno] = (pix.width, pix.height)
+            result.blanks.extend(check_page(gray, pno))
     finally:
         doc.close()
 
