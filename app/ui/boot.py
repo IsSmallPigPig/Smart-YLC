@@ -17,6 +17,8 @@ from PyQt5.QtCore import QRect, QRectF, Qt, QTimer
 from PyQt5.QtGui import QColor, QFont, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import QWidget
 
+from app.ui import palette as P
+
 CORNER_RADIUS = 10
 LOGO = 80
 
@@ -178,7 +180,7 @@ class BootSplash(QWidget):
         track.setWidth(3)
         p.setPen(track)
         p.drawEllipse(ring)
-        arc = QPen(QColor("#0078d4"))
+        arc = QPen(QColor(P.BRAND))
         arc.setWidth(3)
         arc.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(arc)
