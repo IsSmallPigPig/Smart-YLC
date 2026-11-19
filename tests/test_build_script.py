@@ -29,13 +29,13 @@ def test_build_includes_assets_and_qfluentwidgets():
     assert "main.py" in out.splitlines()[-1]
 
 
-def test_build_does_not_exclude_pymupdf():
-    # pymupdf 由 PyInstaller 的 hook 收集原生库；一旦再加 --nofollow/--exclude
-    # 就会退回 Nuitka 那套「排除后运行期缺模块」的老问题
+def test_build_collects_binary_heavy_packages():
+    """numpy / cv2 / pymupdf 都要整包收：只靠 hook 时它们常缺子模块或原生库。"""
     out = _dry_run().lower()
     assert "nofollow" not in out
     assert "exclude-module" not in out
-    assert "pymupdf" not in out  # 不需要手写，交给 hook
+    for pkg in ("numpy", "cv2", "pymupdf"):
+        assert f"--collect-all={pkg}" in out
 
 
 def test_build_targets_current_platform():

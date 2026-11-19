@@ -121,6 +121,12 @@ def build_command() -> list[str]:
         "--collect-all=qfluentwidgets",
         "--hidden-import=PyQt5.QtSvg",
         "--hidden-import=cv2",
+        # 这三样都靠二进制扩展跑：numpy 的 _multiarray_umath、cv2 的 pyd、
+        # pymupdf 的 libmupdf。默认 hook 只收主模块，子模块与随包 dll 常漏，
+        # 冻结后表现为「numpy.core.multiarray failed to import」这类运行期报错。
+        "--collect-all=numpy",
+        "--collect-all=cv2",
+        "--collect-all=pymupdf",
         # 云端备份的加密调用全在函数体内按需 import，静态分析收不到；
         # cryptography 的 Rust 原生扩展（_rust）也必须显式带上，
         # Windows 冻结包里缺它就是运行时报「未导入加密模块」。
