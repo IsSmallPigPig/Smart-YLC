@@ -388,16 +388,20 @@ class CloudBackupDialog(ConfigDialog):
         self.pwd_edit.setMaxLength(4)
         self.add(self.pwd_edit)
 
-        # 动作：两个按钮等宽分列，中间留出间距；不给满宽，避免贴边看起来像一块
+        # 动作：两个按钮定宽居中，中间留 12px。以前各占一半、撑满整行，两个
+        # 按钮边框相接，看着像一整条，也分不清哪块能点。
         row3 = QWidget(self.widget)
         lay3 = QHBoxLayout(row3)
-        lay3.setContentsMargins(0, 2, 0, 0)
+        lay3.setContentsMargins(0, 4, 0, 0)
         lay3.setSpacing(12)
         self.upload_btn = PrimaryPushButton(FIF.CLOUD, "上传", row3)
         self.restore_btn = PushButton(FIF.DOWNLOAD, "拉取并恢复", row3)
         for btn in (self.upload_btn, self.restore_btn):
-            btn.setMinimumWidth(120)
-            lay3.addWidget(btn, 1)
+            btn.setFixedWidth(176)
+        lay3.addStretch(1)
+        lay3.addWidget(self.upload_btn)
+        lay3.addWidget(self.restore_btn)
+        lay3.addStretch(1)
         self.add(row3)
 
         self.new_btn.clicked.connect(self._new_profile)

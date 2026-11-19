@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from PyQt5.QtCore import QPoint, Qt, QTimer
+from PyQt5.QtCore import QEvent, QPoint, Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import QApplication, QWidget
 from qfluentwidgets import FluentIcon as FIF
@@ -449,7 +449,9 @@ class MainWindow(MSFluentWindow):
         menu.addSeparator()
         menu.addAction(act_quit)
         self.tray_menu = menu
-        self.tray.setContextMenu(menu)
+        from app.tray import bind_tray_menu
+
+        bind_tray_menu(self.tray, menu)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
 
@@ -459,6 +461,11 @@ class MainWindow(MSFluentWindow):
         if reason in (QSystemTrayIcon.ActivationReason.Trigger,
                       QSystemTrayIcon.ActivationReason.DoubleClick):
             self._restore_from_tray()
+        elif reason == QSystemTrayIcon.ActivationReason.Context:
+            # Windows 没有 contextMenu 时右键才走到这里（见 bind_tray_menu）
+            from PyQt5.QtGui import QCursor
+
+            self.tray_menu.exec(QCursor.pos())
 
     def _restore_from_tray(self):
         self.showNormal()
@@ -703,7 +710,6 @@ class MainWindow(MSFluentWindow):
         # （_onThemeChangedFinished）自己跟着重挂。浏览器窗口是独立窗口，一起换。
         if sys.platform == "win32" and self._translucent:
             self.apply_material(self._material)
-
     def apply_theme_async(self, mode: str, done=None):
         """切换明暗模式：画面淡出 → 换样式 → 淡入。
 
@@ -999,6 +1005,21 @@ class MainWindow(MSFluentWindow):
                     QTimer.singleShot(200, lambda: _apply(False))
 
             QTimer.singleShot(150, _apply)
+
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        # 最大化 / 还原 / 从最小化回来：DWM 会重算窗口 frame，亚克力与系统背板
+        # 一起被复位成不透明底——用户看到的就是「一最大化就变纯黑（或浅色下变白）」。
+        # 等这一帧几何定下来再重挂；不能同步做，重挂里有 DwmExtendFrameIntoClientArea，
+        # 在窗口状态变化的中途改 frame 会被 DWM 再打回一次。
+        if (e.type() == QEvent.Type.WindowStateChange
+                and sys.platform == "win32" and self._material_applied):
+            QTimer.singleShot(0, self._reapply_material)
+
+    def _reapply_material(self):
+        """按当前材质重挂一次混合层：主题切换与窗口状态变化的共用出口。"""
+        if self._material and self._material != "none":
+            self.set_material(self._material)
 
     def _normalBackgroundColor(self):
         """材质挂上后窗口底色给系统混合层让路，Qt 不再铺一层不透明底。

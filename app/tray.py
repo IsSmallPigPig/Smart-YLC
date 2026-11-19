@@ -36,6 +36,21 @@ def _tray_icon() -> QIcon:
     return app_icon()
 
 
+def bind_tray_menu(tray, menu) -> bool:
+    """把 Fluent 菜单挂到托盘图标上；返回「是否需要自己弹」。
+
+    Windows 上 setContextMenu 会把弹出交给 Qt 的托盘私有实现（按系统上下文菜单
+    定位、并改写菜单窗口属性），RoundMenu 的圆角、阴影、动画都不生效，看上去就是
+    系统默认的方形灰菜单。所以 Windows 不挂，改由调用方在 activated 的 Context
+    分支里自己 exec；macOS 只有 setContextMenu 这条通路会显示菜单（它不发 Context
+    信号），必须挂。
+    """
+    if sys.platform == "win32":
+        return True
+    tray.setContextMenu(menu)
+    return False
+
+
 class TrayDaemon(QObject):
     def __init__(self, app: QApplication):
         super().__init__()
@@ -61,7 +76,7 @@ class TrayDaemon(QObject):
         menu.addSeparator()
         menu.addAction(act_quit)
         self.menu = menu   # QSystemTrayIcon 不接管所有权，必须自己留着
-        self.tray.setContextMenu(menu)
+        bind_tray_menu(self.tray, menu)
         self.tray.activated.connect(self._on_activated)
         self.tray.show()
 
@@ -118,6 +133,14 @@ class TrayDaemon(QObject):
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.open_window()
+        elif reason == QSystemTrayIcon.ActivationReason.Context:
+            self._popup_menu()
+
+    def _popup_menu(self):
+        """在光标处弹出 Fluent 菜单（Windows 没有 contextMenu 时才发这个信号）。"""
+        from PyQt5.QtGui import QCursor
+
+        self.menu.exec(QCursor.pos())
 
     def quit(self):
         """退出：先停定时器、收窗口，再退事件循环并兜底硬退（见 app.ui.quit）。"""

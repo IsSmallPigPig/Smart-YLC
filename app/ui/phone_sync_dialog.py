@@ -85,7 +85,7 @@ class PhoneSyncDialog(QDialog):
         btn_lay = QHBoxLayout(btn_row)
         btn_lay.setContentsMargins(0, 0, 0, 0)
         btn_lay.setSpacing(12)
-        self.toggle_btn = PrimaryPushButton(FIF.SEND, "开启接收", btn_row)
+        self.toggle_btn = PrimaryPushButton(FIF.DOWNLOAD, "开始接收", btn_row)
         self.toggle_btn.clicked.connect(self._toggle)
         self.open_btn = PushButton(FIF.FOLDER, "打开同步文件夹", btn_row)
         self.open_btn.clicked.connect(self._open_folder)
@@ -109,8 +109,8 @@ class PhoneSyncDialog(QDialog):
             self._stop_timer()
             self.qr_label.clear()
             self.addr_label.setText("—")
-            self.state_label.setText("已停止接收。点「开启接收」重新开始。")
-            self.toggle_btn.setText("开启接收")
+            self.state_label.setText("已停止接收。点「开始接收」重新开始。")
+            self.toggle_btn.setText("开始接收")
             return
         try:
             url = self.share.start()
@@ -122,7 +122,7 @@ class PhoneSyncDialog(QDialog):
             # 服务起来了但没有局域网地址：典型是电脑没连 Wi-Fi
             self.state_label.setText(
                 "没有找到局域网地址。请让电脑与手机连同一个 Wi-Fi，"
-                "或用手机开热点让电脑连上，然后点「停止接收」再重新开启。")
+                "或用手机开热点让电脑连上，然后点「停止接收」再重新开始。")
             self.addr_label.setText("—")
             self.qr_label.clear()
             return
@@ -194,7 +194,7 @@ class PhoneSyncDialog(QDialog):
             self.share.stop()
             self._stop_timer()
             self.state_label.setText("半小时没有收到文件，已自动停止接收。")
-            self.toggle_btn.setText("开启接收")
+            self.toggle_btn.setText("开始接收")
 
     def closeEvent(self, event):
         self.share.stop()

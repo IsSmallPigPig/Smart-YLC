@@ -30,7 +30,7 @@ import re
 import sys
 from datetime import datetime
 
-from PyQt5.QtCore import QPoint, Qt, QTimer, QUrl, pyqtSignal as Signal
+from PyQt5.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, pyqtSignal as Signal
 from PyQt5.QtGui import QColor, QDesktopServices, QFont, QPainter
 from PyQt5.QtWidgets import (
     QApplication,
@@ -624,6 +624,14 @@ class BrowserWindow(FluentWindowBase):
         # 真没预热过（比如预热期间用户已经点了打开）才补一次，也等窗口画完。
         if not self._engine_warm:
             QTimer.singleShot(600, self._warm_engine)
+
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        # 最大化 / 还原：Qt 会重设一次原生窗口样式，系统背景跟着掉，
+        # 深色下窗口就变成一块纯黑。等几何定下来按显示路径再接管一次。
+        if (e.type() == QEvent.Type.WindowStateChange
+                and sys.platform == "win32" and self._material_applied):
+            QTimer.singleShot(0, self._apply_native_chrome)
 
     def _sync_title_metrics(self):
         """按系统按钮的真实位置定标签行位置与标题栏高度。
