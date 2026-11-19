@@ -76,7 +76,9 @@ class TrayDaemon(QObject):
         menu.addSeparator()
         menu.addAction(act_quit)
         self.menu = menu   # QSystemTrayIcon 不接管所有权，必须自己留着
-        bind_tray_menu(self.tray, menu)
+        # 是否需要自己弹菜单。macOS 上 setContextMenu 之后系统会弹一次，
+        # activated 也仍会发 Context——不听这个开关就会同时出现两个菜单。
+        self._self_popup = bind_tray_menu(self.tray, menu)
         self.tray.activated.connect(self._on_activated)
         self.tray.show()
 
@@ -133,11 +135,12 @@ class TrayDaemon(QObject):
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.open_window()
-        elif reason == QSystemTrayIcon.ActivationReason.Context:
+        elif (reason == QSystemTrayIcon.ActivationReason.Context
+              and self._self_popup):
             self._popup_menu()
 
     def _popup_menu(self):
-        """在光标处弹出 Fluent 菜单（Windows 没有 contextMenu 时才发这个信号）。"""
+        """在光标处弹出 Fluent 菜单（只有没挂 contextMenu 的平台才需要）。"""
         from PyQt5.QtGui import QCursor
 
         self.menu.exec(QCursor.pos())
