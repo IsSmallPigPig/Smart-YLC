@@ -448,6 +448,49 @@ def test_status_row_click_opens_without_signal_error(app):
     row.deleteLater()
 
 
+def test_preview_zoom_scales_and_scrolls(app):
+    """预览支持缩放：放大后图片变大、出现滚动范围，缩回 100% 正好整页。"""
+    from PyQt5.QtGui import QColor, QPixmap
+    from PyQt5.QtWidgets import QVBoxLayout, QWidget
+
+    from app.ui.archive_preview import _MAX_ZOOM, ArchivePreviewView
+
+    host = QWidget()
+    host.resize(900, 640)
+    lay = QVBoxLayout(host)
+    lay.setContentsMargins(0, 0, 0, 0)
+    view = ArchivePreviewView(host, "/nonexistent.pdf", "x.pdf", expected_pages=13)
+    view.stop_workers()
+    lay.addWidget(view)
+    host.show()
+    app.processEvents()
+    view._full_pixmap = QPixmap(1200, 1600)
+    view._full_pixmap.fill(QColor("white"))
+    view._render_display()
+    app.processEvents()
+
+    fit_w = view.preview_lbl.pixmap().width()
+    base_max = view.scroll.verticalScrollBar().maximum()
+    assert view.zoom_label.text() == "100%"
+
+    view.set_zoom(2.0)
+    app.processEvents()
+    assert view.preview_lbl.pixmap().width() >= fit_w * 1.9
+    # 放大后内容超出视口，滚动范围必须跟着变大（否则放大等于看不见下半页）
+    assert view.scroll.verticalScrollBar().maximum() > base_max
+    assert view.zoom_label.text() == "200%"
+
+    view.set_zoom(99)
+    assert view._zoom == _MAX_ZOOM
+    assert not view.zoom_in_btn.isEnabled()
+    view.set_zoom(1.0)
+    app.processEvents()
+    assert view.preview_lbl.pixmap().width() == fit_w
+    assert view.scroll.verticalScrollBar().maximum() == base_max
+    view.deleteLater()
+    host.deleteLater()
+
+
 def test_archive_preview_has_crumb_and_back(app, tmp_path):
     """档案详情是上传页内的子页面：面包屑负责返回，不另开窗口。"""
     from PyQt5.QtWidgets import QWidget
