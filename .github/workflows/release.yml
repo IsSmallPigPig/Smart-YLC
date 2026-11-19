@@ -81,9 +81,11 @@ jobs:
 
       - name: 制作 dmg 安装镜像
         run: |
+          set -euo pipefail
           DMGROOT="dist/dmgroot"
           rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
-          cp -R "dist/$APP_DISPLAY_NAME.app" "$DMGROOT/"
+          # ditto 比 cp -R 更稳：保留扩展属性与资源分支，复制后签名不会失效
+          ditto "dist/$APP_DISPLAY_NAME.app" "$DMGROOT/$APP_DISPLAY_NAME.app"
           # GPLv3 要求随二进制一并分发许可证全文
           cp LICENSE "$DMGROOT/许可证.txt"
           # 一次成型：不再「挂载—设卷图标—卸载—转换」。挂载后卸载在 runner 上会偶发
@@ -91,10 +93,26 @@ jobs:
           # 应用图标本身在 .app 里，不受影响。
           # 产物名只用 ASCII：中文文件名在 Release 上会被剥成 "-macOS-arm64.dmg"，
           # 卷名与包内 .app 仍是「智慧团委」
-          hdiutil create -volname "$APP_DISPLAY_NAME" -srcfolder "$DMGROOT" \
-            -ov -format UDZO "dist/$APP_NAME-macOS-arm64.dmg" > /dev/null
+          OUT="dist/$APP_NAME-macOS-arm64.dmg"
+          ok=0
+          for attempt in 1 2 3; do
+            rm -f "$OUT"
+            # 不把输出吞到 /dev/null：失败时日志里只剩 exit code 1，根本看不出
+            # 是资源忙、空间不足还是卷名问题
+            if hdiutil create -volname "$APP_DISPLAY_NAME" -srcfolder "$DMGROOT" \
+                 -ov -format UDZO "$OUT"; then
+              ok=1
+              break
+            fi
+            echo "::warning::hdiutil 第 $attempt 次失败，5 秒后重试"
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::dmg 制作失败（已重试 3 次），见上面的 hdiutil 输出"
+            exit 1
+          fi
           rm -rf "$DMGROOT"
-          ls -lh "dist/$APP_NAME-macOS-arm64.dmg"
+          ls -lh "$OUT"
 
       - uses: actions/upload-artifact@v6
         with:
