@@ -105,7 +105,9 @@ class ArchivePreviewView(FluentPage):
     def __init__(self, upload_page, path: str, name: str,
                  expected_pages: int = 0,
                  on_back: Callable[[], None] | None = None,
-                 on_mark_abnormal: Callable[[str, bool], None] | None = None):
+                 on_mark_abnormal: Callable[[str, bool], None] | None = None,
+                 on_ignore_blanks: Callable[[str], None] | None = None,
+                 blanks_ignored: bool = False):
         super().__init__("page-archive-preview", upload_page)
         self.upload_page = upload_page
         self.path = path
@@ -113,6 +115,8 @@ class ArchivePreviewView(FluentPage):
         self.expected_pages = expected_pages
         self._on_back = on_back or (lambda: None)
         self._on_mark = on_mark_abnormal or (lambda path, bad: None)
+        self._on_ignore_blanks = on_ignore_blanks or (lambda path: None)
+        self._blanks_ignored = bool(blanks_ignored)
         self._page = 1
         self._total = 0
         self._worker: QThread | None = None
@@ -166,9 +170,18 @@ class ArchivePreviewView(FluentPage):
         self.exam_label.setWordWrap(True)
         lay.addWidget(self.exam_label)
 
+        cell_row = QHBoxLayout()
+        cell_row.setSpacing(8)
         self.cell_label = BodyLabel("正在检查表格空格…", self)
         self.cell_label.setWordWrap(True)
-        lay.addWidget(self.cell_label)
+        cell_row.addWidget(self.cell_label, 1)
+        # 漏填只是提示，不参与上传判断；不想看到可以关掉
+        self.ignore_blanks_btn = PushButton("忽略漏填", self)
+        self.ignore_blanks_btn.setToolTip("只隐藏这条提示，不影响上传")
+        self.ignore_blanks_btn.clicked.connect(self._ignore_blanks)
+        self.ignore_blanks_btn.hide()
+        cell_row.addWidget(self.ignore_blanks_btn, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addLayout(cell_row)
 
         # PDF 预览区：滚动容器里一张 QLabel，翻页时替换
         self.preview_lbl = QLabel(self)
@@ -268,13 +281,22 @@ class ArchivePreviewView(FluentPage):
         self._cells = result
         if result.skipped:
             self.cell_label.setText(result.skipped)
+            self.ignore_blanks_btn.hide()
         elif result.blanks:
-            pages = sorted({c.page for c in result.blanks})
-            self.cell_label.setText(
-                f"表格里有 {len(result.blanks)} 处空格（第 "
-                f"{'、'.join(map(str, pages))} 页已用红框标出），请翻页核对这些格子是否漏填")
+            count = len(result.blanks)
+            if self._blanks_ignored:
+                self.cell_label.setText(f"已忽略 {count} 处空格，不影响上传")
+                self.ignore_blanks_btn.hide()
+            else:
+                pages = sorted({c.page for c in result.blanks})
+                self.cell_label.setText(
+                    f"表格里有 {count} 处空格（第 "
+                    f"{'、'.join(map(str, pages))} 页已用红框标出），"
+                    "请翻页核对这些格子是否漏填；漏填不影响上传")
+                self.ignore_blanks_btn.show()
         else:
             self.cell_label.setText("表格里没有发现空格")
+            self.ignore_blanks_btn.hide()
         # 结果回来时当前页已经画好了，重画一次把红框补上
         self._refresh_overlay()
 
@@ -475,6 +497,15 @@ class ArchivePreviewView(FluentPage):
         self._ocr_worker = W(self)
         self._ocr_worker.finished.connect(done)
         self._ocr_worker.start()
+
+    def _ignore_blanks(self):
+        if not self._cells or not self._cells.blanks:
+            return
+        self._blanks_ignored = True
+        self.cell_label.setText(
+            f"已忽略 {len(self._cells.blanks)} 处空格，不影响上传")
+        self.ignore_blanks_btn.hide()
+        self._on_ignore_blanks(self.path)
 
     # ---- 异常标记 ----
 
