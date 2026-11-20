@@ -44,7 +44,10 @@ object LanDiscovery {
                 val deadline = System.currentTimeMillis() + timeoutMs
                 while (System.currentTimeMillis() < deadline) {
                     val packet = DatagramPacket(buf, buf.size)
-                    val arrived = runCatching { socket.receive(packet) }.getOrNull() ?: continue
+                    val arrived = runCatching {
+                        socket.receive(packet)
+                        packet
+                    }.getOrNull() ?: continue
                     val text = String(arrived.data, 0, arrived.length)
                     val obj = runCatching { JSONObject(text) }.getOrNull() ?: continue
                     if (obj.optString("service") != "smartyouth") continue

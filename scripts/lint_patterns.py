@@ -332,6 +332,42 @@ def _network_problems(body: str, rel: str) -> list[str]:
     return []
 
 
+def _roster_key_problems(repo_src: str, parser_src: str) -> list[str]:
+    written = set(re.findall(r'\.put\("([A-Za-z]+)"', repo_src))
+    block = re.search(r"private val aliases[\s\S]*?\n\s*\)", parser_src)
+    # 只看 listOf(...) 里的值：map 左侧的键名是内部字段名，不代表解析器认这个键
+    known: set[str] = set()
+    if block:
+        for m in re.finditer(r"to listOf\(([^)]*)\)", block.group(0)):
+            known |= set(re.findall(r'"([A-Za-z]+)"', m.group(1)))
+    missing = sorted(written - known)
+    if not missing:
+        return []
+    return [
+        "mobile/app/src/main/java/com/smallylc/smartyouth/data/Repo.kt "
+        f"[缓存键无人识别] 写入的 {', '.join(missing)} 不在 MemberParser 别名表里，"
+        "回读时这些字段会变成空值，界面把正常团员判成异常"
+    ]
+
+
+def check_roster_cache_keys() -> list[str]:
+    """名单缓存写进去的键，解析器必须认得。
+
+    规则（2026-11-20 真机注入测试）：Repo.saveCache 写 `reportStatus`，
+    MemberParser 的别名表只有 `auditStatus`/`reportDataStatus`，断网或注入的名单
+    回读时报到状态全部为空，界面把所有人标成「未报到」。写入键与解析别名必须同源，
+    否则缓存看起来有数据、判定全部失真。
+    """
+    repo = KT_ROOT / "data" / "Repo.kt"
+    parser = KT_ROOT / "site" / "MemberParser.kt"
+    if not repo.exists() or not parser.exists():
+        return []
+    return _roster_key_problems(
+        repo.read_text(encoding="utf-8"),
+        parser.read_text(encoding="utf-8"),
+    )
+
+
 def run(quiet: bool = False) -> list[str]:
     problems: list[str] = []
     for path in _iter_py():
@@ -339,6 +375,7 @@ def run(quiet: bool = False) -> list[str]:
     problems.extend(check_deploy_configs())
     problems.extend(check_kotlin_patterns())
     problems.extend(check_android_network_config())
+    problems.extend(check_roster_cache_keys())
     if not quiet:
         for line in problems:
             print(line)

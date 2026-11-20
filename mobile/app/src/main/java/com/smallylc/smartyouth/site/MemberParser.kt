@@ -17,7 +17,7 @@ object MemberParser {
         "name" to listOf("name", "memberName", "userName"),
         "mobile" to listOf("mobile", "phone", "phoneNo", "tel"),
         "realNameStatus" to listOf("isRealName", "realNameStatus", "authenticationStatus"),
-        "reportStatus" to listOf("auditStatus", "reportDataStatus"),
+        "reportStatus" to listOf("auditStatus", "reportDataStatus", "reportStatus"),
         "ebookStatus" to listOf("volunteerBookModifyStatus", "ebookStatus"),
         "ecardStatus" to listOf("electronicHeadPictureStatus", "ecardPhotoStatus"),
         "unpaidTotal" to listOf("fees", "unpaidTotal", "notPayTotal", "未交团费总额（元）", "未交团费总额"),

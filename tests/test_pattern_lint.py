@@ -179,3 +179,25 @@ def test_cleartext_lan_requires_config():
     assert lint_patterns._network_problems(only_loopback, "net.xml")
     good = '<network-security-config><base-config cleartextTrafficPermitted="true" />'
     assert lint_patterns._network_problems(good, "net.xml") == []
+
+
+def test_roster_cache_key_unknown_to_parser():
+    """注入名单后全员显示「未报到」：缓存写 reportStatus，解析表却没有这个键。"""
+    repo = '.put("mid", m.mid).put("reportStatus", m.reportStatus)'
+    parser = """
+        private val aliases = mapOf(
+            "reportStatus" to listOf("auditStatus", "reportDataStatus"),
+        )
+    """
+    problems = lint_patterns._roster_key_problems(repo, parser)
+    assert problems and "reportStatus" in problems[0], problems
+
+
+def test_roster_cache_key_known():
+    repo = '.put("reportStatus", m.reportStatus)'
+    parser = """
+        private val aliases = mapOf(
+            "reportStatus" to listOf("auditStatus", "reportStatus"),
+        )
+    """
+    assert lint_patterns._roster_key_problems(repo, parser) == []

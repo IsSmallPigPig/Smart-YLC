@@ -72,7 +72,18 @@ enum class RosterFilter(val label: String, val key: String?) {
     Identity("信息错误", "identity"),
     Report("没有报到", "report"),
     Archive("没有档案", "archive"),
-    Fees("欠费", "fees"),
+    Fees("欠费", "fees");
+
+    fun count(members: List<Member>): Int = members.count { matches(it) }
+
+    fun matches(m: Member): Boolean = when (this) {
+        All -> true
+        Pending -> !m.uploaded
+        Identity -> !m.identityOk
+        Report -> !m.reportOk && !m.archiveMissing
+        Archive -> m.archiveMissing
+        Fees -> !m.feesOk
+    }
 }
 
 @Composable
@@ -100,15 +111,7 @@ fun MembersScreen(
             val textOk = query.isBlank() ||
                 m.name.contains(query.trim(), ignoreCase = true) ||
                 m.mobile.contains(query.trim())
-            val filterOk = when (filter) {
-                RosterFilter.All -> true
-                RosterFilter.Pending -> !m.uploaded
-                RosterFilter.Identity -> !m.identityOk
-                RosterFilter.Report -> !m.reportOk && !m.archiveMissing
-                RosterFilter.Archive -> m.archiveMissing
-                RosterFilter.Fees -> !m.feesOk
-            }
-            textOk && filterOk
+            textOk && filter.matches(m)
         }
     }
 
@@ -116,7 +119,11 @@ fun MembersScreen(
         topBar = {
             BlurredBar(backdrop) {
                 TopAppBar(
-                    title = if (members.isEmpty()) "团员名单" else "团员 ${members.size}",
+                    title = when {
+                        members.isEmpty() -> "团员名单"
+                        filter == RosterFilter.All && query.isBlank() -> "团员 ${members.size}"
+                        else -> "团员 ${filtered.size} / ${members.size}"
+                    },
                     color = barColor,
                     scrollBehavior = scrollBehavior,
                 )
@@ -162,6 +169,7 @@ fun MembersScreen(
                     RosterFilter.entries.forEach { entry ->
                         FilterChip(
                             text = entry.label,
+                            count = if (entry == RosterFilter.All) null else entry.count(members),
                             selected = filter == entry,
                             onClick = { filter = entry },
                         )
@@ -229,7 +237,7 @@ fun MembersScreen(
 }
 
 @Composable
-private fun FilterChip(text: String, selected: Boolean, onClick: () -> Unit) {
+private fun FilterChip(text: String, count: Int?, selected: Boolean, onClick: () -> Unit) {
     Card(
         onClick = onClick,
         cornerRadius = 18.dp,
@@ -239,7 +247,7 @@ private fun FilterChip(text: String, selected: Boolean, onClick: () -> Unit) {
         insideMargin = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 7.dp),
     ) {
         Text(
-            text = text,
+            text = if (count != null && count > 0) "$text $count" else text,
             fontSize = 13.sp,
             color = if (selected) colorScheme.onPrimary else colorScheme.onSurface,
         )

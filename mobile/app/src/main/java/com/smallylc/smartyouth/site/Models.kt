@@ -24,7 +24,9 @@ data class Member(
 
     val reportOk: Boolean get() = reportStatus.contains("审核通过")
 
-    val identityOk: Boolean get() = realNameStatus.contains("通过")
+    /** 只认「通过」「线下验证通过」；「未通过」「校验不通过」不能因为含「通过」就算合格。 */
+    val identityOk: Boolean
+        get() = realNameStatus.contains("通过") && !realNameStatus.contains("不通过")
 
     val feesOk: Boolean get() = unpaidTotal <= 0.0 && unpaidMonths <= 0
 
