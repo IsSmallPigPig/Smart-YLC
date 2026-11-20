@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import io
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal as Signal
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -32,6 +32,45 @@ from app.ui.dialogs import FluentPanelDialog
 from app.ui.page import theme_font
 
 
+class _RelayWorker(QThread):
+    """后台轮询中转站，把手机传来的档案拉回本地。
+
+    联网长跑不能塞进 CallbackWorker（它的 parent 析构会等线程结束，界面会卡）。
+    这里带 stop()/wait()，dialog 关闭时先停再退，周期用可中断的 wait 而非 sleep。
+    """
+
+    got = Signal(object)      # receive_all 的汇总 dict
+    failed = Signal(str)
+
+    def __init__(self, config: dict, interval_ms: int = 5000, parent=None):
+        super().__init__(parent)
+        self._config = config
+        self._interval = interval_ms
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        from app.services import relay_receive as relay
+
+        cfg = self._config
+        while not self._stop:
+            try:
+                # 不传 already：receive_all 内部 receive_pdf 会按 sha256 判重，
+                # 重复文件返回 duplicate 状态，不会重复落盘
+                summary = relay.receive_all(
+                    cfg["server"], cfg["code"],
+                    owner_key=cfg.get("owner_key", ""))
+                names = summary["saved"] + summary["duplicates"]
+                if names:
+                    self.got.emit(summary)
+            except Exception as exc:                 # noqa: BLE001 - 每轮失败不杀线程
+                self.failed.emit(str(exc))
+            # 可中断等待：stop() 后立刻醒，不用等满一个周期
+            self.wait(self._interval)
+
+
 class PhoneSyncDialog(FluentPanelDialog):
     """手机 → 电脑的局域网接收弹窗。
 
@@ -50,6 +89,7 @@ class PhoneSyncDialog(FluentPanelDialog):
         self.share = LanShare(on_received=self._on_received,
                               allowed_codes=local_config_codes())
         self._timer: QTimer | None = None
+        self._relay_worker: _RelayWorker | None = None
 
         self.viewLayout.setSpacing(12)
 
@@ -109,6 +149,7 @@ class PhoneSyncDialog(FluentPanelDialog):
         if self.share.running:
             self.share.stop()
             self._stop_timer()
+            self._stop_relay()
             self.qr_label.clear()
             self.addr_label.setText("—")
             self.state_label.setText("已停止接收。点「开始接收」重新开始。")
@@ -121,10 +162,16 @@ class PhoneSyncDialog(FluentPanelDialog):
             return
         self.yesButton.setText("停止接收")
         if not url:
-            # 服务起来了但没有局域网地址：典型是电脑没连 Wi-Fi
+            # 没有局域网地址：有云端配置就自动走中转轮询，手机用流量也能传
+            from app.services.relay_receive import local_relay_config
+
+            relay_cfg = local_relay_config()
+            if relay_cfg:
+                self._start_relay(relay_cfg)
+                return
             self.state_label.setText(
-                "没有找到局域网地址。请让电脑与手机连同一个 Wi-Fi，"
-                "或用手机开热点让电脑连上，然后点「停止接收」再重新开始。")
+                "没有局域网地址，也没配云端档案。请让手机电脑连同一个 Wi-Fi，"
+                "或在设置里配置云端备份作中转，再重新开始接收。")
             self.addr_label.setText("—")
             self.qr_label.clear()
             return
@@ -134,6 +181,36 @@ class PhoneSyncDialog(FluentPanelDialog):
         self.addr_label.setText(url)
         self._show_qr(url)
         self._start_timer()
+
+    def _start_relay(self, cfg: dict):
+        """无局域网时切到中转模式：后台轮询，收到的文件经 file_received 入列。"""
+        self.state_label.setText(
+            f"当前没有局域网地址，已切到中转模式。手机 App 用提取码 {cfg['code']} "
+            "上传，电脑会自动取回，不用连同一个 Wi-Fi。")
+        self.addr_label.setText(f"中转提取码：{cfg['code']}")
+        self.qr_label.setText("中转模式：手机 App 里填上面的提取码即可上传")
+
+        worker = _RelayWorker(cfg, parent=self)
+        worker.got.connect(self._on_relay_got)
+        worker.failed.connect(self._on_relay_failed)
+        self._relay_worker = worker
+        worker.start()
+
+    def _stop_relay(self):
+        if self._relay_worker is not None:
+            self._relay_worker.stop()
+            self._relay_worker.wait(2000)
+            self._relay_worker = None
+
+    def _on_relay_got(self, summary: dict):
+        saved = summary.get("saved") or []
+        if saved:
+            self.result_label.setText(f"中转收到 {len(saved)} 份档案")
+            for path in saved:
+                self.file_received.emit(path)
+
+    def _on_relay_failed(self, message: str):
+        self.result_label.setText(f"中转接收出错：{message}")
 
     def _show_qr(self, url: str):
         try:
@@ -200,6 +277,7 @@ class PhoneSyncDialog(FluentPanelDialog):
         """弹窗关闭时停服务，避免端口与后台线程留到下一次打开。"""
         self.share.stop()
         self._stop_timer()
+        self._stop_relay()
 
     def closeEvent(self, event):
         # finished 未覆盖的场景（如窗口被外部销毁）也要停

@@ -24,6 +24,22 @@ class RelayError(RuntimeError):
     """中转站返回错误或数据不完整。"""
 
 
+def local_relay_config() -> dict:
+    """从云端备份配置里取中转参数；没配过时返回空字典。
+
+    手机和电脑填同一个提取码就是「相同配置」：局域网用它配对，连不上时用它
+    当中转通道。ownerKey 只在删除云端副本时需要。
+    """
+    from app.services import cloud_backup, store
+
+    profiles = cloud_backup.load_profiles(store.load())
+    if not profiles:
+        return {}
+    p = profiles[0]
+    return {"server": p["server"], "code": p["code"],
+            "owner_key": p.get("ownerKey", "")}
+
+
 def _raise_for(resp: requests.Response, action: str) -> None:
     if resp.ok:
         return
@@ -55,16 +71,24 @@ def list_pending(server: str, code: str,
     return [f for f in files if isinstance(f, dict) and f.get("id")]
 
 
-def pull(server: str, code: str, file_id: str,
+def pull(server: str, code: str, file_id: str, parts: int = 1,
          timeout: int = DEFAULT_TIMEOUT) -> bytes:
-    """拉取单个文件的完整字节。分片已在服务端合并，这里按字节流读回。"""
+    """拉取单个文件的完整字节。
+
+    服务端每片最多 3MB（Netlify 响应体 6MB 的墙），这里按 part 逐片读回拼接。
+    """
     base = normalize_server(server)
     code = normalize_code(code)
-    resp = requests.get(f"{base}/api/archive",
-                        params={"action": "pull", "id": code, "file": file_id},
-                        timeout=timeout)
-    _raise_for(resp, "拉取文件")
-    return resp.content
+    chunks: list[bytes] = []
+    for part in range(max(1, parts)):
+        resp = requests.get(f"{base}/api/archive",
+                            params={"action": "pull", "id": code, "file": file_id,
+                                    "part": part}, timeout=timeout)
+        _raise_for(resp, f"拉取第 {part} 片")
+        if not resp.content:
+            raise RelayError(f"第 {part} 片为空，文件可能传损坏了")
+        chunks.append(resp.content)
+    return b"".join(chunks)
 
 
 def clear(server: str, code: str, file_id: str, owner_key: str,
@@ -96,7 +120,7 @@ def receive_all(server: str, code: str, *, already: set[str] | None = None,
             summary["skipped"].append(name)
             continue
         try:
-            data = pull(server, code, str(meta["id"]), timeout)
+            data = pull(server, code, str(meta["id"]), int(meta.get("parts") or 1), timeout)
             if digest and len(data) and _digest_bytes(data) != digest:
                 summary["rejected"].append((name, "内容摘要不符，传输可能损坏"))
                 continue

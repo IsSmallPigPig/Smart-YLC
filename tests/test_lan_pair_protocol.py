@@ -135,3 +135,44 @@ def test_upload_without_token_is_rejected(share):
     code, data = post(base, "/api/upload",
                       query={"name": "x.pdf"}, body=b"%PDF-1.4\n")
     assert code == 401 and data["ok"] is False
+
+
+def test_no_lan_with_relay_config_starts_relay_worker(qapp_session, tmp_path, monkeypatch):
+    """电脑没有局域网地址但配了云端档案时，自动切到中转轮询。"""
+    from PyQt5.QtWidgets import QWidget
+
+    from app.ui import phone_sync_dialog as psd
+
+    host = QWidget()
+    host.resize(900, 700)
+    dlg = psd.PhoneSyncDialog(host, auto_start=False)
+
+    # 无局域网地址 + 有中转配置
+    monkeypatch.setattr("app.services.lan_share.lan_addresses", lambda: [])
+    monkeypatch.setattr("app.services.relay_receive.local_relay_config",
+                        lambda: {"server": "https://relay.test", "code": "ABC234",
+                                 "owner_key": "k" * 64})
+    started = []
+    monkeypatch.setattr(psd._RelayWorker, "start", lambda self: started.append(1))
+
+    dlg._toggle()
+    assert started and dlg._relay_worker is not None
+    assert "中转" in dlg.state_label.text() and "ABC234" in dlg.addr_label.text()
+
+    dlg._cleanup()
+    dlg.deleteLater()
+    host.deleteLater()
+
+
+def test_relay_worker_stops_cleanly(qapp_session):
+    """中转线程 stop() 后能退出，wait 不无限挂住。"""
+    import time
+
+    from app.ui.phone_sync_dialog import _RelayWorker
+
+    worker = _RelayWorker({"server": "https://relay.test", "code": "ABC234"},
+                          interval_ms=100)
+    worker.start()
+    time.sleep(0.15)
+    worker.stop()
+    assert worker.wait(2000), "线程没在 2 秒内退出"
