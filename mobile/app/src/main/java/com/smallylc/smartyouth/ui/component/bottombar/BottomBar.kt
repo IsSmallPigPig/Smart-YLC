@@ -134,9 +134,9 @@ enum class MainDestination(val label: String, val icon: ImageVector) {
 // 悬浮胶囊几何：与 Classy 的 dock 一致，留出左右呼吸和手势条间距。
 private val BarHeight = 64.dp
 private val DockMargin = 26.dp
-private val PillWidth = 56.dp
+private val PillWidth = 64.dp
 
-private val PillHeight = 30.dp
+private val PillHeight = 32.dp
 private val ThumbHeight = 54.dp
 private val ThumbTop = 9.dp
 private val IconSize = 22.dp
@@ -144,7 +144,7 @@ private val IconSize = 22.dp
 private val LabelSize = 11.sp
 
 /** 单个 tab 的宽度：图标 22dp、两个汉字约 22dp，两侧各留 4dp。 */
-private val PillTop = 8.dp
+private val PillTop = 6.dp
 /** 选中块高度：盖住图标与文字，比整条矮一圈。 */
 private val ItemHeight = 58.dp
 /** 选中块圆角：背景半径 36dp 减去上下各 7dp 内缩，与背景同心。 */
@@ -162,10 +162,12 @@ fun BottomBar(
     modifier: Modifier = Modifier,
 ) {
     val colors = MiuixTheme.colorScheme
+    val density = LocalDensity.current
     val items = MainDestination.entries
 
     val thumbX = remember { Animatable(0f) }
     var itemWidthPx by remember { mutableFloatStateOf(0f) }
+    val pillWidthPx = with(density) { PillWidth.toPx() }
     var barX by remember { mutableFloatStateOf(0f) }
     val centers = remember { mutableStateListOf(*Array(items.size) { 0f }) }
     val springSpec = spring<Float>(dampingRatio = 0.8f, stiffness = 320f)
@@ -173,7 +175,7 @@ fun BottomBar(
     LaunchedEffect(centers.toList(), mainState.selectedPage, itemWidthPx) {
         val index = mainState.selectedPage.coerceIn(0, items.lastIndex)
         if (itemWidthPx <= 0f || centers[index] <= 0f) return@LaunchedEffect
-        thumbX.animateTo(centers[index] - barX - itemWidthPx / 2f, springSpec)
+        thumbX.animateTo(centers[index] - barX - pillWidthPx / 2f, springSpec)
     }
 
     Box(

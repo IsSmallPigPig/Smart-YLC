@@ -568,7 +568,7 @@ private fun PageThumb(
     onClick: (() -> Unit)? = null,
 ) {
     val bitmap by produceState<android.graphics.Bitmap?>(null, page.id, page.quad, page.filter) {
-        value = ScanSession.render(page, 300)
+        value = ScanSession.render(page, 640)
     }
     val modifier = when {
         aspect != null -> Modifier.fillMaxWidth().aspectRatio(aspect)

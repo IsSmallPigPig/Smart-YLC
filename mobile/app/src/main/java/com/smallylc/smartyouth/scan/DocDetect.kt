@@ -168,11 +168,7 @@ object DocDetect {
         }
         curve.release(); approx.release()
         if (ordered.size != 4) return null
-        // 形态学开运算会把边界吃进去几像素，按质心放大 1.5% 把框推回纸边
-        val cx = ordered.sumOf { it.x } / 4.0
-        val cy = ordered.sumOf { it.y } / 4.0
-        val grown = ordered.map { Point(cx + (it.x - cx) * 1.015, cy + (it.y - cy) * 1.015) }
-        return toQuad(grown, width, height)
+        return toQuad(ordered, width, height)
     }
 
     /** 归一化用的起点：左上。 */

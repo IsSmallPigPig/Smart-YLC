@@ -88,7 +88,7 @@ fun CropEditor(
     // 裁切或滤镜变了才重算小预览，拖拽过程中不动它
     LaunchedEffect(page.quad, page.filter, page.id, page.rotation) {
         // 不主动回收旧图：它可能还在渲染队列里，回收会直接闪退
-        preview = ScanSession.render(page, 420)
+        preview = ScanSession.render(page, 900)
     }
 
     Column(modifier) {
