@@ -197,6 +197,18 @@ fun CloudSyncScreen(onBack: () -> Unit) {
             }
 
             if (synced.isNotEmpty()) {
+                item {
+                    Button(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp)
+                            .height(48.dp),
+                        colors = ButtonDefaults.buttonColorsPrimary(),
+                    ) {
+                        Text("去登录")
+                    }
+                }
                 items(synced) { name ->
                     Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                         Text(

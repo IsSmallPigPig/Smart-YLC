@@ -13,12 +13,14 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -75,6 +77,8 @@ fun LoginScreen(
     var password by remember { mutableStateOf(existing?.password.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    val savedAccounts = remember { Repo.accounts.accounts }
+    var picker by remember { mutableStateOf(false) }
     var captcha by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var captchaInput by remember { mutableStateOf("") }
     var captchaHint by remember { mutableStateOf("") }
@@ -170,6 +174,26 @@ fun LoginScreen(
                     )
                 }
             }
+            if (savedAccounts.isNotEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        onClick = { picker = true },
+                    ) {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                            Text(
+                                text = "已保存 ${savedAccounts.size} 个账号",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colorScheme.onSurface,
+                            )
+                            MutedText("选中后自动填入账号与密码", Modifier.padding(top = 3.dp))
+                        }
+                    }
+                }
+            }
             item {
                 Card(
                     modifier = Modifier
@@ -245,6 +269,30 @@ fun LoginScreen(
             }
             item { Spacer(Modifier.height(24.dp)) }
         }
+    }
+
+    if (picker) {
+        OverlayDialog(
+            show = true,
+            title = "选择账号",
+            onDismissRequest = { picker = false },
+            content = {
+                LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                    items(savedAccounts) { account ->
+                        TextButton(
+                            text = account.userName,
+                            onClick = {
+                                userName = account.userName
+                                password = account.password
+                                error = null
+                                picker = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            },
+        )
     }
 
     if (captcha != null) {
