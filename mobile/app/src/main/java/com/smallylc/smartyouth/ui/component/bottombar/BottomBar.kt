@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,6 +33,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.lerp
@@ -139,10 +141,13 @@ private val IconSize = 22.dp
 private val ItemWidth = 56.dp
 private val LabelSize = 11.sp
 
+/** 选中态的实心圆直径：图标嵌在圆里，文字压在圆下方。 */
+private val IconBubble = 38.dp
+
 /**
- * 悬浮胶囊底栏（仿 Classy）：
- * 选中项背后是一块会滑动的 thumb 色块，图标与文字按「thumb 覆盖率」渐变上色，
- * 切换 tab 时色块从旧座位弹到新座位，不是直接跳过去。
+ * 悬浮胶囊底栏（对齐 KernelSU）：
+ * 选中项是一枚实心圆，图标反白、文字取主色；未选中只有浅色图标与灰字。
+ * 不做滑动色块，切换时颜色直接落位。
  */
 @Composable
 fun BottomBar(
@@ -151,29 +156,8 @@ fun BottomBar(
     modifier: Modifier = Modifier,
 ) {
     val colors = MiuixTheme.colorScheme
-    val density = LocalDensity.current
     val items = MainDestination.entries
-    val thumbX = remember { Animatable(0f) }
-    var thumbWidthPx by remember { mutableFloatStateOf(0f) }
-    var barX by remember { mutableFloatStateOf(0f) }
-    var placed by remember { mutableStateOf(false) }
-    val centers = remember { mutableStateListOf(*Array(items.size) { 0f }) }
-
-    val thumbWidth = with(density) { thumbWidthPx.toDp() }
     val dockShape = RoundedCornerShape(percent = 50)
-    val springSpec = spring<Float>(dampingRatio = 0.8f, stiffness = 380f)
-
-    LaunchedEffect(centers.toList(), mainState.selectedPage, thumbWidthPx) {
-        val index = mainState.selectedPage.coerceIn(0, items.lastIndex)
-        if (thumbWidthPx <= 0f || centers[index] <= 0f) return@LaunchedEffect
-        val target = centers[index] - barX - thumbWidthPx / 2f
-        if (!placed) {
-            thumbX.snapTo(target)
-            placed = true
-        } else {
-            thumbX.animateTo(target, springSpec)
-        }
-    }
 
     Box(
         modifier = modifier
@@ -186,44 +170,17 @@ fun BottomBar(
             modifier = Modifier
                 .fillMaxWidth(DockWidthFraction)
                 .height(DockHeight)
-                .shadow(elevation = 14.dp, shape = dockShape, clip = false)
+                .shadow(elevation = 12.dp, shape = dockShape, clip = false)
                 .clip(dockShape)
-                .background(colors.surfaceContainer.copy(alpha = 0.94f))
-                .onGloballyPositioned { barX = it.positionInRoot().x },
+                .background(colors.surfaceContainer.copy(alpha = 0.96f)),
         ) {
-            if (thumbWidthPx > 0f) {
-                Box(
-                    modifier = Modifier
-                        .padding(top = ThumbTop)
-                        .offset { IntOffset(thumbX.value.roundToInt(), 0) }
-                        .width(thumbWidth)
-                        .height(ThumbHeight)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(colors.onSurface.copy(alpha = 0.09f)),
-                )
-            }
             Row(
                 modifier = Modifier.fillMaxSize(),
                 horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 items.forEachIndexed { index, destination ->
-                    val center = centers.getOrElse(index) { 0f } - barX
-                    val half = with(density) { IconSize.toPx() } / 2f
-                    val coverage = if (thumbWidthPx <= 0f) {
-                        if (mainState.selectedPage == index) 1f else 0f
-                    } else {
-                        intervalCoverage(
-                            thumbX.value,
-                            thumbX.value + thumbWidthPx,
-                            center - half,
-                            center + half,
-                        )
-                    }
-                    val tint = lerp(
-                        colors.onSurfaceVariantActions,
-                        colors.onSurface,
-                        coverage,
-                    )
+                    val selected = mainState.selectedPage == index
                     val interaction = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
@@ -232,23 +189,21 @@ fun BottomBar(
                             .clickable(
                                 interactionSource = interaction,
                                 indication = null,
-                            ) { mainState.animateToPage(index) }
-                            .onGloballyPositioned {
-                                centers[index] = it.positionInRoot().x + it.size.width / 2f
-                                if (index == 0) {
-                                    // 选中块比图标宽一圈：椭圆两端是弧、中间留一段直线，
-                                    // 与图标等宽时会缩成小圆角方块
-                                    thumbWidthPx = it.size.width + with(density) { 18.dp.toPx() }
-                                }
-                            },
+                            ) { mainState.animateToPage(index) },
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Box {
+                            Box(
+                                modifier = Modifier
+                                    .size(IconBubble)
+                                    .clip(CircleShape)
+                                    .background(if (selected) colors.primary else Color.Transparent),
+                                contentAlignment = Alignment.Center,
+                            ) {
                                 Icon(
                                     imageVector = destination.icon,
                                     contentDescription = destination.label,
-                                    tint = tint,
+                                    tint = if (selected) colors.onPrimary else colors.onSurfaceVariantActions,
                                     modifier = Modifier.size(IconSize),
                                 )
                                 if (destination == MainDestination.Messages && unreadCount > 0) {
@@ -266,9 +221,9 @@ fun BottomBar(
                             Text(
                                 text = destination.label,
                                 fontSize = LabelSize,
-                                fontWeight = if (mainState.selectedPage == index) FontWeight.SemiBold else FontWeight.Normal,
-                                color = tint,
-                                modifier = Modifier.padding(top = 2.dp),
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (selected) colors.primary else colors.onSurfaceVariantActions,
+                                modifier = Modifier.padding(top = 3.dp),
                             )
                         }
                     }
@@ -276,12 +231,4 @@ fun BottomBar(
             }
         }
     }
-}
-
-/** 区间 [aStart,aEnd] 落在 [bStart,bEnd] 里的比例，用来让图标随色块滑动渐变上色。 */
-private fun intervalCoverage(aStart: Float, aEnd: Float, bStart: Float, bEnd: Float): Float {
-    val width = bEnd - bStart
-    if (width <= 0f) return 0f
-    val overlap = aEnd.coerceAtMost(bEnd) - aStart.coerceAtLeast(bStart)
-    return (overlap / width).coerceIn(0f, 1f)
 }
