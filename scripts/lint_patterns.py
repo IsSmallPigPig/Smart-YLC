@@ -239,6 +239,52 @@ def check_file(path: Path) -> list[str]:
                     f"{rel} [中转整份拉取] Netlify 响应体 6MB，pull 必须按 part 分片拼接，"
                     "整份拉取会超网关限制")
 
+    # 规则 16（2026-11-20 Windows 查空格 ARRAY_API NOTFOUND）：
+    # opencv 4.8.1 的 ABI 故障只有走到 cv2 才暴露，窗口能起不代表冻结包没坏。
+    # 冒烟自检里若只 import cryptography、没 import cv2，这类错误会漏到用户手上。
+    if path.name == "main.py" and "_smoke_test" in source:
+        if "import cv2" not in source:
+            problems.append(
+                f"{rel} [冒烟漏检 cv2] 冒烟自检必须 import cv2 并跑一次原生调用，"
+                "否则 numpy 2.x 与 opencv 4.8.1 的 ABI 冲突要等用户点「查空格」才暴露")
+
+    return problems
+
+
+def check_deploy_configs(configs: tuple[Path, ...] | None = None) -> list[str]:
+    """规则 15（2026-11-20 Windows 查空格 ARRAY_API NOTFOUND）：
+    每条装 opencv-python-headless 4.8.x 的依赖行都必须同时钉 numpy 到 1.x。
+
+    opencv 4.8.1 按 numpy 1.x 的 C ABI 编译；pip 一旦装到 numpy 2.x，冻结包
+    import cv2 抛 `_ARRAY_API not found`，逐格查空格整批失效。Win7 两条线
+    本来就钉了 numpy<1.25，是这次唯一没中招的——其余四条漏钉。配置不是 .py，
+    不在 _iter_py 范围内，单独扫。
+    """
+    problems: list[str] = []
+    # 一条依赖行：同一 pip install / deps 字符串里必须既有 opencv 又有 numpy 钉法
+    opencv_re = re.compile(r"opencv-python-headless\s*==\s*4\.8\.")
+    numpy_pin_re = re.compile(r"numpy\s*<\s*(?:2|1\.25)")
+    if configs is None:
+        configs = (ROOT / "requirements.txt",
+                   ROOT / ".github" / "workflows" / "release.yml")
+    for cfg in configs:
+        if not cfg.exists():
+            continue
+        source = cfg.read_text(encoding="utf-8")
+        for i, line in enumerate(source.splitlines(), 1):
+            if not opencv_re.search(line):
+                continue
+            # requirements.txt 里 numpy 钉法是独立一行，按整个文件判断；
+            # release.yml 里每条 deps/pip 行自带钉法，按行判断。
+            if cfg.name == "requirements.txt":
+                ok = numpy_pin_re.search(source) is not None
+            else:
+                ok = numpy_pin_re.search(line) is not None
+            if not ok:
+                problems.append(
+                    f"{_rel(cfg)}:{i} [numpy 未钉] 装了 opencv-python-headless 4.8.x "
+                    "却没钉 numpy<2；numpy 2.x 与 4.8.1 的 ABI 不兼容，"
+                    "冻结包 import cv2 抛 _ARRAY_API not found（查空格整批失效）")
     return problems
 
 
@@ -246,6 +292,7 @@ def run(quiet: bool = False) -> list[str]:
     problems: list[str] = []
     for path in _iter_py():
         problems.extend(check_file(path))
+    problems.extend(check_deploy_configs())
     if not quiet:
         for line in problems:
             print(line)

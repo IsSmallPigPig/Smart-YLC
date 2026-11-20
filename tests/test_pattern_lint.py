@@ -97,6 +97,40 @@ def test_relay_pull_must_be_chunked():
     assert any("中转整份拉取" in x for x in check(bad, "relay_receive.py"))
 
 
+def test_opencv_dep_lines_pin_numpy():
+    """规则 15：opencv 4.8.x 的 ABI 故障——每条安装行必须同时钉 numpy<2。"""
+    # 当前库干净：requirements.txt 与 release.yml 全过
+    assert lint_patterns.check_deploy_configs() == []
+
+    # 能拦住旧写法：装了 opencv 4.8.1 却没钉 numpy（release.yml 风格的 deps 行）
+    TMP.mkdir(exist_ok=True)
+    bad = TMP / "release.yml"
+    good = TMP / "release-good.yml"
+    bad.write_text(
+        'deps: \'"opencv-python-headless==4.8.1.78" qrcode\'\n', encoding="utf-8")
+    good.write_text(
+        'deps: \'"numpy<2" "opencv-python-headless==4.8.1.78" qrcode\'\n',
+        encoding="utf-8")
+    try:
+        assert any("numpy 未钉" in x
+                   for x in lint_patterns.check_deploy_configs((bad,)))
+        assert lint_patterns.check_deploy_configs((good,)) == []
+    finally:
+        bad.unlink(missing_ok=True)
+        good.unlink(missing_ok=True)
+
+
+def test_smoke_checks_cv2_abi():
+    """规则 16：冒烟自检必须 import cv2，否则 ABI 故障漏到用户端。"""
+    p = ROOT / "app" / "main.py"
+    assert not any("冒烟漏检 cv2" in x for x in lint_patterns.check_file(p))
+
+    bad = ('def _smoke_test():\n'
+           '    from cryptography.hazmat.primitives.ciphers.aead import AESGCM\n'
+           '    AESGCM(b"0" * 32).encrypt(b"0" * 12, b"smoke", None)\n')
+    assert any("冒烟漏检 cv2" in x for x in check(bad, "main.py"))
+
+
 def test_build_collect_all_enforced():
     p = ROOT / "scripts" / "build.py"
     problems = lint_patterns.check_file(p)
