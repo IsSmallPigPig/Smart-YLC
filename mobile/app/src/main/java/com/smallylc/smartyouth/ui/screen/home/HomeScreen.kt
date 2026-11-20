@@ -119,7 +119,7 @@ fun HomeScreen(
                 .overScrollVertical()
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
                 .statusBarsPadding()
-                .padding(horizontal = 26.dp),
+                .padding(horizontal = 16.dp),
             contentPadding = innerPadding,
             overscrollEffect = null,
         ) {

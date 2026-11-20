@@ -375,7 +375,7 @@ private fun CaptureStep(
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 26.dp),
+                        .padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(pages, key = { it.id }) { page ->
@@ -495,7 +495,7 @@ private fun ReviewStep(
                 columns = GridCells.Fixed(3),
                 modifier = Modifier
                     .fillMaxHeight()
-                    .padding(horizontal = 26.dp),
+                    .padding(horizontal = 16.dp),
                 contentPadding = innerPadding,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
