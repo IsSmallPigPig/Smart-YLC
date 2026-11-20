@@ -1,5 +1,6 @@
 package com.smallylc.smartyouth.ui.screen.home
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,7 +23,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -56,6 +60,9 @@ import top.yukonga.miuix.kmp.icon.extended.Scan
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * 首页：先回答「支部现在什么状态」，再给能立刻动手的入口。
@@ -169,6 +176,12 @@ fun HomeScreen(
     }
 }
 
+/**
+ * 主状态卡底色。主题的 primaryContainer 由取色算法生成，深色模式下会被算成亮蓝，
+ * 和品牌观感不一致；这里固定品牌深蓝，两套主题都不再随算法漂移。
+ */
+private val HeroBackground = Color(0xFF25406B)
+
 /** 主状态卡：一块底色讲清当前能不能用。 */
 @Composable
 private fun StatusHero(loggedIn: Boolean, userName: String, siteDown: Boolean) {
@@ -186,37 +199,89 @@ private fun StatusHero(loggedIn: Boolean, userName: String, siteDown: Boolean) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            .background(colorScheme.primaryContainer),
+            .background(HeroBackground),
     ) {
+        HeroMark(
+            tint = Color.White,
+            modifier = Modifier.matchParentSize(),
+        )
         Column(Modifier.padding(20.dp)) {
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(colorScheme.onPrimaryContainer.copy(alpha = 0.10f))
+                    .background(Color.White.copy(alpha = 0.14f))
                     .padding(horizontal = 10.dp, vertical = 4.dp),
             ) {
-                Text(text = "站点", fontSize = 12.sp, color = colorScheme.onPrimaryContainer)
+                Text(text = "站点", fontSize = 12.sp, color = Color.White)
             }
             Text(
                 text = label,
                 fontSize = 32.sp,
                 fontWeight = FontWeight.Bold,
-                color = colorScheme.onPrimaryContainer,
+                color = Color.White,
                 modifier = Modifier.padding(top = 14.dp),
             )
             Text(
                 text = hint,
                 fontSize = 14.sp,
-                color = colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
+                color = Color.White.copy(alpha = 0.78f),
                 modifier = Modifier.padding(top = 6.dp),
             )
             Text(
                 text = "版本 ${BuildConfig.VERSION_NAME}",
                 fontSize = 13.sp,
-                color = colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
+                color = Color.White.copy(alpha = 0.62f),
                 modifier = Modifier.padding(top = 18.dp),
             )
         }
+    }
+}
+
+/** 品牌标志：六向辐射网络，从右下角探入卡片，扁平叠色做出光感。 */
+@Composable
+private fun HeroMark(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val cx = size.width * 0.97f
+        val cy = size.height * 0.93f
+        val reach = size.height * 0.66f
+        val unit = reach / 26f
+        val hub = Offset(cx, cy)
+
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(tint.copy(alpha = 0.24f), Color.Transparent),
+                center = hub,
+                radius = reach * 1.55f,
+            ),
+            radius = reach * 1.55f,
+            center = hub,
+        )
+
+        repeat(6) { i ->
+            val angle = (-90 + 60 * i) * PI / 180.0
+            val end = Offset(
+                cx + (cos(angle) * reach).toFloat(),
+                cy + (sin(angle) * reach).toFloat(),
+            )
+            drawLine(
+                color = tint.copy(alpha = 0.24f),
+                start = hub,
+                end = end,
+                strokeWidth = 1.6.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            drawCircle(tint.copy(alpha = 0.10f), radius = 6.5f * unit, center = end)
+            drawCircle(tint.copy(alpha = 0.42f), radius = 4f * unit, center = end)
+            drawCircle(tint.copy(alpha = 0.62f), radius = 1.4f * unit, center = end)
+        }
+
+        drawCircle(tint.copy(alpha = 0.10f), radius = 14f * unit, center = hub)
+        drawCircle(Color(0xFFF4737F).copy(alpha = 0.62f), radius = 8.5f * unit, center = hub)
+        drawCircle(
+            Color.White.copy(alpha = 0.34f),
+            radius = 4f * unit,
+            center = Offset(cx - 2f * unit, cy - 2f * unit),
+        )
     }
 }
 

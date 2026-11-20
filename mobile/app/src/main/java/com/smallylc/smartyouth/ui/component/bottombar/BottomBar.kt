@@ -125,10 +125,12 @@ enum class MainDestination(val label: String, val icon: ImageVector) {
 }
 
 // 悬浮胶囊几何：与 Classy 的 dock 一致，留出左右呼吸和手势条间距。
-private val DockHeight = 64.dp
+private val DockHeight = 72.dp
 private val DockMargin = 16.dp
-private val DockBottomFloat = 10.dp
-private val ThumbHeight = 52.dp
+/** 胶囊宽度占屏幕的比例：只占中间一半，两侧留空。 */
+private const val DockWidthFraction = 0.72f
+private val DockBottomFloat = 22.dp
+private val ThumbHeight = 60.dp
 private val ThumbTop = 6.dp
 private val IconSize = 22.dp
 private val LabelSize = 11.sp
@@ -172,13 +174,13 @@ fun BottomBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = DockMargin)
             .navigationBarsPadding()
             .padding(bottom = DockBottomFloat),
+        contentAlignment = Alignment.BottomCenter,
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(DockWidthFraction)
                 .height(DockHeight)
                 .shadow(elevation = 14.dp, shape = dockShape, clip = false)
                 .clip(dockShape)
