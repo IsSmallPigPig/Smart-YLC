@@ -41,10 +41,6 @@ def _card_bg() -> QColor:
     return QColor(255, 255, 255, 20) if isDarkTheme() else QColor(255, 255, 255, 170)
 
 
-def _card_border() -> QColor:
-    return QColor(255, 255, 255, 34) if isDarkTheme() else QColor(0, 0, 0, 20)
-
-
 def _divider() -> QColor:
     return QColor(255, 255, 255, 26) if isDarkTheme() else QColor(0, 0, 0, 18)
 
@@ -273,13 +269,12 @@ class NoticePanel(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect().adjusted(0, 0, -1, -1)
-        p.setPen(QPen(_card_border(), 1))
+        p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(_card_bg())
         p.drawRoundedRect(r, RADIUS, RADIUS)
+        # 不描边：1px 白色描边在圆弧上抗锯齿档位不足，会呈现阶梯状亮边；
+        # 来源目录、待上传档案等卡片都只靠半透明底色区分轮廓，这里保持一致。
         paint_tinted_card(self, p, self._role, radius=RADIUS, alpha=22)
-        p.setPen(QPen(_card_border(), 1))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(r, RADIUS, RADIUS)
 
         # 标题行与问题列表之间也有一条分隔线
         if self._expanded and self._rows:
