@@ -248,6 +248,25 @@ def check_file(path: Path) -> list[str]:
                 f"{rel} [冒烟漏检 cv2] 冒烟自检必须 import cv2 并跑一次原生调用，"
                 "否则 numpy 2.x 与 opencv 4.8.1 的 ABI 冲突要等用户点「查空格」才暴露")
 
+    # 规则 17（2026-11-20 预检查流程改造）：上传必须走工作副本 work_path。
+    # 原件只读、压缩副本落在「工作目录/压缩」，上传与查空格都读副本；
+    # 若退回直接上传 s.path，等于绕过压缩与异常隔离，超限原件会传上去。
+    if path.name == "upload_page.py" and "def _start_upload" in source:
+        start = source.index("def _start_upload")
+        block = source[start:start + 1200]
+        if "work_path" not in block:
+            problems.append(
+                f"{rel} [上传绕开副本] _start_upload 必须筛选并上传 work_path（压缩副本），"
+                "原件只读、异常副本不上传；直接用 s.path 会把超限或异常档案传上去")
+
+    # 规则 18（2026-11-20）：扫描来源目录必须跳过「工作目录」子树。
+    # 副本是派生产物，与原件同名；扫进去会一份算两遍、越扫越多。
+    if path.name == "archive_scan.py" and "def scan_folder" in source:
+        if "WORK_DIR_NAME" not in source:
+            problems.append(
+                f"{rel} [扫描工作目录] 扫描必须跳过工作目录（work_area.WORK_DIR_NAME），"
+                "否则压缩副本被当原件重复计数")
+
     return problems
 
 
