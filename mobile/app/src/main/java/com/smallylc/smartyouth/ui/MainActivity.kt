@@ -49,6 +49,7 @@ import com.smallylc.smartyouth.ui.screen.home.HomeScreen
 import com.smallylc.smartyouth.ui.screen.login.LoginScreen
 import com.smallylc.smartyouth.ui.screen.members.MembersScreen
 import com.smallylc.smartyouth.ui.screen.messages.MessagesScreen
+import com.smallylc.smartyouth.ui.screen.pair.PairScreen
 import com.smallylc.smartyouth.ui.screen.scan.ScanScreen
 import com.smallylc.smartyouth.ui.screen.scan.ScansScreen
 import com.smallylc.smartyouth.ui.screen.settings.SettingsScreen
@@ -160,6 +161,12 @@ class MainActivity : ComponentActivity() {
                                     onExit = { navigator.pop() },
                                 )
                             }
+                            entry<Route.Pair>(swipeDismiss = NavSwipeDirection.LeftToRight) {
+                                PairScreen(
+                                    deviceName = "智慧团委",
+                                    onBack = { navigator.pop() },
+                                )
+                            }
                             entry<Route.Theme>(swipeDismiss = NavSwipeDirection.LeftToRight) {
                                 ThemeScreen(onBack = { navigator.pop() })
                             }
@@ -266,6 +273,7 @@ fun MainScreen(
                             ScanIntent.prefillName = ""
                             navigator.push(Route.Scan)
                         },
+                        onPair = { navigator.push(Route.Pair) },
                     )
 
                     3 -> MessagesScreen(

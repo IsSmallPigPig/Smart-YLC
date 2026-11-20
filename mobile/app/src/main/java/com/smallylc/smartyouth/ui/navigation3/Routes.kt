@@ -22,6 +22,11 @@ sealed interface Route : NavKey, Parcelable {
     @Serializable
     data object Scan : Route
 
+    /** 传到电脑：扫码配对后只传电脑缺的档案 */
+    @Parcelize
+    @Serializable
+    data object Pair : Route
+
     @Parcelize
     @Serializable
     data object About : Route

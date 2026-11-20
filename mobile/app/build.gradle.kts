@@ -124,6 +124,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.opencv)
+    implementation(libs.zxing.core)
 }
 
 kotlin {

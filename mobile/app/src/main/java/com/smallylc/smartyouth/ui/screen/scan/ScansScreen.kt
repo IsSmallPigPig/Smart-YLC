@@ -38,6 +38,7 @@ import com.smallylc.smartyouth.ui.theme.LocalEnableBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Share
+import top.yukonga.miuix.kmp.icon.extended.UploadCloud
 import com.smallylc.smartyouth.ui.util.BlurredBar
 import com.smallylc.smartyouth.ui.util.rememberBlurBackdrop
 import top.yukonga.miuix.kmp.basic.Button
@@ -62,6 +63,7 @@ import java.util.Locale
 fun ScansScreen(
     bottomPadding: Dp,
     onNewScan: () -> Unit,
+    onPair: () -> Unit,
 ) {
     var docs by remember { mutableStateOf(DocStore.list()) }
     var pendingDelete by remember { mutableStateOf<DocStore.SavedDoc?>(null) }
@@ -76,6 +78,15 @@ fun ScansScreen(
                     title = if (docs.isEmpty()) "扫描" else "扫描件 ${docs.size}",
                     color = barColor,
                     scrollBehavior = scrollBehavior,
+                    actions = {
+                        IconButton(onClick = onPair) {
+                            Icon(
+                                MiuixIcons.UploadCloud,
+                                contentDescription = "传到电脑",
+                                tint = colorScheme.onBackground,
+                            )
+                        }
+                    },
                 )
             }
         },
