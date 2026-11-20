@@ -132,11 +132,11 @@ enum class MainDestination(val label: String, val icon: ImageVector) {
 }
 
 // 悬浮胶囊几何：与 Classy 的 dock 一致，留出左右呼吸和手势条间距。
-private val BarHeight = 64.dp
+private val BarHeight = 72.dp
 private val DockMargin = 26.dp
 private val PillWidth = 64.dp
 
-private val PillHeight = 28.dp
+private val PillHeight = 34.dp
 private val ThumbHeight = 54.dp
 private val ThumbTop = 9.dp
 private val IconSize = 22.dp
@@ -144,7 +144,7 @@ private val IconSize = 22.dp
 private val LabelSize = 11.sp
 
 /** 单个 tab 的宽度：图标 22dp、两个汉字约 22dp，两侧各留 4dp。 */
-private val PillTop = 3.dp
+private val PillTop = 8.dp
 /** 选中块高度：盖住图标与文字，比整条矮一圈。 */
 private val ItemHeight = 58.dp
 /** 选中块圆角：背景半径 36dp 减去上下各 7dp 内缩，与背景同心。 */
@@ -225,7 +225,12 @@ fun BottomBar(
                             },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        // 图标对准胶囊正中，文字压在胶囊下方留 4dp 间隔：
+                        // 靠排列居中做不到两者兼顾，直接给定上边距
+                        Column(
+                            modifier = Modifier.fillMaxHeight().padding(top = 14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = destination.icon,
@@ -250,7 +255,7 @@ fun BottomBar(
                                 fontSize = LabelSize,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                                 color = fg,
-                                modifier = Modifier.padding(top = 2.dp),
+                                modifier = Modifier.padding(top = 10.dp),
                             )
                         }
                     }

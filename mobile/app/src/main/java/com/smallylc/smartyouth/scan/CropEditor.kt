@@ -2,6 +2,8 @@ package com.smallylc.smartyouth.scan
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +26,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -65,6 +68,7 @@ fun CropEditor(
     var canvasSize by remember { mutableStateOf(Size.Zero) }
     var dragIndex by remember { mutableStateOf(-1) }
     var preview by remember(page.id, page.rotation) { mutableStateOf<Bitmap?>(null) }
+    var adjusting by remember(page.id) { mutableStateOf(false) }
 
     LaunchedEffect(page.id, page.rotation) {
         bitmap = withContext(Dispatchers.IO) {
@@ -101,7 +105,17 @@ fun CropEditor(
             contentAlignment = Alignment.Center,
         ) {
             val bmp = bitmap
-            if (bmp != null && canvasSize.width > 0f) {
+            if (!adjusting && preview != null) {
+                // 默认直接看校正后的成品，点一下才进对齐模式
+                androidx.compose.foundation.Image(
+                    bitmap = preview!!.asImageBitmap(),
+                    contentDescription = "调整后的效果",
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { adjusting = true },
+                )
+            } else if (bmp != null && canvasSize.width > 0f) {
                 val fit = fitRect(bmp.width, bmp.height, canvasSize)
                 Canvas(
                     modifier = Modifier
@@ -136,6 +150,33 @@ fun CropEditor(
                     drawQuadOverlay(page.quad, bmp.width, bmp.height, fit)
                 }
             }
+
+            if (adjusting) {
+                Text(
+                    text = "完成对齐",
+                    fontSize = 13.sp,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .clickable { adjusting = false }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            } else {
+                Text(
+                    text = "点图可对齐边缘",
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.75f),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(12.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                )
+            }
         }
 
         Row(
@@ -150,48 +191,9 @@ fun CropEditor(
             FilterChip("增强", page.filter == DocDetect.Filter.ENHANCE) { onChangeFilter(DocDetect.Filter.ENHANCE) }
             FilterChip("黑白", page.filter == DocDetect.Filter.BW) { onChangeFilter(DocDetect.Filter.BW) }
             Spacer(Modifier.width(4.dp))
-            MutedText("拖四个角对齐纸张边缘", Modifier.padding(start = 4.dp))
+            MutedText(if (adjusting) "拖四个角对齐纸张边缘" else "", Modifier.padding(start = 4.dp))
         }
 
-        preview?.let { p ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = 12.dp),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    androidx.compose.foundation.Image(
-                        bitmap = p.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .height(56.dp)
-                            .width(42.dp),
-                    )
-                    Column(Modifier.padding(start = 12.dp)) {
-                        Text(
-                            text = "导出效果",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = colorScheme.onSurface,
-                        )
-                        MutedText(
-                            when (page.filter) {
-                                DocDetect.Filter.ORIGINAL -> "保留原始色彩"
-                                DocDetect.Filter.ENHANCE -> "压平阴影，字迹更清楚"
-                                DocDetect.Filter.BW -> "纯黑白，体积最小"
-                            },
-                            Modifier.padding(top = 2.dp),
-                        )
-                    }
-                }
-            }
-        }
     }
 }
 
