@@ -90,14 +90,27 @@ fun HomeScreen(
     val barColor = if (backdrop != null) Color.Transparent else colorScheme.surface
 
     Scaffold(
-        topBar = {
-            BlurredBar(backdrop) {
+        topBar = {},
+        popupHost = { },
+        contentWindowInsets = WindowInsets.systemBars.add(WindowInsets.displayCutout)
+            .only(WindowInsetsSides.Horizontal),
+    ) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxHeight()
+                .scrollEndHaptic()
+                .overScrollVertical()
+                .nestedScroll(scrollBehavior.nestedScrollConnection)
+                .statusBarsPadding()
+                .padding(horizontal = 26.dp),
+            contentPadding = innerPadding,
+            overscrollEffect = null,
+        ) {
+            item {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .statusBarsPadding()
-                        .height(52.dp)
-                        .padding(start = 16.dp, end = 4.dp),
+                        .padding(top = 6.dp, bottom = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -116,23 +129,6 @@ fun HomeScreen(
                     }
                 }
             }
-        },
-        popupHost = { },
-        contentWindowInsets = WindowInsets.systemBars.add(WindowInsets.displayCutout)
-            .only(WindowInsetsSides.Horizontal),
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxHeight()
-                .scrollEndHaptic()
-                .overScrollVertical()
-                .nestedScroll(scrollBehavior.nestedScrollConnection)
-                .statusBarsPadding()
-                .padding(horizontal = 26.dp),
-            contentPadding = innerPadding,
-            overscrollEffect = null,
-        ) {
-            item { Spacer(Modifier.height(8.dp)) }
 
             item { StatusHero(loggedIn = loggedIn, userName = userName, siteDown = siteDown) }
 

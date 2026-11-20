@@ -141,11 +141,11 @@ private val IconSize = 22.dp
 private val LabelSize = 11.sp
 
 /** 单个 tab 的宽度：图标 22dp、两个汉字约 22dp，两侧各留 4dp。 */
-private val ItemWidth = 62.dp
+private val ItemWidth = 72.dp
 /** 选中块高度：盖住图标与文字，比整条矮一圈。 */
 private val ItemHeight = 58.dp
-/** 选中块圆角：宽度大于两倍圆角，两侧是弧、中间留一段直线。 */
-private val ItemCorner = 18.dp
+/** 选中块圆角：背景半径 36dp 减去上下各 7dp 内缩，与背景同心。 */
+private val ItemCorner = 29.dp
 
 /**
  * 悬浮胶囊底栏（对齐 KernelSU）：

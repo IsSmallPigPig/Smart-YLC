@@ -142,13 +142,21 @@ object DocDetect {
                     )
                     Imgproc.cvtColor(gray, dst, Imgproc.COLOR_GRAY2RGBA)
                 } else {
-                    // 增强：CLAHE 拉平阴影，再轻微提白底，保留笔迹灰度
-                    val clahe = Imgproc.createCLAHE(2.2, Size(8.0, 8.0))
-                    clahe.apply(gray, gray)
-                    val rgba = Mat()
-                    Imgproc.cvtColor(gray, rgba, Imgproc.COLOR_GRAY2RGBA)
-                    rgba.copyTo(dst)
-                    rgba.release()
+                    // 增强：只提亮 Lab 的亮度通道，色度原样保留，扫出来仍是彩色
+                    val rgb = Mat()
+                    Imgproc.cvtColor(dst, rgb, Imgproc.COLOR_RGBA2RGB)
+                    val lab = Mat()
+                    Imgproc.cvtColor(rgb, lab, Imgproc.COLOR_RGB2Lab)
+                    val channels = ArrayList<Mat>()
+                    Core.split(lab, channels)
+                    val clahe = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+                    clahe.apply(channels[0], channels[0])
+                    Core.merge(channels, lab)
+                    Imgproc.cvtColor(lab, rgb, Imgproc.COLOR_Lab2RGB)
+                    Imgproc.cvtColor(rgb, dst, Imgproc.COLOR_RGB2RGBA)
+                    channels.forEach { it.release() }
+                    lab.release()
+                    rgb.release()
                 }
                 gray.release()
             }

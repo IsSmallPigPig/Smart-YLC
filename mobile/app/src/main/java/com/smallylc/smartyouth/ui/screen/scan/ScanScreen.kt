@@ -117,6 +117,8 @@ fun ScanScreen(
 ) {
     var step by remember { mutableStateOf(ScanStep.Capture) }
     var editingId by remember { mutableStateOf<Long?>(null) }
+    // 进裁切页的入口有两个（拍摄页的缩略图、回顾页的编辑），返回要回到来的地方
+    var cropFrom by remember { mutableStateOf(ScanStep.Review) }
     var camera by remember { mutableStateOf<CameraHandle?>(null) }
     var flashMessage by remember { mutableStateOf<String?>(null) }
     val pages by ScanSession.pages.collectAsState()
@@ -142,7 +144,7 @@ fun ScanScreen(
             ScanStep.Review -> step = ScanStep.Capture
             ScanStep.Crop -> {
                 editingId = null
-                step = ScanStep.Review
+                step = cropFrom
             }
             ScanStep.Save -> step = ScanStep.Review
         }
@@ -168,6 +170,7 @@ fun ScanScreen(
                 picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
             },
             onOpenPage = { page ->
+                cropFrom = ScanStep.Capture
                 editingId = page.id
                 step = ScanStep.Crop
             },
@@ -185,6 +188,7 @@ fun ScanScreen(
             pages = pages,
             onBack = { step = ScanStep.Capture },
             onEdit = { page ->
+                cropFrom = ScanStep.Review
                 editingId = page.id
                 step = ScanStep.Crop
             },
@@ -202,13 +206,13 @@ fun ScanScreen(
                     page = page,
                     onBack = {
                         editingId = null
-                        step = ScanStep.Review
+                        step = cropFrom
                     },
                     onRotate = { scope.launch { ScanSession.rotate(page.id) } },
                     onDelete = {
                         ScanSession.delete(page.id)
                         editingId = null
-                        step = ScanStep.Review
+                        step = cropFrom
                     },
                     onChangeQuad = { ScanSession.updateQuad(page.id, it) },
                     onChangeFilter = { ScanSession.updateFilter(page.id, it) },
