@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  电脑接收页只在本机局域网用明文 HTTP 提供接口，系统默认会拦掉非回环明文请求。
+  这里放开明文，但 App 自身的站点请求仍走 HTTPS，明文只用于同一 Wi-Fi 内的配对传输。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">::1</domain>
+    </domain-config>
+</network-security-config>
