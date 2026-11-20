@@ -1,6 +1,8 @@
 # 云端备份服务
 
-一个函数、一个键值存储：客户端把**加密后的信封**放到以提取码为键的位置，服务端看不到明文，也不需要数据库。
+两个函数、一个键值存储：`backup` 存加密后的配置信封（服务端看不到明文）；
+`archive` 为手机连不上局域网时的中转档案——按 3MB 分片收发，避开函数 6MB 请求/响应墙。
+两端都以 6 位提取码为键，不需要数据库。
 
 ## 部署到 Netlify
 
@@ -35,9 +37,27 @@
 
 约束：提取码 6 位，字符集 `A-Z2-9`（去掉 0/1/I/O）；owner key 为 64 位 hex；请求体上限 5MB；单 IP 每分钟 30 次。
 
+## 中转档案接口（archive v1）
+
+手机与电脑不在同一网络时，手机把 PDF 分片传到这里，电脑再拉回。完整契约见仓库
+`docs/app-pair-protocol.md` 第 9 节（`main` 分支）。
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/api/archive?action=list&id=ABC234` | 只需 code | 待收文件元数据（name/size/sha256/parts） |
+| PUT | `/api/archive?action=init&id=ABC234` | X-Owner-Key | 声明文件：`{id,name,size,sha256,parts}` |
+| PUT | `/api/archive?action=part&id=ABC234&file=f1&part=0` | X-Owner-Key | 传一片（≤3MB 原始字节） |
+| PUT | `/api/archive?action=finish&id=ABC234&file=f1` | X-Owner-Key | 合并校验 sha256，通过才标记可读 |
+| GET | `/api/archive?action=pull&id=ABC234&file=f1&part=0` | 只需 code | 取一片 |
+| DELETE | `/api/archive?action=clear&id=ABC234&file=f1` | X-Owner-Key | 删云端副本（幂等） |
+
+读只需提取码——它本就是配对时双方核对过的分享码；写/删必须带 owner key。
+每片 3MB，单份上限 200MB / 100 片；索引最多 500 个文件，满了要先让电脑接收清理。
+`finish` 校验失败不会标记可读，损坏文件不会被电脑拉走。单 IP 每分钟 120 次（分片多，限流放宽）。
+
 ## 其他平台
 
-存储被收在一个函数里，换平台只需替换 `getStore` 那一行：Vercel 用 `@vercel/kv`，Cloudflare 用 KV 绑定，Supabase 用一张 `backups(code text primary key, envelope jsonb)` 表。加密与接口形状都不用动。
+存储被收在两个函数里，换平台只需替换 `getStore` 那一行：Vercel 用 `@vercel/kv`，Cloudflare 用 KV 绑定，Supabase 用两张表。加密与接口形状都不用动。
 
 ## 为什么 6 位码够用
 

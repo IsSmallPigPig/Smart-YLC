@@ -1,5 +1,5 @@
 [build]
-  # 这个仓库主要是桌面端与 Android 端；Netlify 上只跑一个函数，
+  # 这个仓库主要是桌面端与 Android 端；Netlify 上跑 backup 与 archive 两个函数，
   # publish 指到 netlify/public 一块空站点，免得把源码当静态资源发出去
   publish = "netlify/public"
 
@@ -9,5 +9,10 @@
 
 [[headers]]
   for = "/api/backup"
+  [headers.values]
+    Cache-Control = "no-store"
+
+[[headers]]
+  for = "/api/archive"
   [headers.values]
     Cache-Control = "no-store"
