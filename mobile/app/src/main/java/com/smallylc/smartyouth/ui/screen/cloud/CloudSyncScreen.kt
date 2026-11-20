@@ -61,7 +61,7 @@ import top.yukonga.miuix.kmp.utils.scrollEndHaptic
  * 备份里是密文，解密只在本机做，服务端拿不到账号密码。
  */
 @Composable
-fun CloudSyncScreen(onBack: () -> Unit) {
+fun CloudSyncScreen(onBack: () -> Unit, onManage: () -> Unit) {
     val scope = rememberCoroutineScope()
     val scrollBehavior = MiuixScrollBehavior()
     val backdrop = rememberBlurBackdrop(LocalEnableBlur.current)
@@ -199,14 +199,14 @@ fun CloudSyncScreen(onBack: () -> Unit) {
             if (synced.isNotEmpty()) {
                 item {
                     Button(
-                        onClick = onBack,
+                        onClick = onManage,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 16.dp)
                             .height(48.dp),
                         colors = ButtonDefaults.buttonColorsPrimary(),
                     ) {
-                        Text("去登录")
+                        Text("去管理")
                     }
                 }
                 items(synced) { name ->

@@ -45,6 +45,7 @@ import com.smallylc.smartyouth.ui.navigation3.Navigator
 import com.smallylc.smartyouth.ui.navigation3.Route
 import com.smallylc.smartyouth.ui.navigation3.rememberNavigator
 import com.smallylc.smartyouth.ui.screen.about.AboutScreen
+import com.smallylc.smartyouth.ui.screen.accounts.AccountsScreen
 import com.smallylc.smartyouth.ui.screen.cloud.CloudSyncScreen
 import com.smallylc.smartyouth.ui.screen.home.HomeScreen
 import com.smallylc.smartyouth.ui.screen.login.LoginScreen
@@ -155,6 +156,7 @@ class MainActivity : ComponentActivity() {
                                     onBack = { navigator.pop() },
                                     onLoggedIn = { navigator.pop() },
                                     onCloudSync = { navigator.push(Route.CloudSync) },
+                                    onAccounts = { navigator.push(Route.Accounts) },
                                 )
                             }
                             entry<Route.Scan>(swipeDismiss = NavSwipeDirection.None) {
@@ -164,7 +166,22 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                             entry<Route.CloudSync>(swipeDismiss = NavSwipeDirection.LeftToRight) {
-                                CloudSyncScreen(onBack = { navigator.pop() })
+                                CloudSyncScreen(
+                                    onBack = { navigator.pop() },
+                                    onManage = {
+                                        navigator.pop()
+                                        navigator.push(Route.Accounts)
+                                    },
+                                )
+                            }
+                            entry<Route.Accounts>(swipeDismiss = NavSwipeDirection.LeftToRight) {
+                                AccountsScreen(
+                                    onBack = { navigator.pop() },
+                                    onNeedLogin = { name ->
+                                        if (name.isNotBlank()) Repo.accounts.activeUserName = name
+                                        navigator.push(Route.Login)
+                                    },
+                                )
                             }
                             entry<Route.Pair>(swipeDismiss = NavSwipeDirection.LeftToRight) {
                                 PairScreen(
@@ -295,8 +312,9 @@ fun MainScreen(
                         loggedIn = session.loggedIn,
                         syncing = sync.syncing,
                         memberCount = members.size,
+                        accountCount = Repo.accounts.accounts.size,
                         bottomPadding = bottom,
-                        onLogin = onOpenLogin,
+                        onAccounts = { navigator.push(Route.Accounts) },
                         onLogout = { Repo.logout() },
                         onOpenTheme = onOpenTheme,
                         onOpenAbout = onOpenAbout,

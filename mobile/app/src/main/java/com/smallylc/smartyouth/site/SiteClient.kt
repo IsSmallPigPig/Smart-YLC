@@ -76,7 +76,13 @@ class SiteClient(private val accountStore: AccountStore, val userName: String) {
         if (!response.isSuccessful) throw SiteException("HTTP ${response.code}")
         if (body.isBlank()) throw SiteException("站点返回空响应")
         return runCatching { JSONObject(body) }.getOrElse {
-            throw SiteException("站点返回无法解析：${body.take(120)}")
+            // 被重定向到登录页或防护页时返回 HTML，原样抛出会把界面撑爆
+            val hint = if (body.trimStart().startsWith("<")) {
+                "站点返回了网页，登录可能已失效"
+            } else {
+                "站点返回的内容无法识别"
+            }
+            throw SiteException(hint)
         }
     }
 

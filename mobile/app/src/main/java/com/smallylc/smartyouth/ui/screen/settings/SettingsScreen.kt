@@ -54,8 +54,9 @@ fun SettingsScreen(
     loggedIn: Boolean,
     syncing: Boolean,
     memberCount: Int,
+    accountCount: Int,
     bottomPadding: Dp,
-    onLogin: () -> Unit,
+    onAccounts: () -> Unit,
     onLogout: () -> Unit,
     onOpenTheme: () -> Unit,
     onOpenAbout: () -> Unit,
@@ -117,9 +118,9 @@ fun SettingsScreen(
                         )
                     }
                     ArrowPreference(
-                        title = if (loggedIn) "切换账号" else "登录账号",
-                        summary = if (loggedIn) "换一个支部账号登录" else "填写账号与密码",
-                        onClick = onLogin,
+                        title = "账号管理",
+                        summary = if (accountCount > 0) "共 $accountCount 个账号，点开切换" else "添加或从云端同步账号",
+                        onClick = onAccounts,
                     )
                     if (loggedIn) {
                         ArrowPreference(

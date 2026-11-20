@@ -71,6 +71,7 @@ fun LoginScreen(
     onBack: () -> Unit,
     onLoggedIn: () -> Unit,
     onCloudSync: () -> Unit,
+    onAccounts: () -> Unit,
 ) {
     val existing = Repo.accounts.active
     var userName by remember { mutableStateOf(existing?.userName.orEmpty()) }
@@ -78,7 +79,6 @@ fun LoginScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     val savedAccounts = remember { Repo.accounts.accounts }
-    var picker by remember { mutableStateOf(false) }
     var captcha by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var captchaInput by remember { mutableStateOf("") }
     var captchaHint by remember { mutableStateOf("") }
@@ -180,7 +180,7 @@ fun LoginScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 12.dp),
-                        onClick = { picker = true },
+                        onClick = onAccounts,
                     ) {
                         Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
                             Text(
@@ -269,30 +269,6 @@ fun LoginScreen(
             }
             item { Spacer(Modifier.height(24.dp)) }
         }
-    }
-
-    if (picker) {
-        OverlayDialog(
-            show = true,
-            title = "选择账号",
-            onDismissRequest = { picker = false },
-            content = {
-                LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                    items(savedAccounts) { account ->
-                        TextButton(
-                            text = account.userName,
-                            onClick = {
-                                userName = account.userName
-                                password = account.password
-                                error = null
-                                picker = false
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            },
-        )
     }
 
     if (captcha != null) {

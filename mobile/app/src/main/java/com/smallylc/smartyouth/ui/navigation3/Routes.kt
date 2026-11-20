@@ -22,6 +22,11 @@ sealed interface Route : NavKey, Parcelable {
     @Serializable
     data object Scan : Route
 
+    /** 账号管理：同步下来的账号统一在这里切换 */
+    @Parcelize
+    @Serializable
+    data object Accounts : Route
+
     /** 云端同步：用备份提取码取回支部账号 */
     @Parcelize
     @Serializable
