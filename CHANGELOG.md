@@ -7,6 +7,14 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.16
+
+- [f35d7cd] feat(relay): 中转兜底收发；配对校验相同配置；界面自动降级
+- [cef5b3d] feat(pair): 配对加相同配置校验；新增中转接收客户端
+- [5e2ba40] feat(phone): App 扫码配对协议 v1；新增代码反模式 lint 与经验固化 hook
+
+@AnkoQAQ
+
 ## v1.0.15
 
 - [1cfb1ab] fix(phone): 手机接收不再卡 30 秒；同步弹窗改为 Fluent 居中弹层
