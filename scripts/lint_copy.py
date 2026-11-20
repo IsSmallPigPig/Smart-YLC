@@ -54,6 +54,26 @@ HALF_PUNCT = re.compile(r"[\u4e00-\u9fff]\s*[,;?!](?![0-9A-Za-z])")
 # 一句说明超过这个字数就该拆：小字说明是放在控件下面的一行，不是段落
 MAX_NOTE_CHARS = 48
 
+# —— 以下是用户点名要求过的写法，桌面端与手机端共用 ——
+
+# 「说明的小字用于概要描述功能，而不是教用户如何操作」
+INSTRUCTION_WORDS = re.compile(
+    r"点击|轻触|点一下|请先|首先|然后再|即可查看|如下图|如下所示|操作步骤|按以下步骤")
+
+# 中点不是分隔符。信息层次用留白和字重表达。
+MIDDOT = re.compile(r"·")
+
+# 按钮超过四个字就会挤
+MAX_BUTTON_CHARS = 4
+
+# 手机端 Kotlin
+KT_STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
+KT_BUTTON_TEXT = re.compile(r"TextButton\(\s*text\s*=\s*\"([^\"]+)\"")
+KT_BUTTON_LAMBDA_TEXT = re.compile(r"Button\([^)]{0,200}?\)\s*\{\s*Text\(\s*\"([^\"]+)\"", re.S)
+KT_VISIBLE_CALL = re.compile(
+    r'(?:Text|MutedText|EmptyHint|SmallTitle|StatusPill|contentDescription|label|summary|title)\s*[=(]\s*"([^"]*)"')
+KT_ROOTS = (ROOT / "mobile" / "app" / "src" / "main" / "java",)
+
 
 def _literal(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -139,6 +159,14 @@ def check_file(path: Path) -> tuple[list[str], list[tuple[str, int, str, str]]]:
             hit = pattern.search(text)
             if hit:
                 problems.append(f"{rel}:{line} [{rule}] 「{hit.group(0)}」—— {why}")
+        instruction = INSTRUCTION_WORDS.search(text)
+        if instruction:
+            problems.append(
+                f"{rel}:{line} [操作教学] 「{instruction.group(0)}」—— 小字说明只交代功能概要，"
+                "操作路径靠界面本身引导")
+        if MIDDOT.search(text):
+            problems.append(
+                f"{rel}:{line} [中点分隔符] 用留白或换行分层，不要拿「·」拼信息：{text[:32]}")
         if HALF_PUNCT.search(text):
             problems.append(
                 f"{rel}:{line} [标点混排] 中文里用了半角标点：{text[:30]}")
@@ -150,12 +178,85 @@ def check_file(path: Path) -> tuple[list[str], list[tuple[str, int, str, str]]]:
     return problems, items
 
 
+def _strip_kt_comments(source: str) -> str:
+    source = re.sub(r"/\*.*?\*/", " ", source, flags=re.S)
+    return re.sub(r"//[^\n]*", "", source)
+
+
+def check_kotlin(path: Path) -> list[str]:
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    source = _strip_kt_comments(raw)
+    try:
+        rel = path.relative_to(ROOT).as_posix()
+    except ValueError:
+        rel = path.name
+    problems: list[str] = []
+
+    # 中点不看调用形态：任何字符串里拿「·」拼信息都违规
+    for match in KT_STRING.finditer(source):
+        text = match.group(1)
+        if MIDDOT.search(text):
+            line = source.count("\n", 0, match.start()) + 1
+            problems.append(
+                f"{rel}:{line} [中点分隔符] 用留白或换行分层，不要拿「·」拼信息：{text[:32]}")
+
+    for match in KT_VISIBLE_CALL.finditer(source):
+        text = match.group(1)
+        if not text or (not CJK.search(text) and not MIDDOT.search(text)):
+            continue
+        line = source.count("\n", 0, match.start()) + 1
+        for rule, pattern, why in RULES:
+            hit = pattern.search(text)
+            if hit:
+                problems.append(f"{rel}:{line} [{rule}] 「{hit.group(0)}」—— {why}")
+        instruction = INSTRUCTION_WORDS.search(text)
+        if instruction:
+            problems.append(
+                f"{rel}:{line} [操作教学] 「{instruction.group(0)}」—— 小字说明只交代功能概要，"
+                "操作路径靠界面本身引导")
+        cjk_len = len(CJK.findall(text))
+        if cjk_len > MAX_NOTE_CHARS:
+            problems.append(
+                f"{rel}:{line} [过长] {cjk_len} 个汉字，小字说明一行放不下：{text[:30]}…")
+
+    for pattern in (KT_BUTTON_TEXT, KT_BUTTON_LAMBDA_TEXT):
+        for match in pattern.finditer(source):
+            text = match.group(1)
+            cjk_len = len(CJK.findall(text))
+            line = source.count("\n", 0, match.start()) + 1
+            if cjk_len > MAX_BUTTON_CHARS:
+                problems.append(
+                    f"{rel}:{line} [按钮过长] 「{text}」{cjk_len} 个汉字，"
+                    f"按钮最多 {MAX_BUTTON_CHARS} 个，能图标就图标")
+
+    # 卡片里并排多个文字按钮就是「按钮粘腻」；对话框双动作不算
+    row_pattern = r"Row\s*(?:\([\s\S]{0,900}?\))?\s*\{([\s\S]{0,1600}?)\n\s*\}"
+    for row in re.finditer(row_pattern, source):
+        body = row.group(1)
+        count = len(re.findall(r"TextButton\(", body))
+        last_dialog = source.rfind("OverlayDialog(", 0, row.start())
+        last_card = max(source.rfind("Card(", 0, row.start()), source.rfind("Card {", 0, row.start()))
+        if last_dialog > last_card:
+            continue
+        if count >= 2:
+            line = source.count("\n", 0, row.start()) + 1
+            problems.append(
+                f"{rel}:{line} [按钮堆叠] 一行里放了 {count} 个文字按钮，"
+                "改成整块可点 + 图标操作")
+    return problems
+
+
 def run(quiet: bool = False) -> list[str]:
     problems: list[str] = []
     for folder in SCAN_DIRS:
         for path in sorted(folder.glob("*.py")):
             file_problems, _items = check_file(path)
             problems.extend(file_problems)
+    for root in KT_ROOTS:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*.kt")):
+            problems.extend(check_kotlin(path))
     if not quiet:
         for line in problems:
             print(line)

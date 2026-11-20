@@ -172,3 +172,53 @@ def test_naming_normalizes_before_parse():
 
 def test_current_codebase_is_clean():
     assert lint_patterns.run(quiet=True) == []
+
+
+def test_body_in_exception_message():
+    """站点返回 HTML 时，整页会被塞进提示框。"""
+    source = 'throw SiteException("站点返回无法解析：${body.take(120)}")'
+    problems = lint_patterns._kt_problems(source, "Sample.kt")
+    assert any("响应体进提示" in p for p in problems), problems
+
+
+def test_readable_hint_is_allowed():
+    source = 'throw SiteException("站点返回了网页，登录可能已失效")'
+    assert lint_patterns._kt_problems(source, "Sample.kt") == []
+
+
+# —— 手机端：配对与提示相关的真实缺陷 ——
+
+def test_analyzer_created_inside_frame_callback():
+    source = """
+        analysis.setAnalyzer(executor) { image ->
+            QrAnalyzer { text -> onQr(text) }.analyze(image)
+        }
+    """
+    problems = lint_patterns._kt_problems(source, "Sample.kt")
+    assert any("分析器每帧重建" in p for p in problems), problems
+
+
+def test_shared_analyzer_is_allowed():
+    source = """
+        val analyzer = remember { QrAnalyzer { text -> onQr(text) } }
+        analysis.setAnalyzer(executor, analyzer)
+    """
+    assert lint_patterns._kt_problems(source, "Sample.kt") == []
+
+
+def test_body_in_exception_message():
+    source = 'throw SiteException("站点返回无法解析：${body.take(120)}")'
+    problems = lint_patterns._kt_problems(source, "Sample.kt")
+    assert any("响应体进提示" in p for p in problems), problems
+
+
+def test_readable_hint_is_allowed():
+    source = 'throw SiteException("站点返回了网页，登录可能已失效")'
+    assert lint_patterns._kt_problems(source, "Sample.kt") == []
+
+
+def test_cleartext_lan_requires_config():
+    only_loopback = '<network-security-config><domain-config cleartextTrafficPermitted="true">'
+    assert lint_patterns._network_problems(only_loopback, "net.xml")
+    good = '<network-security-config><base-config cleartextTrafficPermitted="true" />'
+    assert lint_patterns._network_problems(good, "net.xml") == []
