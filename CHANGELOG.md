@@ -7,6 +7,14 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.18
+
+- [35a85ae] feat(update): 下载完弹常驻重启提示，由用户确认；按钮不再显示版本号
+- [1e89ece] fix(lint): 恢复被覆盖的 anti-slop 与手机端规则
+- [438dd64] refactor(upload): 预检查改为 命名→页数→压缩→空格；原件只读，副本落工作目录
+
+@AnkoQAQ
+
 ## v1.0.17
 
 - [9cf955b] fix(build): 钉 numpy<2 修 Windows 查空格 _ARRAY_API not found；冒烟加 cv2 ABI 自检
