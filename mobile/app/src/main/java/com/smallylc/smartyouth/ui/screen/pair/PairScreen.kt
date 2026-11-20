@@ -376,7 +376,7 @@ fun PairScreen(
 
                 PairStep.Transfer -> {
                     item {
-                        Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        Card(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
                             Column(Modifier.padding(16.dp)) {
                                 Text(
                                     text = if (total == 0) "没有要传的档案" else "已传 $doneCount / $total",
@@ -399,7 +399,7 @@ fun PairScreen(
                     }
                     item {
                         CardGap(12)
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
                             Button(
                                 onClick = {
                                     step = PairStep.Scan

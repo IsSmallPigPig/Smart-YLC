@@ -150,7 +150,7 @@ fun LoginScreen(
                 .scrollEndHaptic()
                 .overScrollVertical()
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 26.dp),
             contentPadding = innerPadding,
             overscrollEffect = null,
         ) {

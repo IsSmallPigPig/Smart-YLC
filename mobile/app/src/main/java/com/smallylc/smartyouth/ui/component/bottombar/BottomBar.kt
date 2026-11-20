@@ -131,9 +131,9 @@ private val DockHeight = 72.dp
 private val DockMargin = 26.dp
 private val DockBottomFloat = 22.dp
 /** 胶囊宽度占屏幕比例：比卡片窄一圈，图标不贴边。 */
-private const val DockWidthFraction = 0.80f
-private val ThumbHeight = 44.dp
-private val ThumbTop = 14.dp
+private const val DockWidthFraction = 0.66f
+private val ThumbHeight = 54.dp
+private val ThumbTop = 9.dp
 private val IconSize = 22.dp
 /** 单个 tab 的固定宽度：整组居中，图标之间不被整条宽度拉开。 */
 private val ItemWidth = 56.dp
