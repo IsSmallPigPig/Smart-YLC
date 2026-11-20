@@ -503,7 +503,7 @@ private fun ReviewStep(
                 items(pages, key = { it.id }) { page ->
                     Column {
                         Box {
-                            PageThumb(page, aspect = 0.72f, fillWidth = true)
+                            PageThumb(page, aspect = 0.72f, fillWidth = true, onClick = { onEdit(page) })
                             Text(
                                 text = "${pages.indexOf(page) + 1}",
                                 color = Color.White,

@@ -146,6 +146,31 @@ object ScanSession {
         }
         val bitmap = BitmapFactory.decodeFile(file.absolutePath, options)
             ?: throw IllegalStateException("图片读取失败")
-        return DocDetect.downscale(bitmap, maxEdge)
+        val scaled = DocDetect.downscale(bitmap, maxEdge)
+        if (scaled !== bitmap) bitmap.recycle()
+        return applyExifOrientation(file, scaled)
+    }
+
+    /** 相机拍出来的 JPEG 方向记在 EXIF 里，不应用就会横躺。 */
+    private fun applyExifOrientation(file: File, bitmap: Bitmap): Bitmap {
+        val orientation = runCatching {
+            android.media.ExifInterface(file.absolutePath)
+                .getAttributeInt(
+                    android.media.ExifInterface.TAG_ORIENTATION,
+                    android.media.ExifInterface.ORIENTATION_NORMAL,
+                )
+        }.getOrDefault(android.media.ExifInterface.ORIENTATION_NORMAL)
+        val matrix = Matrix()
+        when (orientation) {
+            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            else -> return bitmap
+        }
+        val upright = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        if (upright !== bitmap) bitmap.recycle()
+        return upright
     }
 }
