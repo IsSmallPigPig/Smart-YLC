@@ -48,7 +48,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.smallylc.smartyouth.scan.DocStore
 import com.smallylc.smartyouth.scan.QrAnalyzer
+import com.smallylc.smartyouth.data.CloudSync
 import com.smallylc.smartyouth.site.PairClient
+import com.smallylc.smartyouth.site.RelayClient
 import com.smallylc.smartyouth.ui.component.CardGap
 import com.smallylc.smartyouth.ui.component.MutedText
 import com.smallylc.smartyouth.ui.component.ToneGreen
@@ -111,14 +113,46 @@ fun PairScreen(
         message = null
         scope.launch(Dispatchers.IO) {
             when (val outcome = client.pair(deviceName)) {
-                is PairClient.Result.Fail -> withContext(Dispatchers.Main) {
-                    message = outcome.message
-                    messageOk = false
-                    busy = false
-                    if (outcome.kind == "config") {
-                        host = client.base.removePrefix("http://")
-                        pin = client.pin
-                        step = PairStep.Manual
+                is PairClient.Result.Fail -> {
+                    val relayCode = configCode.trim().uppercase()
+                    if (outcome.kind == "offline" && relayCode.length == 6) {
+                        withContext(Dispatchers.Main) {
+                            step = PairStep.Transfer
+                            message = "局域网不通，改走中转"
+                            messageOk = true
+                        }
+                        val local = DocStore.list()
+                        withContext(Dispatchers.Main) {
+                            total = local.size
+                            doneCount = 0
+                            results.clear()
+                        }
+                        when (val relay = RelayClient(CloudSync.DEFAULT_SERVER, relayCode).upload(local.map { it.file }) { _, _, _ -> }) {
+                            is RelayClient.Result.Ok -> withContext(Dispatchers.Main) {
+                                doneCount = relay.uploaded
+                                results.add("已上传 ${relay.uploaded} 份" to true)
+                                if (relay.skipped > 0) results.add("云端已有 ${relay.skipped} 份" to true)
+                                message = "中转完成，电脑会自动取回"
+                                messageOk = true
+                                busy = false
+                            }
+                            is RelayClient.Result.Fail -> withContext(Dispatchers.Main) {
+                                message = relay.message
+                                messageOk = false
+                                busy = false
+                            }
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            message = outcome.message
+                            messageOk = false
+                            busy = false
+                            if (outcome.kind == "config") {
+                                host = client.base.removePrefix("http://")
+                                pin = client.pin
+                                step = PairStep.Manual
+                            }
+                        }
                     }
                 }
 

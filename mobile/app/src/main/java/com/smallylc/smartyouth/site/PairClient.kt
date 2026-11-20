@@ -55,7 +55,7 @@ class PairClient(val base: String, val pin: String, val configCode: String) {
             .put("configCode", configCode)
             .toString()
         val resp = post("/api/pair", payload)
-        if (resp.code == 0) return Result.Fail("连不上电脑，确认两边在同一 Wi-Fi")
+        if (resp.code == 0) return Result.Fail("连不上电脑，确认两边在同一 Wi-Fi", "offline")
         val obj = resp.body ?: return Result.Fail("电脑返回的内容看不懂")
         if (obj.optBoolean("ok")) {
             val token = obj.optString("token")
