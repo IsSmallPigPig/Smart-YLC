@@ -140,8 +140,28 @@ class FileStatus:
         return "缺团员" if self.member == "missing" else "正常"
 
 
+def cached_page_counter():
+    """包一层页数读取：同一内容查过就直接用上次的结论。
+
+    键是内容摘要而不是路径——原件会被规范化改名、压缩副本会重做，
+    按路径缓存等于每次刷新都白读一遍。
+    """
+    from app.services import check_cache
+
+    def count(path: str) -> int | None:
+        digest = check_cache.fingerprint(path)
+        known = check_cache.pages_of(digest)
+        if known is not None:
+            return known
+        pages = pdf_page_count(path)
+        check_cache.remember_pages(digest, pages)
+        return pages
+
+    return count
+
+
 def inspect(files, expected_pages: int, accounts: list[dict], roster,
-            auto_fix: bool = True, counter=pdf_page_count,
+            auto_fix: bool = True, counter=None,
             members: dict[str, set[tuple[str, str]]] | None = None,
             archived: dict[str, set[tuple[str, str]]] | None = None,
             roots: dict[str, str] | None = None) -> list[FileStatus]:
@@ -149,6 +169,7 @@ def inspect(files, expected_pages: int, accounts: list[dict], roster,
 
     members 是 member_index() 的结果，给出时核对支部名单：查不到只写警告说明，
     文件仍然可上传。"""
+    counter = counter or cached_page_counter()
     branch_of = {a.get("userName", ""): (a.get("remark") or a.get("userName", ""))
                  for a in accounts}
     statuses: list[FileStatus] = []

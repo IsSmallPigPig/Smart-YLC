@@ -279,6 +279,18 @@ def check_file(path: Path) -> list[str]:
                 f"{rel} [下载即自动安装] _on_downloaded 不能直接调 silent_update.start，"
                 "下载完要弹常驻提示等用户点「重启」，否则程序会在用户没确认时自动退出")
 
+    # 规则 20（2026-11-20）：检查缓存必须按内容摘要，不能按路径。
+    # 原件会被规范化改名、压缩副本会随参数重做、程序重开会清空内存；
+    # 用 (路径, mtime) 当键，上面任一情况都让几百份档案白跑一遍。
+    if path.name == "upload_page.py" and "def _cell_key" in source:
+        start = source.index("def _cell_key")
+        end = source.find("\n    def ", start + 1)
+        block = source[start:end if end != -1 else len(source)]
+        if "getmtime" in block and "fingerprint" not in block:
+            problems.append(
+                f"{rel} [检查缓存按路径] _cell_key 必须用内容摘要（check_cache.fingerprint），"
+                "用 getmtime 会在改名、重压、重启后全部失效，几百份档案重查一遍")
+
     return problems
 
 

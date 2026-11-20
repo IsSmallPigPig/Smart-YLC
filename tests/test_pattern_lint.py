@@ -153,6 +153,17 @@ def test_scan_skips_work_dir():
     assert any("扫描工作目录" in x for x in check(bad, "archive_scan.py"))
 
 
+def test_check_cache_must_use_content_digest():
+    """规则 20：检查缓存不能按路径 + mtime，否则改名/重压/重启后全部失效。"""
+    p = ROOT / "app" / "ui" / "upload_page.py"
+    assert not any("检查缓存按路径" in x for x in lint_patterns.check_file(p))
+
+    bad = ('class Page:\n'
+           '    def _cell_key(self, path):\n'
+           '        return (path, os.path.getmtime(path))\n')
+    assert any("检查缓存按路径" in x for x in check(bad, "upload_page.py"))
+
+
 def test_download_must_not_auto_install():
     """规则 19：下载完成不能自动安装退出，等用户确认重启。"""
     p = ROOT / "app" / "ui" / "about_card.py"

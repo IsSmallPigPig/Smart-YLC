@@ -431,8 +431,9 @@ class UploadPage(FluentPage):
         self._phone_dialog = None
         # 逐格检查结果：{路径: 空格数}；-1 表示这项没查（缺 OpenCV 等）
         self._cell_counts: dict[str, int] = {}
-        # 按 (路径, 修改时间) 缓存：同一份档案没改过就不重复扫
-        self._cell_cache: dict[tuple[str, float], int] = {}
+        # 按内容摘要缓存（key 由 _cell_key 给出）：同一份档案无论改名、重压、
+        # 还是重启程序后重新扫描，都不会重复扫几百页
+        self._cell_cache: dict[str, int] = {}
         self._cell_worker = None
         self._cell_total = 0
         self._cell_done = 0
@@ -851,7 +852,7 @@ class UploadPage(FluentPage):
         self._sync_abnormal(statuses)
         alive = {str(s.path) for s in statuses}
         self._cell_counts = {p: n for p, n in self._cell_counts.items() if p in alive}
-        self._cell_cache = {k: n for k, n in self._cell_cache.items() if k[0] in alive}
+        # 摘要缓存不按路径淘汰：同一份内容换个文件名还会命中，磁盘那份另有容量上限
         self._rebuild_sources()
         # 卡片建完再收起加载遮罩，避免中途露出半截内容导致闪屏
         self._rebuild_branches(on_done=self._after_branches)
@@ -986,23 +987,29 @@ class UploadPage(FluentPage):
 
     # ---------- 逐格检查（扫描后自动跑） ----------
 
-    def _cell_key(self, path: str) -> tuple[str, float]:
-        """缓存键：路径 + 修改时间。档案没改过就不重复扫几百页。"""
-        try:
-            return (path, os.path.getmtime(path))
-        except OSError:
-            return (path, 0.0)
+    def _cell_key(self, path: str) -> str:
+        """缓存键：文件内容摘要。
+
+        用内容而不是路径 + 修改时间：原件会被规范化改名、压缩副本会随参数重做、
+        程序重开会清空内存——按路径缓存等于每次刷新都重查几百页。
+        摘要取大小加首中尾采样，单份 1~2ms；查空格本身要 300~800ms。
+        """
+        from app.services import check_cache
+
+        return check_cache.fingerprint(path) or f"missing:{path}"
 
     def _start_cell_check(self):
         """逐格查表格空格：扫描完自动在后台跑，结果写进每行说明。
 
         进度挂在右下角浮动进度条上（ProgressToast），不占页面、不锁交互。
-        同一份档案按 (路径, 修改时间) 缓存，没改过就跳过。"""
+        查过的结论按内容摘要持久化，同一份档案改名、重压或重启后都不再重查。"""
+        from app.services import check_cache
         from app.services.form_cells import check as check_cells
 
         # 空格从压缩副本上查（与上传同一份文件）；结果仍按原件路径回填给界面。
         # 异常副本、未生成副本的档案不查——它们不参与上传。
         targets: list[tuple[str, str]] = []   # (原件路径, 副本路径)
+        cached_hits = 0
         for s in self.statuses:
             original = str(s.path)
             copy = s.work_path
@@ -1010,8 +1017,18 @@ class UploadPage(FluentPage):
                 continue
             if work_area.is_abnormal_copy(copy):
                 continue
-            if self._cell_key(copy) not in self._cell_cache:
+            key = self._cell_key(copy)
+            if key not in self._cell_cache:
+                known = check_cache.blanks_of(key)
+                if known is not None:
+                    self._cell_cache[key] = known
+                    self._cell_counts[original] = known
+                    cached_hits += 1
+                    continue
                 targets.append((original, copy))
+        if cached_hits:
+            # 命中缓存的也要重建卡片，否则行说明还是空的
+            self._rebuild_branches()
         if not targets:
             return
         if self._cell_worker is not None and self._cell_worker.isRunning():
@@ -1060,7 +1077,12 @@ class UploadPage(FluentPage):
         if count >= 0:
             self._cell_counts[path] = count
             copy = (getattr(self, "_cell_targets", {}) or {}).get(path, path)
-            self._cell_cache[self._cell_key(copy)] = count
+            key = self._cell_key(copy)
+            self._cell_cache[key] = count
+            # 落盘：下次启动或重新扫描时这份就不必再查
+            from app.services import check_cache
+
+            check_cache.remember_blanks(key, count)
         else:
             self._cell_skipped += 1
             self._cell_skip_reason = reason or self._cell_skip_reason
