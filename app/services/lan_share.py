@@ -130,6 +130,9 @@ class LanShare:
     _last_active: float = 0.0
     _sessions: dict[str, PairSession] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    # 本机配置档案的提取码。非空时，手机必须报一个相同的 code 才能配对——
+    # 这就是「相同配置的设备」。空列表表示本机没启用这项校验。
+    allowed_codes: list[str] = field(default_factory=list)
 
     # ---- 生命周期 ----
 
@@ -192,20 +195,32 @@ class LanShare:
 
     # ---- App 配对（v1 协议）----
 
-    def pair(self, pin: str, device: str = "") -> PairSession | None:
-        """用二维码里的配对码换一个会话 token；配对码不对返回 None。
+    def pair(self, pin: str, device: str = "", config_code: str = "") -> tuple[PairSession | None, str]:
+        """配对换 token，返回 (会话, 拒绝原因)。
 
-        配对码不立即作废：同一二维码要给「先配对、失败重试」留余地，也兼容
-        浏览器网页继续用同一个码上传。真正的限制是 token 与空闲超时。
+        reason: ok / bad_pin / bad_config。两种失败分开报，手机端才能告诉用户
+        是刷新二维码还是去核对提取码。
+
+        本机配了云端档案时，手机必须报相同提取码——「相同配置的设备」才放行。
+        配对码不作废（允许失败重试），限制靠 token 与空闲超时。
         """
         if not pin or pin.upper() != self.pin:
-            return None
+            return None, "bad_pin"
+        if self.allowed_codes:
+            from app.services.cloud_backup import normalize_code
+
+            try:
+                reported = normalize_code(config_code)
+            except ValueError:
+                return None, "bad_config"
+            if reported not in self.allowed_codes:
+                return None, "bad_config"
         sess = PairSession(token=secrets.token_urlsafe(24), device=device[:60],
                            created=time.time())
         with self._lock:
             self._sessions[sess.token] = sess
         self.touch()
-        return sess
+        return sess, "ok"
 
     def session(self, token: str) -> PairSession | None:
         with self._lock:
@@ -358,10 +373,17 @@ def _make_handler(share: LanShare):
             # ---- v1 App 配对协议 ----
             if parsed.path == "/api/pair":
                 body = self._json_body() or {}
-                sess = share.pair(str(body.get("pin") or ""),
-                                  str(body.get("device") or ""))
+                sess, reason = share.pair(
+                    str(body.get("pin") or ""),
+                    str(body.get("device") or ""),
+                    str(body.get("configCode") or ""))
+                if reason == "bad_config":
+                    self._json(403, {"ok": False, "error": "config",
+                                     "reason": "手机与电脑的配置提取码不一致，请在手机 App 里填同一个码"})
+                    return
                 if sess is None:
-                    self._json(403, {"ok": False, "error": "配对码不对，刷新电脑上的二维码"})
+                    self._json(403, {"ok": False, "error": "pin",
+                                     "reason": "配对码不对，刷新电脑上的二维码"})
                     return
                 self._json(200, {"ok": True, "token": sess.token})
                 return

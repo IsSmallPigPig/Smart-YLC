@@ -51,6 +51,29 @@ def test_pair_rejects_wrong_pin(share):
     _s, base = share
     code, data = post(base, "/api/pair", {"pin": "WRONG", "device": "测试手机"})
     assert code == 403 and data["ok"] is False
+    assert data["error"] == "pin"
+
+
+def test_pair_requires_same_config_code(share):
+    """配了云端档案时，只有报相同提取码的手机才能配对。"""
+    s, base = share
+    s.allowed_codes = ["ABC234"]        # 6 位合法提取码（不含 0/1/I/O）
+    # 不报码 / 报错码都拒绝，且原因与配对码错误分开
+    for reported in ("", "XYZ789"):
+        code, data = post(base, "/api/pair", {"pin": s.pin, "configCode": reported})
+        assert code == 403 and data["error"] == "config"
+    # 报对码才放行
+    code, data = post(base, "/api/pair",
+                      {"pin": s.pin, "configCode": "abc234", "device": "同源手机"})
+    assert code == 200 and data["ok"] is True
+
+
+def test_pair_without_local_config_allows_any(share):
+    """本机没配云端档案时不校验提取码，扫码即可配对。"""
+    s, base = share
+    assert s.allowed_codes == []
+    code, data = post(base, "/api/pair", {"pin": s.pin, "device": "陌生手机"})
+    assert code == 200 and data["ok"] is True
 
 
 def test_full_pair_flow(share):

@@ -45,7 +45,10 @@ class PhoneSyncDialog(FluentPanelDialog):
     def __init__(self, parent=None, auto_start: bool = True):
         super().__init__(parent)
         self.widget.setMinimumWidth(480)
-        self.share = LanShare(on_received=self._on_received)
+        from app.services.cloud_backup import local_config_codes
+
+        self.share = LanShare(on_received=self._on_received,
+                              allowed_codes=local_config_codes())
         self._timer: QTimer | None = None
 
         self.viewLayout.setSpacing(12)

@@ -133,6 +133,19 @@ def load_profiles(cfg: dict) -> list[dict[str, str]]:
     return out
 
 
+def local_config_codes(cfg: dict | None = None) -> list[str]:
+    """本机配置档案的提取码列表，作为「相同配置的设备」的判据。
+
+    手机与电脑填同一个提取码即视为同一套配置：局域网扫码配对时用它校验双方
+    是否同源，无法直连时它又作为中转通道的标识。没配过云端档案时返回空列表，
+    表示本机不启用这项校验（扫码即可配对，兼容未使用备份功能的用户）。
+    """
+    if cfg is None:
+        from app.services import store
+        cfg = store.load()
+    return [p["code"] for p in load_profiles(cfg) if p.get("code")]
+
+
 # ---- 加密 -----------------------------------------------------------------
 
 def _derive(secret: str, salt: bytes) -> bytes:
