@@ -111,6 +111,33 @@ def test_oversize_upload_is_refused(server, monkeypatch):
     assert err.value.code == 413
 
 
+def test_discovery_answers_probe(server):
+    """手机广播探测时，服务必须回设备名、端口和配对码，且不带提取码。"""
+    import socket
+
+    from app.services.lan_share import DISCOVERY_MAGIC, DISCOVERY_PORT
+
+    share, base = server
+    if share._discovery is None:
+        pytest.skip("发现端口被占用，本次跳过")
+    http_port = int(base.rsplit(":", 1)[1])
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.settimeout(2)
+    try:
+        probe.sendto(DISCOVERY_MAGIC, ("127.0.0.1", DISCOVERY_PORT))
+        data, _ = probe.recvfrom(512)
+    finally:
+        probe.close()
+
+    info = json.loads(data.decode())
+    assert info["service"] == "smartyouth"
+    assert info["port"] == http_port
+    assert info["pin"] == share.pin
+    assert info["name"]
+    assert not {"configCode", "allowed_codes"} & set(info)
+
+
 def test_lan_addresses_are_private():
     from app.services.lan_share import _is_private, lan_addresses
 
