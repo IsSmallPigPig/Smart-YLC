@@ -8,6 +8,7 @@ import org.opencv.core.Mat
 import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
+import org.opencv.core.RotatedRect
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import kotlin.math.hypot
@@ -39,66 +40,135 @@ object DocDetect {
     fun detect(bitmap: Bitmap): Quad? {
         val scale = (DETECT_MAX_EDGE / max(bitmap.width, bitmap.height)).coerceAtMost(1f)
         val small = if (scale < 1f) {
-            Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
-        } else bitmap
+            Bitmap.createScaledBitmap(
+                bitmap,
+                (bitmap.width * scale).toInt(),
+                (bitmap.height * scale).toInt(),
+                true,
+            )
+        } else {
+            bitmap
+        }
 
         val src = Mat()
         val gray = Mat()
-        val edges = Mat()
+        val lab = Mat()
+        val std = Mat()
+        val masks = ArrayList<Mat>()
         return try {
             Utils.bitmapToMat(small, src)
             Imgproc.cvtColor(src, gray, Imgproc.COLOR_RGBA2GRAY)
-            Imgproc.GaussianBlur(gray, gray, Size(5.0, 5.0), 0.0)
-            // 闭运算把断裂的边缘接起来，纸张四边在手机拍的照片里常被手指/阴影切断
-            val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+            val bgr = Mat()
+            Imgproc.cvtColor(src, bgr, Imgproc.COLOR_RGBA2BGR)
+            Imgproc.cvtColor(bgr, lab, Imgproc.COLOR_BGR2Lab)
+            bgr.release()
+
+            val channels = ArrayList<Mat>()
+            Core.split(lab, channels)
+
+            // 亮度与色度各做一次 Otsu，正反两种极性都留下：
+            // 白纸配深桌、灰纸配木墙、纸比背景暗，都能覆盖到
+            for (channel in channels) {
+                val blurred = Mat()
+                Imgproc.GaussianBlur(channel, blurred, Size(5.0, 5.0), 0.0)
+                val binary = Mat()
+                Imgproc.threshold(blurred, binary, 0.0, 255.0, Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU)
+                val inverted = Mat()
+                Core.bitwise_not(binary, inverted)
+                masks.add(binary)
+                masks.add(inverted)
+                blurred.release()
+            }
+            channels.forEach { it.release() }
+
+            // 纸是画面里「亮且平」的一块：木纹、床单条纹、布料褶皱都带局部起伏
+            val grayF = Mat()
+            gray.convertTo(grayF, CvType.CV_32F)
+            val mean = Mat()
+            Imgproc.boxFilter(grayF, mean, CvType.CV_32F, Size(25.0, 25.0))
+            val square = Mat()
+            Core.multiply(grayF, grayF, square)
+            Imgproc.boxFilter(square, square, CvType.CV_32F, Size(25.0, 25.0))
+            val meanSquare = Mat()
+            Core.multiply(mean, mean, meanSquare)
+            Core.subtract(square, meanSquare, std)
+            Core.sqrt(std, std)
+            std.convertTo(std, CvType.CV_8U)
+            val bright = Mat()
+            Imgproc.threshold(gray, bright, 105.0, 255.0, Imgproc.THRESH_BINARY)
+            val flat = Mat()
+            Imgproc.threshold(std, flat, 14.0, 255.0, Imgproc.THRESH_BINARY_INV)
+            Core.bitwise_and(bright, flat, flat)
+            masks.add(flat)
+            grayF.release(); mean.release(); square.release(); meanSquare.release()
+            bright.release()
+
             val imageArea = small.width.toDouble() * small.height
+            val kernelOpen = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(7.0, 7.0))
+            val kernelClose = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(17.0, 17.0))
 
-            var best: Quad? = null
-            var bestArea = 0.0
+            var bestQuad: Quad? = null
+            var bestScore = Double.NEGATIVE_INFINITY
 
-            // 一组阈值各扫一遍：浅色纸配深桌、白墙上放白纸、逆光，边缘强度差很多，
-            // 单组 60/180 常常什么都找不到
-            val thresholds = listOf(40.0 to 110.0, 65.0 to 170.0, 95.0 to 230.0)
-            for ((low, high) in thresholds) {
-                Imgproc.Canny(gray, edges, low, high)
-                Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel)
+            for (mask in masks) {
+                val cleaned = mask.clone()
+                Imgproc.morphologyEx(cleaned, cleaned, Imgproc.MORPH_OPEN, kernelOpen)
+                Imgproc.morphologyEx(cleaned, cleaned, Imgproc.MORPH_CLOSE, kernelClose)
                 val contours = ArrayList<MatOfPoint>()
-                Imgproc.findContours(edges, contours, Mat(), Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
-                for (contour in contours) {
-                    val curve = MatOfPoint2f(*contour.toArray())
-                    val perimeter = Imgproc.arcLength(curve, true)
-                    val approx = MatOfPoint2f()
-                    Imgproc.approxPolyDP(curve, approx, 0.025 * perimeter, true)
-                    val pts = approx.toArray()
-                    if (pts.size == 4 && Imgproc.isContourConvex(MatOfPoint(*pts))) {
-                        val area = Imgproc.contourArea(MatOfPoint(*pts))
-                        if (area > imageArea * 0.06 && area > bestArea) {
-                            bestArea = area
-                            best = toQuad(orderCorners(pts), small.width, small.height)
-                        }
-                    }
+                Imgproc.findContours(cleaned, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+                cleaned.release()
+
+                val largest = contours.maxByOrNull { Imgproc.contourArea(it) } ?: continue
+                val area = Imgproc.contourArea(largest)
+                val ratio = area / imageArea
+                val rect = Imgproc.minAreaRect(MatOfPoint2f(*largest.toArray()))
+                val rectArea = rect.size.width * rect.size.height
+                val fill = if (rectArea <= 0.0) 0.0 else area / rectArea
+                val longSide = max(rect.size.width, rect.size.height)
+                val shortSide = min(rect.size.width, rect.size.height)
+                val aspect = if (shortSide <= 0.0) 0.0 else longSide / shortSide
+
+                // 框住整幅画面没有意义；过小的色块也不是纸
+                if (ratio <= 0.12 || ratio >= 0.60) continue
+                if (fill <= 0.72 || aspect <= 1.0 || aspect >= 3.0) continue
+
+                val score = fill - kotlin.math.abs(aspect - 1.6) * 0.06
+                if (score <= bestScore) continue
+
+                val quad = quadFrom(largest, rect, small.width, small.height)
+                if (quad != null) {
+                    bestScore = score
+                    bestQuad = quad
                 }
             }
-
-            // 四边被遮住一角时近似不出四点，退一步用最大轮廓的最小外接矩形
-            if (best == null) {
-                val contours = ArrayList<MatOfPoint>()
-                Imgproc.findContours(edges, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
-                val largest = contours.maxByOrNull { Imgproc.contourArea(it) }
-                if (largest != null && Imgproc.contourArea(largest) > imageArea * 0.35) {
-                    val rect = Imgproc.minAreaRect(MatOfPoint2f(*largest.toArray()))
-                    val corners = arrayOfNulls<Point>(4)
-                    rect.points(corners)
-                    best = toQuad(orderCorners(corners.filterNotNull().toTypedArray()), small.width, small.height)
-                }
-            }
-            best
+            bestQuad
         } catch (t: Throwable) {
+            android.util.Log.w("DocDetect", "detect failed", t)
             null
         } finally {
-            src.release(); gray.release(); edges.release()
+            src.release(); gray.release(); lab.release(); std.release()
+            masks.forEach { it.release() }
             if (small !== bitmap) small.recycle()
         }
+    }
+
+    /** 能近似成四点就取四点，否则退到最小外接矩形。 */
+    private fun quadFrom(contour: MatOfPoint, rect: RotatedRect, width: Int, height: Int): Quad? {
+        val curve = MatOfPoint2f(*contour.toArray())
+        val perimeter = Imgproc.arcLength(curve, true)
+        val approx = MatOfPoint2f()
+        Imgproc.approxPolyDP(curve, approx, 0.02 * perimeter, true)
+        val pts = approx.toArray()
+        val ordered = if (pts.size == 4 && Imgproc.isContourConvex(MatOfPoint(*pts))) {
+            orderCorners(pts)
+        } else {
+            val corners = arrayOfNulls<Point>(4)
+            rect.points(corners)
+            orderCorners(corners.filterNotNull().toTypedArray())
+        }
+        curve.release(); approx.release()
+        if (ordered.size != 4) return null
+        return toQuad(ordered, width, height)
     }
 
     /** 归一化用的起点：左上。 */

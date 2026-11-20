@@ -162,8 +162,23 @@ fun BottomBar(
     modifier: Modifier = Modifier,
 ) {
     val colors = MiuixTheme.colorScheme
+    val density = LocalDensity.current
     val items = MainDestination.entries
     val dockShape = RoundedCornerShape(percent = 50)
+
+    val thumbX = remember { Animatable(0f) }
+    var itemWidthPx by remember { mutableFloatStateOf(0f) }
+    var barX by remember { mutableFloatStateOf(0f) }
+    val centers = remember { mutableStateListOf(*Array(items.size) { 0f }) }
+    // 弹簧曲线：起步快、末端缓出，选中块从旧位置滑到新位置
+    val springSpec = spring<Float>(dampingRatio = 0.82f, stiffness = 300f)
+    val thumbWidth = with(density) { itemWidthPx.toDp() }
+
+    LaunchedEffect(centers.toList(), mainState.selectedPage, itemWidthPx) {
+        val index = mainState.selectedPage.coerceIn(0, items.lastIndex)
+        if (itemWidthPx <= 0f || centers[index] <= 0f) return@LaunchedEffect
+        thumbX.animateTo(centers[index] - barX - itemWidthPx / 2f, springSpec)
+    }
 
     Box(
         modifier = modifier
@@ -172,28 +187,39 @@ fun BottomBar(
             .padding(bottom = DockBottomFloat),
         contentAlignment = Alignment.BottomCenter,
     ) {
-        Row(
+        Box(
             modifier = Modifier
                 .shadow(elevation = 12.dp, shape = dockShape, clip = false)
                 .clip(dockShape)
                 .background(colors.surfaceContainer.copy(alpha = 0.96f))
                 .height(DockHeight)
-                .padding(horizontal = DockPadding),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = DockPadding)
+                .onGloballyPositioned { barX = it.positionInRoot().x },
         ) {
+            if (itemWidthPx > 0f) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = (DockHeight - ItemHeight) / 2)
+                        .offset { IntOffset(thumbX.value.roundToInt(), 0) }
+                        .width(thumbWidth)
+                        .height(ItemHeight)
+                        .clip(RoundedCornerShape(ItemCorner))
+                        .background(colors.primary),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 items.forEachIndexed { index, destination ->
                     val selected = mainState.selectedPage == index
-                    val interaction = remember { MutableInteractionSource() }
-                    val fill by animateFloatAsState(
-                        targetValue = if (selected) 1f else 0f,
-                        animationSpec = tween(220),
-                        label = "tabFill",
-                    )
                     val fg by animateColorAsState(
                         targetValue = if (selected) colors.onPrimary else colors.onSurfaceVariantActions,
                         animationSpec = tween(220),
                         label = "tabFg",
                     )
+                    val interaction = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
                             .width(ItemWidth)
@@ -201,15 +227,15 @@ fun BottomBar(
                             .clickable(
                                 interactionSource = interaction,
                                 indication = null,
-                            ) { mainState.animateToPage(index) },
+                            ) { mainState.animateToPage(index) }
+                            .onGloballyPositioned {
+                                centers[index] = it.positionInRoot().x + it.size.width / 2f
+                                if (index == 0) itemWidthPx = it.size.width.toFloat()
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(ItemHeight)
-                                .clip(RoundedCornerShape(ItemCorner))
-                                .background(colors.primary.copy(alpha = fill)),
+                            modifier = Modifier.height(ItemHeight),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center,
                         ) {
@@ -243,5 +269,6 @@ fun BottomBar(
                     }
                 }
             }
+        }
     }
 }

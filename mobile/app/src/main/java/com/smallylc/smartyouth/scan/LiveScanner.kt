@@ -34,31 +34,34 @@ object LiveScanner {
         _quad.value = null
     }
 
-    /** 相机分析线程调用；负责回收 frame。 */
-    fun onFrame(frame: Bitmap, rotationDegrees: Int) {
+    /**
+     * 传入的 bitmap 属于 PreviewView，不能回收；需要转换时自己 copy 一份。
+     */
+    fun onFrame(source: Bitmap, rotationDegrees: Int) {
         val now = SystemClock.elapsedRealtime()
-        if (working || now - lastAt < INTERVAL_MS) {
-            frame.recycle()
-            return
-        }
+        if (working || now - lastAt < INTERVAL_MS) return
         lastAt = now
         working = true
-        val upright = if (rotationDegrees % 360 == 0) {
-            frame
-        } else {
-            runCatching {
-                val m = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-                Bitmap.createBitmap(frame, 0, 0, frame.width, frame.height, m, true)
-            }.getOrNull() ?: frame
-        }
+        var owned: Bitmap? = null
         try {
-            _aspect.value = upright.width.toFloat() / max(1, upright.height)
-            val small = DocDetect.downscale(upright, 900)
-            _quad.value = runCatching { DocDetect.detect(small) }.getOrNull()
-            if (small !== upright) small.recycle()
+            // PreviewView 可能给 HARDWARE 位图，OpenCV 读不了，先转成软件位图
+            val usable = if (source.config == Bitmap.Config.HARDWARE) {
+                source.copy(Bitmap.Config.ARGB_8888, false)?.also { owned = it }
+            } else {
+                source
+            } ?: return
+            _aspect.value = usable.width.toFloat() / max(1, usable.height)
+            val small = DocDetect.downscale(usable, 900)
+            val found = try {
+                DocDetect.detect(small)
+            } catch (t: Throwable) {
+                android.util.Log.w("LiveScanner", "detect failed", t)
+                null
+            }
+            _quad.value = found
+            if (small !== usable) small.recycle()
         } finally {
-            if (upright !== frame) upright.recycle()
-            frame.recycle()
+            owned?.recycle()
             working = false
         }
     }

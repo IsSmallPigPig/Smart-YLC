@@ -260,8 +260,15 @@ private fun CaptureStep(
         CameraCapture(
             modifier = Modifier.fillMaxSize(),
             onReady = onCameraReady,
-            onFrame = LiveScanner::onFrame,
         )
+        // 直接从预览取帧：ImageAnalysis 在部分机型上拿不到回调，
+        // 快照路径慢一点但每台机器都能出图
+        LaunchedEffect(camera) {
+            while (true) {
+                kotlinx.coroutines.delay(240)
+                camera?.snapshot()?.let { LiveScanner.onFrame(it, 0) }
+            }
+        }
 
         Box(
             modifier = Modifier

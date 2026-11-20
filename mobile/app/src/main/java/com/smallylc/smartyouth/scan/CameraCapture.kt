@@ -84,14 +84,15 @@ fun CameraCapture(
             val analysis = onFrame?.let { sink ->
                 ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                    // 不指定 RGBA：部分机型不支持该输出格式，setAnalyzer 会直接失败，
+                    // 表现为取景正常但一帧都拿不到
                     .build()
                     .also { useCase ->
                         useCase.setAnalyzer(analysisExecutor) { proxy ->
                             try {
                                 sink(proxy.toBitmap(), proxy.imageInfo.rotationDegrees)
-                            } catch (_: Throwable) {
-                                // 单帧失败不影响取景
+                            } catch (t: Throwable) {
+                                android.util.Log.w("CameraCapture", "frame failed", t)
                             } finally {
                                 proxy.close()
                             }
@@ -110,6 +111,8 @@ fun CameraCapture(
                     CameraSelector.Builder().requireLensFacing(lensFacing).build(),
                     *cases.toTypedArray(),
                 )
+            }.onFailure {
+                android.util.Log.e("CameraCapture", "bind failed", it)
             }
         }, executor)
         onDispose {
@@ -122,6 +125,7 @@ fun CameraCapture(
             onReady(
                 CameraHandle(
                     capture = capture,
+                    previewView = previewView,
                     toggleLens = {
                         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
                             CameraSelector.LENS_FACING_FRONT
@@ -143,8 +147,12 @@ fun CameraCapture(
 
 class CameraHandle(
     private val capture: ImageCapture,
+    private val previewView: PreviewView,
     val toggleLens: () -> Unit,
 ) {
+    /** 取一帧预览画面（已含 FILL_CENTER 裁剪），只在主线程调用。 */
+    fun snapshot(): android.graphics.Bitmap? = runCatching { previewView.bitmap }.getOrNull()
+
     fun shoot(onSaved: (File) -> Unit, onError: (String) -> Unit) {
         val dir = File(app.cacheDir, "scan/incoming").apply { mkdirs() }
         val file = File(dir, "shot_${System.currentTimeMillis()}.jpg")
