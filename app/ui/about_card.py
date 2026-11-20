@@ -50,7 +50,7 @@ def _button(icon, text: str) -> PushButton:
 
 
 class AboutCard(CollapsibleCard):
-    CREDIT = "本项目由广州天省实验学校 12407 欧阳文俊 @IsSmallPigPig 开发。"
+    CREDIT = "本项目由广州天省实验学校 1240723 AnkoQAQ @IsSmallPigPig 开发。"
     FEEDBACK_DESC = "遇到问题或有建议，欢迎告诉我们"
 
     def __init__(self, parent=None):

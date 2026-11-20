@@ -475,7 +475,7 @@ class SettingsPage(FluentPage):
         set_tip(self.notify_more_btn, "发送时间、间隔与测试通知")
         self.notify_more_btn.clicked.connect(self._open_notify_dialog)
         self.notify_row = SettingRow(
-            "通知频率", desc="提醒未读消息的节奏", icon=FIF.DATE_TIME,
+            "通知频率", desc="提醒未读消息的间隔", icon=FIF.DATE_TIME,
             control=controls(self.notify_mode, self.notify_more_btn))
         row(ws_card, self.notify_row)
         self.notify_mode.currentIndexChanged.connect(self._on_notify_mode_changed)
@@ -502,7 +502,7 @@ class SettingsPage(FluentPage):
         # 这里备份/恢复的是整份 config.json：账号、名单、工作区、通知、外观与编号规则
         # 全在里面，换机时整份搬走。单独成卡就是为了不让人误以为只备份支部账号。
         backup_card = group("系统备份", False,
-                            "导出或恢复全部软件设置，换机可整份搬走")
+                            "导出或恢复全部软件设置，迁移到您的其他设备")
         self.backup_export_btn = PushButton(FIF.SHARE, "导出备份")
         set_tip(self.backup_export_btn, "把全部设置导出成一个 JSON 文件")
         self.backup_export_btn.clicked.connect(self._export_config_json)
@@ -511,7 +511,7 @@ class SettingsPage(FluentPage):
         self.backup_import_btn.clicked.connect(self._import_config_json)
         row(backup_card, SettingRow(
             "全部设置",
-            desc="账号、名单、工作区、通知、外观与编号规则一次带走",
+            desc="导出所有您的工作设置到本地",
             icon=FIF.SAVE_AS,
             control=controls(self.backup_import_btn, self.backup_export_btn)))
         self.cloud_backup_btn = PushButton(FIF.CLOUD, "云端备份")
@@ -519,7 +519,7 @@ class SettingsPage(FluentPage):
         self.cloud_backup_btn.clicked.connect(self._open_cloud_backup)
         row(backup_card, SettingRow(
             "云端备份",
-            desc="服务端只存密文，提取码就是解密口令",
+            desc="使用提取码口令从云端恢复您的配置",
             icon=FIF.CLOUD,
             control=controls(self.cloud_backup_btn)),
             last=True)
