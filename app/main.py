@@ -124,6 +124,23 @@ def _smoke_test() -> int:
 
         os._exit(1)
 
+    # 逐格查空格的 opencv 4.8.1 按 numpy 1.x ABI 编译；冻结包里若 numpy 被装成
+    # 2.x，import cv2 抛 `_ARRAY_API not found`（2026-11-20 Windows 故障）。
+    # 这一路径只有用户点「查空格」才走到，窗口能起不代表没坏——冒烟直接 import
+    # 并跑一次连通域，缺扩展或 ABI 不匹配在这里就红，不等用户报障。
+    try:
+        import cv2
+        import numpy as np
+
+        _smoke_img = np.zeros((32, 32), dtype=np.uint8)
+        cv2.connectedComponentsWithStats(_smoke_img, connectivity=8)
+    except Exception as exc:  # noqa: BLE001 - 冻结产物里缺什么都有可能
+        print(f"SMOKE FAIL: OpenCV/NumPy ABI 不可用：{exc}", flush=True)
+        _write_smoke_result(f"SMOKE FAIL: cv2/numpy ABI unavailable: {exc}")
+        import os
+
+        os._exit(1)
+
     w = MainWindow()
     w.show()
     app.processEvents()

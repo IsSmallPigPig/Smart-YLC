@@ -36,7 +36,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install "PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf "cryptography==41.0.7" "opencv-python-headless==4.8.1.78" qrcode
+          pip install "PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf "numpy<2" "cryptography==41.0.7" "opencv-python-headless==4.8.1.78" qrcode
           pip install pyobjc-framework-Cocoa pyobjc-framework-UserNotifications
 
       - name: 生成应用图标（icns）
@@ -141,7 +141,9 @@ jobs:
             bit: "64"
             python: "3.11"
             pyinstaller: "pyinstaller"
-            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11" "cryptography==41.0.7" "opencv-python-headless==4.8.1.78" qrcode'
+            # opencv 4.8.1 按 numpy 1.x ABI 编译；不钉 numpy 会装到 2.x，
+            # 冻结包 import cv2 抛 _ARRAY_API not found，查空格整批失效。
+            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11" "numpy<2" "cryptography==41.0.7" "opencv-python-headless==4.8.1.78" qrcode'
           - name: Windows10-x86
             os: Windows10
             bit: "32"
@@ -150,7 +152,8 @@ jobs:
             # 钉 1.24.11：新版 PyMuPDF 没有 win32 wheel，pip 会回退到 88MB 的 sdist
             # 现场编译 MuPDF，卡在 "Preparing metadata" 几十分钟。1.24.11 的
             # cp38-abi3 wheel 兼容 3.11，四个 Windows 变体与 Win7 组同版本。
-            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11" "cryptography==41.0.7" "opencv-python-headless==4.8.1.78" qrcode'
+            # numpy 同样要钉 <2：理由见上方 Windows10-x64。
+            deps: '"PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests "pymupdf==1.24.11" "numpy<2" "cryptography==41.0.7" "opencv-python-headless==4.8.1.78" qrcode'
           - name: Windows7-x64
             os: Windows7
             bit: "64"
@@ -353,7 +356,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install "PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf "cryptography==41.0.7" "opencv-python-headless==4.8.1.78" qrcode
+          pip install "PyQt5>=5.15" "PyQt-Fluent-Widgets>=1.11" "PyQtWebEngine>=5.15" pypdf pillow openpyxl requests pymupdf "numpy<2" "cryptography==41.0.7" "opencv-python-headless==4.8.1.78" qrcode
 
       - name: PyInstaller 打包（onedir）
         # 脚本在 Linux 上输出 dist/SmartYouth/，并把图标铺进 share/icons/hicolor
