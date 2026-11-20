@@ -1,6 +1,7 @@
 package com.smallylc.smartyouth.ui.screen.login
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -66,6 +68,7 @@ import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 fun LoginScreen(
     onBack: () -> Unit,
     onLoggedIn: () -> Unit,
+    onCloudSync: () -> Unit,
 ) {
     val existing = Repo.accounts.active
     var userName by remember { mutableStateOf(existing?.userName.orEmpty()) }
@@ -173,26 +176,29 @@ fun LoginScreen(
                         .fillMaxWidth()
                         .padding(top = 12.dp),
                 ) {
-                    TextField(
-                        value = userName,
-                        onValueChange = { userName = it },
-                        label = "账号",
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        singleLine = true,
-                    )
-                    TextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = "密码",
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
-                            imeAction = ImeAction.Done,
-                        ),
-                    )
+                    Column(Modifier.padding(12.dp)) {
+                        TextField(
+                            value = userName,
+                            onValueChange = { userName = it },
+                            label = "账号",
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                            singleLine = true,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        TextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = "密码",
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                                imeAction = ImeAction.Done,
+                            ),
+                        )
+                    }
                 }
             }
             if (error != null) {
@@ -210,7 +216,8 @@ fun LoginScreen(
                     onClick = { submit() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 16.dp),
+                        .padding(top = 16.dp)
+                        .height(48.dp),
                     enabled = !loading,
                     colors = ButtonDefaults.buttonColorsPrimary(),
                 ) {
@@ -220,7 +227,20 @@ fun LoginScreen(
             item {
                 MutedText(
                     text = "密码只保存在本机，不会上传到别处。",
-                    modifier = Modifier.padding(top = 12.dp, start = 4.dp),
+                    modifier = Modifier.padding(top = 16.dp, start = 4.dp),
+                )
+            }
+            item {
+                Text(
+                    text = "从云端同步配置",
+                    fontSize = 14.sp,
+                    color = colorScheme.primary,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 14.dp)
+                        .clickable(onClick = onCloudSync)
+                        .padding(vertical = 8.dp),
+                    textAlign = TextAlign.Center,
                 )
             }
             item { Spacer(Modifier.height(24.dp)) }

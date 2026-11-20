@@ -45,6 +45,7 @@ import com.smallylc.smartyouth.ui.navigation3.Navigator
 import com.smallylc.smartyouth.ui.navigation3.Route
 import com.smallylc.smartyouth.ui.navigation3.rememberNavigator
 import com.smallylc.smartyouth.ui.screen.about.AboutScreen
+import com.smallylc.smartyouth.ui.screen.cloud.CloudSyncScreen
 import com.smallylc.smartyouth.ui.screen.home.HomeScreen
 import com.smallylc.smartyouth.ui.screen.login.LoginScreen
 import com.smallylc.smartyouth.ui.screen.members.MembersScreen
@@ -153,6 +154,7 @@ class MainActivity : ComponentActivity() {
                                 LoginScreen(
                                     onBack = { navigator.pop() },
                                     onLoggedIn = { navigator.pop() },
+                                    onCloudSync = { navigator.push(Route.CloudSync) },
                                 )
                             }
                             entry<Route.Scan>(swipeDismiss = NavSwipeDirection.None) {
@@ -160,6 +162,9 @@ class MainActivity : ComponentActivity() {
                                     prefillName = ScanIntent.prefillName,
                                     onExit = { navigator.pop() },
                                 )
+                            }
+                            entry<Route.CloudSync>(swipeDismiss = NavSwipeDirection.LeftToRight) {
+                                CloudSyncScreen(onBack = { navigator.pop() })
                             }
                             entry<Route.Pair>(swipeDismiss = NavSwipeDirection.LeftToRight) {
                                 PairScreen(
