@@ -99,8 +99,12 @@ object ScanSession {
         page.file.outputStream().use { rotated.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         if (rotated !== bitmap) bitmap.recycle()
         rotated.recycle()
-        // 图像转了 90°，四角跟着转，裁切框仍贴在纸上
-        val rotatedQuad = DocDetect.Quad(page.quad.points.map { (x, y) -> (1f - y) to x })
+        // 图像转了 90°，四角跟着转。坐标变换后原左上跑到右上，
+        // 顺序要左移回 TL/TR/BR/BL，否则连线会自交成错误的四边形
+        val turned = page.quad.points.map { (x, y) -> (1f - y) to x }
+        val rotatedQuad = DocDetect.Quad(
+            listOf(turned[3], turned[0], turned[1], turned[2]),
+        )
         _pages.value = _pages.value.map {
             if (it.id == pageId) it.copy(quad = rotatedQuad, rotation = (it.rotation + 90) % 360) else it
         }

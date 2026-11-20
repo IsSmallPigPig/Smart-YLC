@@ -132,7 +132,10 @@ object DocDetect {
                 if (ratio <= 0.08 || ratio >= 0.72) continue
                 if (fill <= 0.68 || aspect <= 1.0 || aspect >= 3.2) continue
 
-                val score = fill - kotlin.math.abs(aspect - 1.6) * 0.06
+                // 面积权重高于形状：纸上被光照切出一块的形状更规整，
+                // 只按 fill 打分容易挑中局部小块而丢掉整张纸
+                val sizeScore = (ratio / 0.6).coerceAtMost(1.0)
+                val score = fill * 0.45 + sizeScore * 0.55 - kotlin.math.abs(aspect - 1.5) * 0.04
                 if (score <= bestScore) continue
 
                 val quad = quadFrom(largest, rect, small.width, small.height)

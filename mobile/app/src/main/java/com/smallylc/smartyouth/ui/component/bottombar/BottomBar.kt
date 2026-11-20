@@ -136,7 +136,7 @@ private val BarHeight = 64.dp
 private val DockMargin = 26.dp
 private val PillWidth = 64.dp
 
-private val PillHeight = 32.dp
+private val PillHeight = 28.dp
 private val ThumbHeight = 54.dp
 private val ThumbTop = 9.dp
 private val IconSize = 22.dp
@@ -144,7 +144,7 @@ private val IconSize = 22.dp
 private val LabelSize = 11.sp
 
 /** 单个 tab 的宽度：图标 22dp、两个汉字约 22dp，两侧各留 4dp。 */
-private val PillTop = 6.dp
+private val PillTop = 3.dp
 /** 选中块高度：盖住图标与文字，比整条矮一圈。 */
 private val ItemHeight = 58.dp
 /** 选中块圆角：背景半径 36dp 减去上下各 7dp 内缩，与背景同心。 */
