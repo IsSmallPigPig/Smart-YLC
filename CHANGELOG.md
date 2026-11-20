@@ -7,7 +7,7 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
-## v1.0.18
+## v1.1.0
 
 - [35a85ae] feat(update): 下载完弹常驻重启提示，由用户确认；按钮不再显示版本号
 - [1e89ece] fix(lint): 恢复被覆盖的 anti-slop 与手机端规则
