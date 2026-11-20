@@ -402,6 +402,77 @@ class MainWindow(MSFluentWindow):
         bar.show()
         return bar
 
+    # ---------- 更新就绪（等待用户确认重启） ----------
+
+    def show_update_ready(self, installer: str, version: str = ""):
+        """下载完成后的常驻提示：新版本已就绪，重启生效。
+
+        不自动安装、不自动退出——由用户点「重启」确认。消息条 duration<0
+        表示不自动消失，只有用户主动叉掉才收（关掉不影响已下载的更新包，
+        下次启动仍会提示）。
+        """
+        from PyQt5.QtCore import Qt
+        from qfluentwidgets import (
+            InfoBar,
+            InfoBarIcon,
+            InfoBarPosition,
+            TransparentPushButton,
+        )
+
+        old = getattr(self, "_update_bar", None)
+        if old is not None and old is not self:
+            try:
+                old.close()
+            except RuntimeError:
+                pass
+        bar = InfoBar(
+            icon=InfoBarIcon.INFORMATION,
+            title="",
+            content="新版本已就绪，重启生效",
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=-1,        # 常驻：除非用户主动关闭
+            parent=self,
+        )
+        btn = TransparentPushButton("重启", parent=bar)
+        btn.clicked.connect(
+            lambda: (bar.close(), self._restart_for_update(installer, version)))
+        bar.addWidget(btn)
+        bar.show()
+        self._update_bar = bar
+        return bar
+
+    def _restart_for_update(self, installer: str, version: str = ""):
+        """用户点「重启」：拉起静默安装并退出，装好后自动回到新版本。"""
+        from qfluentwidgets import InfoBar
+
+        from app.services import silent_update
+
+        try:
+            silent_update.save_pending_installer(installer, version)
+            if version:
+                silent_update.mark_pending(version)
+            silent_update.start(installer)
+        except Exception as e:  # noqa: BLE001 - 安装器缺失/被占用都要给出下一步
+            InfoBar.error("重启失败", f"{e}。可到「系统配置 - 关于项目」重试",
+                          duration=8000, parent=self)
+            return
+        self._quit_app()
+        # 兜底：后台同步/上传线程在跑时进程可能不退出，安装器会撞「文件被占用」
+        # 以退出码 5 中止。给一段硬退窗口，保证安装能接管。
+        QTimer.singleShot(2500, lambda: os._exit(0))
+
+    def notify_update_ready_if_pending(self) -> bool:
+        """启动时若上次已下载好更新包，重新给出常驻重启提示。"""
+        from app.services import silent_update
+
+        item = silent_update.pending_installer()
+        if not item:
+            return False
+        self.show_update_ready(item["path"], item.get("version", ""))
+        return True
+
     # ---------- 通知处理入口 ----------
 
     def handle_notice_action(self, action: str):

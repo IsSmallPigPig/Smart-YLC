@@ -267,6 +267,18 @@ def check_file(path: Path) -> list[str]:
                 f"{rel} [扫描工作目录] 扫描必须跳过工作目录（work_area.WORK_DIR_NAME），"
                 "否则压缩副本被当原件重复计数")
 
+    # 规则 19（2026-11-20）：下载完成不得自动安装退出。
+    # 安装要退出主程序，用户会在没确认时突然被关掉；改为常驻提示 + 重启按钮，
+    # 由用户点「重启」才走 silent_update.start。_on_downloaded 里自己安装就是回退。
+    if path.name == "about_card.py" and "def _on_downloaded" in source:
+        start = source.index("def _on_downloaded")
+        end = source.find("\n    def ", start + 1)
+        block = source[start:end if end != -1 else len(source)]
+        if "silent_update.start(" in block:
+            problems.append(
+                f"{rel} [下载即自动安装] _on_downloaded 不能直接调 silent_update.start，"
+                "下载完要弹常驻提示等用户点「重启」，否则程序会在用户没确认时自动退出")
+
     return problems
 
 

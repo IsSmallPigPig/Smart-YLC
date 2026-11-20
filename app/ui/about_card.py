@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-import os
-
 from PyQt5.QtCore import QUrl
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QWidget
@@ -179,14 +177,9 @@ class AboutCard(CollapsibleCard):
     # ------------------------------------------------------------ 检查更新
 
     def _on_action(self):
-        """一个按钮依次承担：检查更新 → 下载新版本 → 打开下载目录。"""
+        """一个按钮依次承担：检查更新 → 立即更新（下载）→ 待重启（重启确认）。"""
         if self._downloaded:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(self._downloaded)))
-            # 打开过目录就回到「检查更新」，别把按钮卡成只能开文件夹
-            self._downloaded = ""
-            self._info = None
-            self.check_btn.setText("检查更新")
-            self._refresh_status()
+            self._restart_update()
         elif self._info is not None:
             self._download()
         else:
@@ -215,7 +208,7 @@ class AboutCard(CollapsibleCard):
             self._close_toast(text=f"已是最新版本 {__version__}")
             return
         self._close_toast()
-        self.check_btn.setText(f"下载 {info.version}")
+        self.check_btn.setText("立即更新")
         self.update_row.set_desc(f"发现新版本 {info.version}，点右侧按钮下载（当前 {__version__}）")
 
     def _on_check_failed(self, message: str):
@@ -270,74 +263,29 @@ class AboutCard(CollapsibleCard):
         self._fallback = reason
 
     def _on_downloaded(self, path: str):
+        """下载完成：不自动安装退出，记下更新包并提示用户重启确认。"""
         self._downloaded = path
-        self.check_btn.setEnabled(False)
-        self.check_btn.setText("正在安装")
-        self.update_row.set_desc("更新包已下载，正在后台静默安装…")
-        self._pending_install = path
-
-        # 上传到一半退出会留下半截提交；等它结束再让出文件
-        worker = getattr(getattr(self.window(), "upload_page", None), "worker", None)
-        if worker is not None and getattr(worker, "isRunning", lambda: False)():
-            self._notice("info", "上传进行中",
-                         "上传完成后会自动安装更新，并通知你重启生效", 7000)
-            worker.finished.connect(self._begin_silent_install)
-            if not worker.isRunning():
-                self._begin_silent_install()
-            return
-        from PyQt5.QtCore import QTimer
-
-        QTimer.singleShot(400, self._begin_silent_install)
-
-    def _begin_silent_install(self):
-        """拉起独立安装进程，然后退出主程序；完成通知由那个进程发出。"""
-        path = getattr(self, "_pending_install", "")
-        if not path:
-            return
-        self._pending_install = ""
         version = getattr(self._info, "version", "") or ""
-        try:
-            if version:
-                silent_update.mark_pending(version)
-            silent_update.start(path)
-        except Exception as e:
-            self._close_toast()
-            self.check_btn.setEnabled(True)
-            self.check_btn.setText("打开目录")
-            self.update_row.set_desc(f"更新包已下载：{os.path.basename(path)}")
-            self._notice("error", "无法静默安装",
-                         f"{e}。可以点「打开目录」手动安装。", 10000)
-            return
+        silent_update.save_pending_installer(path, version)
+        self.check_btn.setEnabled(True)
+        self.check_btn.setText("待重启")
+        self.update_row.set_desc("更新包已下载，重启后生效")
+        self._close_toast(text="更新包已下载")
 
-        text = "正在后台静默安装，完成后会通知你重启应用"
-        if self._fallback:
-            text = "所选通道不可用，已自动换通道下载；" + text
-        self._close_toast(text=text, hold_ms=1200)
-        self._quit_for_install()
+        win = self.window()
+        show = getattr(win, "show_update_ready", None)
+        if callable(show):
+            show(path, version)
 
-    def _quit_for_install(self):
-        """安装要替换正在运行的程序：先让主程序彻底退出，再由安装器接管。
-
-        只调 QApplication.quit 不够——后台同步/上传线程还在跑时进程不会退出，
-        托盘图标也留在通知区，安装器随即撞上「文件被占用」以退出码 5 中止。
-        因此给一个兜底的硬退出：清理完托盘与浏览器窗口后，1.5 秒内进程必然结束。
-        """
-        import os
-
-        from PyQt5.QtCore import QTimer
-
-        quit_app = getattr(self.window(), "_quit_app", None)
-        if quit_app is None:
-            # 没有主窗口（测试桩、独立卡片）就没有「退出应用」这回事，
-            # 不动进程：硬退会连带打掉宿主的事件循环。
-            return
-        QTimer.singleShot(1200, quit_app)
-        # 兜底：退出后 1.5 秒进程必须结束，否则 exe 仍被占用，安装器又回到退出码 5
-        QTimer.singleShot(2700, lambda: os._exit(0))
+    def _restart_update(self):
+        """设置页里的「待重启」：与常驻消息上的「重启」同一动作。"""
+        restart = getattr(self.window(), "_restart_for_update", None)
+        if callable(restart):
+            restart(self._downloaded, getattr(self._info, "version", "") or "")
 
     def _on_download_failed(self, message: str):
         self.check_btn.setEnabled(True)
-        self.check_btn.setText(f"重新下载 {self._info.version}" if self._info else "检查更新")
+        self.check_btn.setText("重新下载" if self._info else "检查更新")
         # 失败也要收掉「正在下载」，否则浮层会一直停在下载中
         self._close_toast()
         self._notice("error", "下载失败", message, 10000)

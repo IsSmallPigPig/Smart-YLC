@@ -1339,8 +1339,8 @@ def _instant_card_timers(monkeypatch, card_holder):
     monkeypatch.setattr(QTimer, "singleShot", _single)
 
 
-def test_download_starts_silent_install(app, isolated_store, tmp_path, monkeypatch):
-    """下载完就交给独立进程静默安装，不再弹出安装窗口。"""
+def test_download_ready_waits_for_user_restart(app, isolated_store, tmp_path, monkeypatch):
+    """下载完不自动安装：记下更新包、按钮变「待重启」，等用户确认。"""
     from PyQt5.QtWidgets import QVBoxLayout
 
     from app.services import silent_update
@@ -1348,14 +1348,11 @@ def test_download_starts_silent_install(app, isolated_store, tmp_path, monkeypat
 
     calls = []
     monkeypatch.setattr(silent_update, "start", lambda path: calls.append(path) or True)
-    holder = {}
-    _instant_card_timers(monkeypatch, holder)
 
     host = QWidget()
     host.resize(900, 600)
     lay = QVBoxLayout(host)
     card = AboutCard()
-    holder["card"] = card
     lay.addWidget(card)
     host.show()
     _pump(app, 50)
@@ -1365,43 +1362,83 @@ def test_download_starts_silent_install(app, isolated_store, tmp_path, monkeypat
     card._open_toast("下载更新").set_progress(100, 100, "正在下载更新包 100%")
     card._on_downloaded(str(pkg))
 
-    assert calls == [str(pkg)]
+    assert calls == []                       # 没有自动安装
     assert card._toast is None
-    assert card.check_btn.text() == "正在安装"
+    assert card.check_btn.text() == "待重启"
+    pending = silent_update.pending_installer()
+    assert pending["path"] == str(pkg)
 
 
-def test_silent_install_failure_keeps_downloaded_package(app, isolated_store, tmp_path, monkeypatch):
-    """助手拉不起来时保留更新包，并让按钮回到「打开目录」手动安装。"""
+def test_restart_after_download_installs_and_quits(app, isolated_store, tmp_path, monkeypatch):
+    """点「待重启」后才拉起安装；没点之前不装。"""
     from PyQt5.QtWidgets import QVBoxLayout
 
     from app.services import silent_update
     from app.ui.about_card import AboutCard
 
-    def _boom(path):
-        raise silent_update.SilentInstallError("没有权限打开")
+    calls = []
 
-    monkeypatch.setattr(silent_update, "start", _boom)
-    holder = {}
-    _instant_card_timers(monkeypatch, holder)
+    class _Host(QWidget):
+        def _restart_for_update(self, installer, version=""):
+            silent_update.save_pending_installer(installer, version)
+            calls.append(installer)
+            silent_update.start(installer)
 
-    host = QWidget()
+    monkeypatch.setattr(silent_update, "start", lambda path: True)
+
+    host = _Host()
     host.resize(900, 600)
     lay = QVBoxLayout(host)
     card = AboutCard()
-    holder["card"] = card
     lay.addWidget(card)
     host.show()
     _pump(app, 50)
 
     pkg = tmp_path / "SmartYouth-Windows-x64-setup.exe"
     pkg.write_bytes(b"x")
-    card._open_toast("下载更新").set_progress(100, 100, "正在下载更新包 100%")
     card._on_downloaded(str(pkg))
+    assert calls == []              # 下载完不动手
 
-    assert card._toast is None
-    assert card._downloaded == str(pkg)
-    assert card.check_btn.isEnabled()
-    assert card.check_btn.text() == "打开目录"
+    card._restart_update()          # 「待重启」→ 请求重启
+    assert calls == [str(pkg)]
+    assert silent_update.pending_installer()["path"] == str(pkg)
+
+
+def test_pending_installer_roundtrip(isolated_store, tmp_path):
+    """待安装包跨会话保存；文件没了就清掉记录。"""
+    from app.services import silent_update
+
+    pkg = tmp_path / "update.exe"
+    pkg.write_bytes(b"x")
+    assert silent_update.pending_installer() == {}
+
+    silent_update.save_pending_installer(str(pkg), "9.9.9")
+    item = silent_update.pending_installer()
+    assert item["path"] == str(pkg) and item["version"] == "9.9.9"
+
+    pkg.unlink()
+    assert silent_update.pending_installer() == {}      # 文件不在，记录自动清掉
+
+
+def test_update_ready_bar_persists_with_restart_button(app):
+    """就绪提示常驻不自动消失，右侧带「重启」按钮。"""
+    from PyQt5.QtWidgets import QVBoxLayout
+    from qfluentwidgets import TransparentPushButton
+
+    from app.ui.main_window import MainWindow
+
+    host = QWidget()
+    host.resize(600, 400)
+    QVBoxLayout(host)
+    host.show()
+    _pump(app, 30)
+
+    MainWindow.show_update_ready(host, "/tmp/update.exe", "9.9.9")
+    bar = host._update_bar
+    assert "新版本已就绪，重启生效" in bar.content
+    assert bar.duration < 0                 # 负数=永不自动消失
+    btn = bar.findChild(TransparentPushButton)
+    assert btn is not None and btn.text() == "重启"
 
 
 def test_update_check_latest_finishes_progress(app, isolated_store):
@@ -1441,7 +1478,8 @@ def test_update_found_moves_action_into_row(app, isolated_store):
     card._open_toast("检查更新").set_indeterminate()
     card._on_checked(type("Info", (), {"version": "9.9.9"})())
     assert card._toast is None
-    assert card.check_btn.text() == "下载 9.9.9"
+    # 按钮不显示版本号，固定「立即更新」；版本号只留在行说明里
+    assert card.check_btn.text() == "立即更新"
     assert "9.9.9" in card.update_row.desc_label.text()
 
 
