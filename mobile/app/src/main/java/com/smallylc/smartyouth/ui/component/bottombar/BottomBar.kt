@@ -5,6 +5,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -126,13 +128,15 @@ enum class MainDestination(val label: String, val icon: ImageVector) {
 
 // 悬浮胶囊几何：与 Classy 的 dock 一致，留出左右呼吸和手势条间距。
 private val DockHeight = 72.dp
-private val DockMargin = 16.dp
-/** 胶囊宽度占屏幕的比例：只占中间一半，两侧留空。 */
-private const val DockWidthFraction = 0.72f
+private val DockMargin = 26.dp
 private val DockBottomFloat = 22.dp
-private val ThumbHeight = 60.dp
-private val ThumbTop = 6.dp
+/** 胶囊宽度占屏幕比例：比卡片窄一圈，图标不贴边。 */
+private const val DockWidthFraction = 0.80f
+private val ThumbHeight = 44.dp
+private val ThumbTop = 14.dp
 private val IconSize = 22.dp
+/** 单个 tab 的固定宽度：整组居中，图标之间不被整条宽度拉开。 */
+private val ItemWidth = 56.dp
 private val LabelSize = 11.sp
 
 /**
@@ -185,11 +189,7 @@ fun BottomBar(
                 .shadow(elevation = 14.dp, shape = dockShape, clip = false)
                 .clip(dockShape)
                 .background(colors.surfaceContainer.copy(alpha = 0.94f))
-                .onGloballyPositioned {
-                    barX = it.positionInRoot().x
-                    val gap = with(density) { 12.dp.toPx() }
-                    thumbWidthPx = it.size.width / items.size.toFloat() - gap
-                },
+                .onGloballyPositioned { barX = it.positionInRoot().x },
         ) {
             if (thumbWidthPx > 0f) {
                 Box(
@@ -198,11 +198,14 @@ fun BottomBar(
                         .offset { IntOffset(thumbX.value.roundToInt(), 0) }
                         .width(thumbWidth)
                         .height(ThumbHeight)
-                        .clip(RoundedCornerShape(percent = 50))
+                        .clip(RoundedCornerShape(20.dp))
                         .background(colors.onSurface.copy(alpha = 0.09f)),
                 )
             }
-            Row(Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.Center,
+            ) {
                 items.forEachIndexed { index, destination ->
                     val center = centers.getOrElse(index) { 0f } - barX
                     val half = with(density) { IconSize.toPx() } / 2f
@@ -224,14 +227,19 @@ fun BottomBar(
                     val interaction = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxSize()
+                            .width(ItemWidth)
+                            .fillMaxHeight()
                             .clickable(
                                 interactionSource = interaction,
                                 indication = null,
                             ) { mainState.animateToPage(index) }
                             .onGloballyPositioned {
                                 centers[index] = it.positionInRoot().x + it.size.width / 2f
+                                if (index == 0) {
+                                    // 选中块比图标宽一圈：椭圆两端是弧、中间留一段直线，
+                                    // 与图标等宽时会缩成小圆角方块
+                                    thumbWidthPx = it.size.width + with(density) { 18.dp.toPx() }
+                                }
                             },
                         contentAlignment = Alignment.Center,
                     ) {

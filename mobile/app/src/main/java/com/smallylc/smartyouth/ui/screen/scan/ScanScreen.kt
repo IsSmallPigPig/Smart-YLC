@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
@@ -63,6 +64,7 @@ import com.smallylc.smartyouth.scan.DocStore
 import com.smallylc.smartyouth.scan.DocDetect
 import com.smallylc.smartyouth.scan.Naming
 import com.smallylc.smartyouth.scan.ScanPage
+import com.smallylc.smartyouth.scan.LiveScanner
 import com.smallylc.smartyouth.scan.ScanSession
 import com.smallylc.smartyouth.ui.component.CardGap
 import com.smallylc.smartyouth.ui.component.EmptyHint
@@ -240,7 +242,13 @@ private fun CaptureStep(
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        CameraCapture(Modifier.fillMaxSize(), onReady = onCameraReady)
+        LaunchedEffect(Unit) { LiveScanner.setFilter(currentFilter()) }
+        DisposableEffect(Unit) { onDispose { LiveScanner.reset() } }
+        CameraCapture(
+            modifier = Modifier.fillMaxSize(),
+            onReady = onCameraReady,
+            onFrame = LiveScanner::onFrame,
+        )
 
         Box(
             modifier = Modifier
@@ -286,14 +294,40 @@ private fun CaptureStep(
             }
         }
 
-        // 取景框：贴着画面画出纸张大致范围，提示对齐
+        // 取景框：识别到纸张时，框内直接显示校正后的平铺效果
+        val liveFlat by LiveScanner.flat.collectAsState()
+        val liveQuad by LiveScanner.quad.collectAsState()
+        val locked = liveQuad != null
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.86f)
                 .aspectRatio(0.72f)
                 .align(Alignment.Center)
-                .border(1.dp, Color.White.copy(alpha = 0.55f), RoundedCornerShape(8.dp)),
-        )
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.Black.copy(alpha = 0.45f))
+                .border(
+                    width = if (locked) 2.dp else 1.dp,
+                    color = if (locked) Color(0xFF7FE3A6) else Color.White.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(14.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            val frame = liveFlat
+            if (frame != null) {
+                Image(
+                    bitmap = frame.asImageBitmap(),
+                    contentDescription = "校正后的预览",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().padding(5.dp),
+                )
+            } else {
+                Text(
+                    text = "把纸放进框内",
+                    color = Color.White.copy(alpha = 0.75f),
+                    fontSize = 13.sp,
+                )
+            }
+        }
 
         Box(
             modifier = Modifier

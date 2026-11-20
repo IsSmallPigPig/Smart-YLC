@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -91,20 +92,29 @@ fun HomeScreen(
     Scaffold(
         topBar = {
             BlurredBar(backdrop) {
-                TopAppBar(
-                    title = "",
-                    color = barColor,
-                    scrollBehavior = scrollBehavior,
-                    actions = {
-                        IconButton(onClick = onSync, enabled = loggedIn && !syncing) {
-                            Icon(
-                                imageVector = MiuixIcons.Refresh,
-                                contentDescription = "同步名单",
-                                tint = colorScheme.onBackground,
-                            )
-                        }
-                    },
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .height(52.dp)
+                        .padding(start = 16.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "智慧团委",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colorScheme.onBackground,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = onSync, enabled = loggedIn && !syncing) {
+                        Icon(
+                            imageVector = MiuixIcons.Refresh,
+                            contentDescription = "同步名单",
+                            tint = colorScheme.onBackground,
+                        )
+                    }
+                }
             }
         },
         popupHost = { },
@@ -117,19 +127,12 @@ fun HomeScreen(
                 .scrollEndHaptic()
                 .overScrollVertical()
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
-                .padding(horizontal = 16.dp),
+                .statusBarsPadding()
+                .padding(horizontal = 26.dp),
             contentPadding = innerPadding,
             overscrollEffect = null,
         ) {
-            item {
-                Text(
-                    text = "智慧团委",
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colorScheme.onBackground,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 14.dp),
-                )
-            }
+            item { Spacer(Modifier.height(8.dp)) }
 
             item { StatusHero(loggedIn = loggedIn, userName = userName, siteDown = siteDown) }
 

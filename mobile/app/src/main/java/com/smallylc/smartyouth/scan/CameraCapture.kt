@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
@@ -27,6 +28,7 @@ import androidx.core.content.ContextCompat
 import com.smallylc.smartyouth.app
 import java.io.File
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 /**
  * 取景与拍摄。相机实例跟着页面生命周期绑，离开扫描页就解绑，
@@ -36,6 +38,8 @@ import java.util.concurrent.Executor
 fun CameraCapture(
     modifier: Modifier = Modifier,
     onReady: (CameraHandle) -> Unit = {},
+    /** 逐帧回调，运行在分析线程；回调方负责回收传进来的 Bitmap。 */
+    onFrame: ((android.graphics.Bitmap) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -53,12 +57,17 @@ fun CameraCapture(
         }
     }
     val executor: Executor = remember { ContextCompat.getMainExecutor(context) }
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var lensFacing by remember { mutableStateOf(CameraSelector.LENS_FACING_BACK) }
 
     LaunchedEffect(Unit) {
         if (!granted) launcher.launch(Manifest.permission.CAMERA)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { analysisExecutor.shutdown() }
     }
 
     DisposableEffect(granted, lensFacing, lifecycleOwner) {
@@ -72,13 +81,34 @@ fun CameraCapture(
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .build()
             imageCapture = capture
+            val analysis = onFrame?.let { sink ->
+                ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                    .build()
+                    .also { useCase ->
+                        useCase.setAnalyzer(analysisExecutor) { proxy ->
+                            try {
+                                sink(proxy.toBitmap())
+                            } catch (_: Throwable) {
+                                // 单帧失败不影响取景
+                            } finally {
+                                proxy.close()
+                            }
+                        }
+                    }
+            }
             runCatching {
                 cameraProvider.unbindAll()
+                val cases = buildList {
+                    add(preview)
+                    add(capture)
+                    analysis?.let { add(it) }
+                }
                 cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     CameraSelector.Builder().requireLensFacing(lensFacing).build(),
-                    preview,
-                    capture,
+                    *cases.toTypedArray(),
                 )
             }
         }, executor)
