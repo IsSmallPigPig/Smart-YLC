@@ -707,14 +707,16 @@ def test_install_failure_notifies_manual_step(monkeypatch):
     assert "手动安装" in notices[0][1]
 
 
-def test_startup_check_downloads_and_installs_silently(tmp_path, monkeypatch):
-    """后台发现新版本后直接下载并拉起静默安装，不弹版本提示。"""
+def test_startup_check_downloads_and_waits_for_restart(tmp_path, monkeypatch):
+    """后台发现新版本后下载，但不自动安装：留给用户确认重启。"""
     from PyQt5.QtCore import QCoreApplication, QTimer
 
     from app.services import silent_update
 
     QCoreApplication.instance() or QCoreApplication([])
     monkeypatch.setattr(store, "CONFIG_FILE", str(tmp_path / "config.json"))
+    pkg = tmp_path / "SmartYouth-setup.exe"
+    pkg.write_bytes(b"x")
 
     class FakeCheckWorker:
         def __init__(self):
@@ -730,7 +732,7 @@ def test_startup_check_downloads_and_installs_silently(tmp_path, monkeypatch):
                 _Signal(), _Signal(), _Signal(), _Signal())
 
         def start(self):
-            self.done.emit("/tmp/SmartYouth-setup.exe")
+            self.done.emit(str(pkg))
             self.finished.emit()
 
     started = []
@@ -741,8 +743,9 @@ def test_startup_check_downloads_and_installs_silently(tmp_path, monkeypatch):
 
     update_check.check_on_startup(delay_ms=0)
 
-    assert started == ["/tmp/SmartYouth-setup.exe"]
-    assert "正在静默安装" in update_check.last_check_text()
+    assert started == []             # 不自动安装
+    assert silent_update.pending_installer()["path"] == str(pkg)
+    assert "等待重启" in update_check.last_check_text()
 
 
 @pytest.mark.parametrize("is64,win7,expected", [

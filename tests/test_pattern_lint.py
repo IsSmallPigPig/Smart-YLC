@@ -153,6 +153,17 @@ def test_scan_skips_work_dir():
     assert any("扫描工作目录" in x for x in check(bad, "archive_scan.py"))
 
 
+def test_download_must_not_auto_install():
+    """规则 19：下载完成不能自动安装退出，等用户确认重启。"""
+    p = ROOT / "app" / "ui" / "about_card.py"
+    assert not any("下载即自动安装" in x for x in lint_patterns.check_file(p))
+
+    bad = ('def _on_downloaded(self, path):\n'
+           '    silent_update.start(path)\n'
+           '    self._quit_app()\n')
+    assert any("下载即自动安装" in x for x in check(bad, "about_card.py"))
+
+
 def test_build_collect_all_enforced():
     p = ROOT / "scripts" / "build.py"
     problems = lint_patterns.check_file(p)
