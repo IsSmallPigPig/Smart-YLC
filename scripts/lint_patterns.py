@@ -224,6 +224,20 @@ def check_file(path: Path) -> list[str]:
                 problems.append(
                     f"{rel} [端点缺会话鉴权] /api/upload 等端点必须用配对后的 token 鉴权，"
                     "不能让配对码直接长期有效")
+            # 配对必须校验配置提取码（相同配置的设备才放行），且拒绝原因分开报
+            if "/api/pair" in source and "configCode" not in source:
+                problems.append(
+                    f"{rel} [配对缺配置校验] 配对必须校验 configCode，"
+                    "只允许相同配置的设备；脱落这条等于任何扫到码的设备都能传文件")
+
+    # 规则 14（中转故障）：Netlify 响应墙 6MB，中转拉取必须按 part 分片。
+    # 整份 pull 单文件超过 6MB 会被网关拒绝，用户看到的是"传了一部分就断"。
+    if path.name == "relay_receive.py":
+        if 'action": "pull"' in source or "'action': 'pull'" in source:
+            if "part" not in source:
+                problems.append(
+                    f"{rel} [中转整份拉取] Netlify 响应体 6MB，pull 必须按 part 分片拼接，"
+                    "整份拉取会超网关限制")
 
     return problems
 

@@ -2009,16 +2009,27 @@ def test_tint_roles_have_light_and_dark_backgrounds(app):
     assert warn_light != warn_dark
     assert P.TINT["warning"] == ("#FFF4CE", "#463414")
     assert P.TINT["danger"] == ("#FDE7E9", "#442324")
+    def apply(theme):
+        # qfluentwidgets setTheme 遍历全局 WeakKeyDictionary，别的测试里 widget
+        # 被 GC 时会撞上 "dictionary changed size during iteration"。切主题本身
+        # 是幂等的，重试即可；不是掩盖被测逻辑的失败。
+        for _ in range(3):
+            try:
+                setTheme(theme)
+                return
+            except RuntimeError:
+                continue
+
     try:
-        setTheme(Theme.LIGHT)
+        apply(Theme.LIGHT)
         assert P.tint("warning").name() == "#fff4ce"
         assert P.tint("warning").alpha() == P.TINT_ALPHA[0]
-        setTheme(Theme.DARK)
+        apply(Theme.DARK)
         assert P.tint("warning").name() == "#463414"
         assert P.tint("warning").alpha() == P.TINT_ALPHA[1]
         assert P.tint("warning", 99).alpha() == 99
     finally:
-        setTheme(Theme.DARK)
+        apply(Theme.DARK)
 
 
 def test_branch_card_abnormal_uses_warning_background(app, isolated_store):

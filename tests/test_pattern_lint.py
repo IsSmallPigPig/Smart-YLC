@@ -77,6 +77,26 @@ def test_api_endpoints_require_session_auth():
     assert any("端点缺会话鉴权" in x for x in check(bad, "lan_share.py"))
 
 
+def test_pair_must_check_config_code():
+    """配对必须校验 configCode，只允许相同配置的设备。"""
+    p = ROOT / "app" / "services" / "lan_share.py"
+    assert not any("配对缺配置校验" in x for x in lint_patterns.check_file(p))
+
+    bad = ('if path == "/api/pair":\n    pair(pin)\n'
+           'if path == "/api/upload":\n    session(token)\n')
+    assert any("配对缺配置校验" in x for x in check(bad, "lan_share.py"))
+
+
+def test_relay_pull_must_be_chunked():
+    """中转拉取必须分片，整份拉取会撞 Netlify 6MB 响应墙。"""
+    p = ROOT / "app" / "services" / "relay_receive.py"
+    assert not any("中转整份拉取" in x for x in lint_patterns.check_file(p))
+
+    bad = ('params={"action": "pull", "file": fid}\n'
+           'return resp.content\n')
+    assert any("中转整份拉取" in x for x in check(bad, "relay_receive.py"))
+
+
 def test_build_collect_all_enforced():
     p = ROOT / "scripts" / "build.py"
     problems = lint_patterns.check_file(p)
