@@ -7,6 +7,12 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.0.17
+
+- [9cf955b] fix(build): 钉 numpy<2 修 Windows 查空格 _ARRAY_API not found；冒烟加 cv2 ABI 自检
+
+@AnkoQAQ
+
 ## v1.0.16
 
 - [f35d7cd] feat(relay): 中转兜底收发；配对校验相同配置；界面自动降级
