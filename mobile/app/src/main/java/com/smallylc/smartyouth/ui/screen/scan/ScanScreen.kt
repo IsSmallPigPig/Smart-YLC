@@ -1,5 +1,6 @@
 package com.smallylc.smartyouth.ui.screen.scan
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -149,6 +150,8 @@ fun ScanScreen(
             ScanStep.Save -> step = ScanStep.Review
         }
     }
+
+    BackHandler(enabled = true) { goBack() }
 
     when (step) {
         ScanStep.Capture -> CaptureStep(

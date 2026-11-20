@@ -61,10 +61,10 @@ fun CropEditor(
     onChangeFilter: (DocDetect.Filter) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var bitmap by remember(page.id) { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember(page.id, page.rotation) { mutableStateOf<Bitmap?>(null) }
     var canvasSize by remember { mutableStateOf(Size.Zero) }
     var dragIndex by remember { mutableStateOf(-1) }
-    var preview by remember(page.id) { mutableStateOf<Bitmap?>(null) }
+    var preview by remember(page.id, page.rotation) { mutableStateOf<Bitmap?>(null) }
 
     LaunchedEffect(page.id) {
         bitmap = withContext(Dispatchers.IO) {

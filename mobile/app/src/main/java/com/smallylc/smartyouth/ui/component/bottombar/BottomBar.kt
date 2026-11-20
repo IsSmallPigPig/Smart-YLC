@@ -132,11 +132,11 @@ enum class MainDestination(val label: String, val icon: ImageVector) {
 }
 
 // 悬浮胶囊几何：与 Classy 的 dock 一致，留出左右呼吸和手势条间距。
-private val DockHeight = 72.dp
+private val BarHeight = 64.dp
 private val DockMargin = 26.dp
-private val DockBottomFloat = 22.dp
+private val PillWidth = 56.dp
 
-private val DockPadding = 8.dp
+private val PillHeight = 30.dp
 private val ThumbHeight = 54.dp
 private val ThumbTop = 9.dp
 private val IconSize = 22.dp
@@ -144,7 +144,7 @@ private val IconSize = 22.dp
 private val LabelSize = 11.sp
 
 /** 单个 tab 的宽度：图标 22dp、两个汉字约 22dp，两侧各留 4dp。 */
-private val ItemWidth = 72.dp
+private val PillTop = 8.dp
 /** 选中块高度：盖住图标与文字，比整条矮一圈。 */
 private val ItemHeight = 58.dp
 /** 选中块圆角：背景半径 36dp 减去上下各 7dp 内缩，与背景同心。 */
@@ -162,17 +162,13 @@ fun BottomBar(
     modifier: Modifier = Modifier,
 ) {
     val colors = MiuixTheme.colorScheme
-    val density = LocalDensity.current
     val items = MainDestination.entries
-    val dockShape = RoundedCornerShape(percent = 50)
 
     val thumbX = remember { Animatable(0f) }
     var itemWidthPx by remember { mutableFloatStateOf(0f) }
     var barX by remember { mutableFloatStateOf(0f) }
     val centers = remember { mutableStateListOf(*Array(items.size) { 0f }) }
-    // 弹簧曲线：起步快、末端缓出，选中块从旧位置滑到新位置
-    val springSpec = spring<Float>(dampingRatio = 0.82f, stiffness = 300f)
-    val thumbWidth = with(density) { itemWidthPx.toDp() }
+    val springSpec = spring<Float>(dampingRatio = 0.8f, stiffness = 320f)
 
     LaunchedEffect(centers.toList(), mainState.selectedPage, itemWidthPx) {
         val index = mainState.selectedPage.coerceIn(0, items.lastIndex)
@@ -183,46 +179,39 @@ fun BottomBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(bottom = DockBottomFloat),
-        contentAlignment = Alignment.BottomCenter,
+            .background(colors.surfaceContainer)
+            .navigationBarsPadding(),
     ) {
         Box(
             modifier = Modifier
-                .shadow(elevation = 12.dp, shape = dockShape, clip = false)
-                .clip(dockShape)
-                .background(colors.surfaceContainer.copy(alpha = 0.96f))
-                .height(DockHeight)
-                .padding(horizontal = DockPadding)
+                .fillMaxWidth()
+                .height(BarHeight)
                 .onGloballyPositioned { barX = it.positionInRoot().x },
         ) {
+            // 选中指示：图标后面一枚滑动的胶囊
             if (itemWidthPx > 0f) {
                 Box(
                     modifier = Modifier
-                        .padding(top = (DockHeight - ItemHeight) / 2)
+                        .padding(top = PillTop)
                         .offset { IntOffset(thumbX.value.roundToInt(), 0) }
-                        .width(thumbWidth)
-                        .height(ItemHeight)
-                        .clip(RoundedCornerShape(ItemCorner))
-                        .background(colors.primary),
+                        .width(PillWidth)
+                        .height(PillHeight)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(colors.primary.copy(alpha = 0.16f)),
                 )
             }
-            Row(
-                modifier = Modifier.fillMaxSize(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Row(modifier = Modifier.fillMaxSize()) {
                 items.forEachIndexed { index, destination ->
                     val selected = mainState.selectedPage == index
                     val fg by animateColorAsState(
-                        targetValue = if (selected) colors.onPrimary else colors.onSurfaceVariantActions,
-                        animationSpec = tween(220),
+                        targetValue = if (selected) colors.primary else colors.onSurfaceVariantActions,
+                        animationSpec = tween(200),
                         label = "tabFg",
                     )
                     val interaction = remember { MutableInteractionSource() }
                     Box(
                         modifier = Modifier
-                            .width(ItemWidth)
+                            .weight(1f)
                             .fillMaxHeight()
                             .clickable(
                                 interactionSource = interaction,
@@ -234,12 +223,8 @@ fun BottomBar(
                             },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Column(
-                            modifier = Modifier.height(ItemHeight),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                        ) {
-                            Box {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = destination.icon,
                                     contentDescription = destination.label,
@@ -250,7 +235,7 @@ fun BottomBar(
                                     Box(
                                         modifier = Modifier
                                             .align(Alignment.TopEnd)
-                                            .offset(x = 6.dp, y = (-4).dp),
+                                            .offset(x = 8.dp, y = (-4).dp),
                                     ) {
                                         Badge {
                                             Text(if (unreadCount > 99) "99+" else unreadCount.toString())
