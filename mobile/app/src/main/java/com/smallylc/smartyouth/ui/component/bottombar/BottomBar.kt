@@ -132,17 +132,20 @@ enum class MainDestination(val label: String, val icon: ImageVector) {
 private val DockHeight = 72.dp
 private val DockMargin = 26.dp
 private val DockBottomFloat = 22.dp
-/** 胶囊宽度占屏幕比例：比卡片窄一圈，图标不贴边。 */
-private const val DockWidthFraction = 0.66f
+
+private val DockPadding = 8.dp
 private val ThumbHeight = 54.dp
 private val ThumbTop = 9.dp
 private val IconSize = 22.dp
 /** 单个 tab 的固定宽度：整组居中，图标之间不被整条宽度拉开。 */
-private val ItemWidth = 56.dp
 private val LabelSize = 11.sp
 
-/** 选中态的实心圆直径：图标嵌在圆里，文字压在圆下方。 */
-private val IconBubble = 38.dp
+/** 单个 tab 的宽度：图标 22dp、两个汉字约 22dp，两侧各留 4dp。 */
+private val ItemWidth = 52.dp
+/** 选中块高度：盖住图标与文字，比整条矮一圈。 */
+private val ItemHeight = 58.dp
+/** 选中块圆角：宽度大于两倍圆角，两侧是弧、中间留一段直线。 */
+private val ItemCorner = 18.dp
 
 /**
  * 悬浮胶囊底栏（对齐 KernelSU）：
@@ -166,19 +169,15 @@ fun BottomBar(
             .padding(bottom = DockBottomFloat),
         contentAlignment = Alignment.BottomCenter,
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .fillMaxWidth(DockWidthFraction)
-                .height(DockHeight)
                 .shadow(elevation = 12.dp, shape = dockShape, clip = false)
                 .clip(dockShape)
-                .background(colors.surfaceContainer.copy(alpha = 0.96f)),
+                .background(colors.surfaceContainer.copy(alpha = 0.96f))
+                .height(DockHeight)
+                .padding(horizontal = DockPadding),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.fillMaxSize(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
                 items.forEachIndexed { index, destination ->
                     val selected = mainState.selectedPage == index
                     val interaction = remember { MutableInteractionSource() }
@@ -192,14 +191,16 @@ fun BottomBar(
                             ) { mainState.animateToPage(index) },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Box(
-                                modifier = Modifier
-                                    .size(IconBubble)
-                                    .clip(CircleShape)
-                                    .background(if (selected) colors.primary else Color.Transparent),
-                                contentAlignment = Alignment.Center,
-                            ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(ItemHeight)
+                                .clip(RoundedCornerShape(ItemCorner))
+                                .background(if (selected) colors.primary else Color.Transparent),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Box {
                                 Icon(
                                     imageVector = destination.icon,
                                     contentDescription = destination.label,
@@ -222,13 +223,12 @@ fun BottomBar(
                                 text = destination.label,
                                 fontSize = LabelSize,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (selected) colors.primary else colors.onSurfaceVariantActions,
-                                modifier = Modifier.padding(top = 3.dp),
+                                color = if (selected) colors.onPrimary else colors.onSurfaceVariantActions,
+                                modifier = Modifier.padding(top = 2.dp),
                             )
                         }
                     }
                 }
             }
-        }
     }
 }
