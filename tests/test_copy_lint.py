@@ -90,3 +90,84 @@ def test_overlong_note(tmp_path):
 def test_current_copy_is_clean():
     """当前代码库必须零问题，这条是防止规则变成摆设。"""
     assert lint_copy.run(quiet=True) == []
+
+
+# —— anti-slop：手机端 Kotlin ——
+
+def _check_kotlin(tmp_path, source: str) -> list[str]:
+    path = tmp_path / "Sample.kt"
+    path.write_text(textwrap.dedent(source), encoding="utf-8")
+    return lint_copy.check_kotlin(path)
+
+
+def test_kotlin_middot_is_not_a_separator(tmp_path):
+    problems = _check_kotlin(tmp_path, '''
+        @Composable
+        fun Card1() {
+            Text("33 KB · 11月18日")
+        }
+    ''')
+    assert any("中点分隔符" in p for p in problems), problems
+
+
+def test_kotlin_note_must_not_teach_operations(tmp_path):
+    problems = _check_kotlin(tmp_path, '''
+        @Composable
+        fun Card1() {
+            MutedText("先点击右上角，然后选择导入即可")
+        }
+    ''')
+    assert any("操作教学" in p for p in problems), problems
+
+
+def test_kotlin_button_over_four_chars(tmp_path):
+    problems = _check_kotlin(tmp_path, '''
+        @Composable
+        fun Bar() {
+            TextButton(text = "查看全部扫描档案", onClick = {})
+        }
+    ''')
+    assert any("按钮过长" in p for p in problems), problems
+
+
+def test_kotlin_two_text_buttons_in_card(tmp_path):
+    problems = _check_kotlin(tmp_path, '''
+        @Composable
+        fun Card1() {
+            Card {
+                Row {
+                    TextButton(text = "查看", onClick = {})
+                    TextButton(text = "分享", onClick = {})
+                }
+            }
+        }
+    ''')
+    assert any("按钮堆叠" in p for p in problems), problems
+
+
+def test_kotlin_dialog_actions_are_allowed(tmp_path):
+    problems = _check_kotlin(tmp_path, '''
+        @Composable
+        fun Dialog1() {
+            OverlayDialog(show = true) {
+                Row {
+                    TextButton(text = "取消", onClick = {})
+                    TextButton(text = "删除", onClick = {})
+                }
+            }
+        }
+    ''')
+    assert not any("按钮堆叠" in p for p in problems), problems
+
+
+def test_python_note_must_not_teach_operations(tmp_path):
+    problems = _check_source(tmp_path, '''
+        from app.ui.page import note_label
+        def build(self):
+            note_label("点击右上角即可导入")
+    ''')
+    assert any("操作教学" in p for p in problems), problems
+
+
+def test_current_copy_is_clean():
+    assert lint_copy.run(quiet=True) == []

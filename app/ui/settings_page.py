@@ -834,7 +834,7 @@ class SettingsPage(FluentPage):
             on_click=getattr(window, "_restore_from_tray", None),
         )
         if ok:
-            InfoBar.success("已发出测试提醒", "点一下那条提醒，应当回到主界面",
+            InfoBar.success("已发出测试提醒", "通知中心里会出现一条测试提醒",
                             duration=4000, parent=self)
         else:
             hint = getattr(window, "_hint_notification_channel", None)
@@ -1829,7 +1829,7 @@ class SettingsPage(FluentPage):
         打开前先走登录接口拿到会话，再把 Cookie 注入对应标签页。
         """
         if not self.accounts:
-            InfoBar.warning("没有账号", "请先添加团支部账号", duration=2500, parent=self)
+            InfoBar.warning("没有账号", "还没有添加团支部账号", duration=2500, parent=self)
             return
         window = getattr(self, "window_ref", None)
         if window is None or not hasattr(window, "open_browser"):
