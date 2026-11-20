@@ -1,5 +1,6 @@
 package com.smallylc.smartyouth.ui.screen.home
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,24 +15,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.smallylc.smartyouth.BuildConfig
 import com.smallylc.smartyouth.site.Overview
-import com.smallylc.smartyouth.site.trimAmount
 import com.smallylc.smartyouth.ui.component.CardGap
-import com.smallylc.smartyouth.ui.component.DotLabel
-import com.smallylc.smartyouth.ui.component.EmptyHint
 import com.smallylc.smartyouth.ui.component.MutedText
 import com.smallylc.smartyouth.ui.component.StatCell
 import com.smallylc.smartyouth.ui.component.ToneAmber
@@ -39,7 +38,6 @@ import com.smallylc.smartyouth.ui.component.ToneBlue
 import com.smallylc.smartyouth.ui.component.ToneGreen
 import com.smallylc.smartyouth.ui.component.ToneRed
 import com.smallylc.smartyouth.ui.theme.LocalEnableBlur
-import com.smallylc.smartyouth.ui.theme.isInDarkTheme
 import com.smallylc.smartyouth.ui.util.BlurredBar
 import com.smallylc.smartyouth.ui.util.rememberBlurBackdrop
 import top.yukonga.miuix.kmp.basic.Button
@@ -60,8 +58,8 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 
 /**
- * 首页：先把「这个支部整体怎么样」讲清楚，再给一个能立刻动手的扫描入口。
- * 没登录时不展示空统计，直接给登录卡片 —— 空数字没有信息量。
+ * 首页：先回答「支部现在什么状态」，再给能立刻动手的入口。
+ * 在线、维护中、未登录分开写——站点维护时显示成未登录会误导。
  */
 @Composable
 fun HomeScreen(
@@ -71,6 +69,7 @@ fun HomeScreen(
     syncing: Boolean,
     lastSync: Long,
     error: String?,
+    siteDown: Boolean,
     bottomPadding: Dp,
     onLogin: () -> Unit,
     onScan: () -> Unit,
@@ -86,7 +85,7 @@ fun HomeScreen(
         topBar = {
             BlurredBar(backdrop) {
                 TopAppBar(
-                    title = "智慧团委",
+                    title = "",
                     color = barColor,
                     scrollBehavior = scrollBehavior,
                     actions = {
@@ -115,39 +114,46 @@ fun HomeScreen(
             contentPadding = innerPadding,
             overscrollEffect = null,
         ) {
-            item { Spacer(Modifier.height(8.dp)) }
-
-            if (!loggedIn) {
-                item {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(20.dp)) {
-                            Text(
-                                text = "还没登录支部账号",
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = colorScheme.onSurface,
-                            )
-                            MutedText(
-                                text = "登录后可以同步团员名单、上传志愿书、查看站内信。",
-                                modifier = Modifier.padding(top = 6.dp),
-                            )
-                            Button(
-                                onClick = onLogin,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 16.dp),
-                                colors = ButtonDefaults.buttonColorsPrimary(),
-                            ) {
-                                Text("登录账号")
-                            }
-                        }
-                    }
-                }
-            } else {
-                item { AccountCard(userName, syncing, lastSync, error) }
+            item {
+                Text(
+                    text = "智慧团委",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colorScheme.onBackground,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 14.dp),
+                )
             }
 
-            if (loggedIn || overview.total > 0) {
+            item { StatusHero(loggedIn = loggedIn, userName = userName, siteDown = siteDown) }
+
+            item {
+                StatusChip(
+                    loggedIn = loggedIn,
+                    syncing = syncing,
+                    siteDown = siteDown,
+                    error = error,
+                    lastSync = lastSync,
+                    overview = overview,
+                    onLogin = onLogin,
+                )
+            }
+
+            if (loggedIn && overview.total > 0) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        MetricCard("${overview.total}", "团员", Modifier.weight(1f))
+                        MetricCard("${overview.abnormal}", "待处理", Modifier.weight(1f))
+                    }
+                }
+            }
+
+            item { CardGap(12) }
+            item { FactsCard(loggedIn, userName, lastSync, overview) }
+
+            if (loggedIn && overview.total > 0) {
                 item { CardGap() }
                 item { ProgressCard(overview) }
                 item { CardGap() }
@@ -163,36 +169,178 @@ fun HomeScreen(
     }
 }
 
+/** 主状态卡：一块底色讲清当前能不能用。 */
 @Composable
-private fun AccountCard(userName: String, syncing: Boolean, lastSync: Long, error: String?) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun StatusHero(loggedIn: Boolean, userName: String, siteDown: Boolean) {
+    val label = when {
+        siteDown -> "维护中"
+        loggedIn -> "在线"
+        else -> "未登录"
+    }
+    val hint = when {
+        siteDown -> "站点正在维护，恢复后自动同步"
+        loggedIn -> userName
+        else -> "登录支部账号后开始"
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(colorScheme.primaryContainer),
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colorScheme.onPrimaryContainer.copy(alpha = 0.10f))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                Text(text = "站点", fontSize = 12.sp, color = colorScheme.onPrimaryContainer)
+            }
+            Text(
+                text = label,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Bold,
+                color = colorScheme.onPrimaryContainer,
+                modifier = Modifier.padding(top = 14.dp),
+            )
+            Text(
+                text = hint,
+                fontSize = 14.sp,
+                color = colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            Text(
+                text = "版本 ${BuildConfig.VERSION_NAME}",
+                fontSize = 13.sp,
+                color = colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 18.dp),
+            )
+        }
+    }
+}
+
+/** 胶囊状态条：同步进度、维护提示、失败原因都放这里。 */
+@Composable
+private fun StatusChip(
+    loggedIn: Boolean,
+    syncing: Boolean,
+    siteDown: Boolean,
+    error: String?,
+    lastSync: Long,
+    overview: Overview,
+    onLogin: () -> Unit,
+) {
+    val text: String
+    val tone: Color
+    when {
+        siteDown -> {
+            text = "站点正在维护，数据暂时取不到"
+            tone = ToneAmber
+        }
+        syncing -> {
+            text = "正在同步名单…"
+            tone = colorScheme.primary
+        }
+        error != null -> {
+            text = "同步失败：$error"
+            tone = ToneRed
+        }
+        !loggedIn -> {
+            text = "登录后可同步名单与消息"
+            tone = colorScheme.primary
+        }
+        lastSync > 0 -> {
+            text = "名单已同步  ${relativeTime(lastSync)}"
+            tone = ToneGreen
+        }
+        else -> {
+            text = "名单尚未同步"
+            tone = ToneAmber
+        }
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        cornerRadius = 22.dp,
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = userName,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = colorScheme.onSurface,
-                )
-                val status = when {
-                    syncing -> "正在同步名单…"
-                    error != null -> "同步失败：$error"
-                    lastSync > 0 -> "名单已同步  ${relativeTime(lastSync)}"
-                    else -> "名单尚未同步"
+            Text(
+                text = text,
+                fontSize = 13.sp,
+                color = tone,
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+            )
+            if (!loggedIn && !siteDown) {
+                Button(
+                    onClick = onLogin,
+                    colors = ButtonDefaults.buttonColorsPrimary(),
+                ) {
+                    Text("登录")
                 }
+            } else if (loggedIn) {
                 Text(
-                    text = status,
+                    text = "${overview.uploaded}/${overview.total}",
                     fontSize = 13.sp,
-                    color = if (error != null) ToneRed else colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.padding(top = 3.dp),
+                    color = colorScheme.onSurfaceVariantSummary,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun MetricCard(value: String, label: String, modifier: Modifier = Modifier) {
+    Card(modifier = modifier, cornerRadius = 18.dp) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                text = value,
+                fontSize = 30.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colorScheme.onSurface,
+            )
+            Text(
+                text = label,
+                fontSize = 13.sp,
+                color = colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+    }
+}
+
+/** 设备信息式列表：左边项目名，右边值。 */
+@Composable
+private fun FactsCard(loggedIn: Boolean, userName: String, lastSync: Long, overview: Overview) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            FactRow("账号", userName.ifBlank { "未登录" })
+            FactRow("团员", if (overview.total > 0) "${overview.total} 人" else "—")
+            FactRow("已上传", if (overview.total > 0) "${overview.uploaded} 份" else "—")
+            FactRow("最近同步", if (lastSync > 0) relativeTime(lastSync) else "—")
+            FactRow("版本", BuildConfig.VERSION_NAME)
+        }
+    }
+}
+
+@Composable
+private fun FactRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontSize = 14.sp,
+            color = colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.weight(1f),
+        )
+        Text(text = value, fontSize = 14.sp, color = colorScheme.onSurface)
     }
 }
 
@@ -222,19 +370,9 @@ private fun ProgressCard(overview: Overview) {
             }
             LinearProgressIndicator(
                 progress = overview.ratio,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
             )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                MutedText("电子志愿书上传进度")
-                MutedText("异常 ${overview.abnormal} 人", Modifier.then(Modifier))
-            }
+            MutedText("电子志愿书上传进度", Modifier.padding(top = 8.dp))
         }
     }
 }
@@ -284,24 +422,22 @@ private fun ProblemCard(overview: Overview, onOpenRoster: (String?) -> Unit) {
 private fun MessageCard(unread: Int, onOpenMessages: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth(), onClick = onOpenMessages) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
                 Text("站内信", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurface)
                 MutedText(
-                    if (unread > 0) "$unread 条未读，进来看看有没有新的报到申请" else "没有未读消息",
+                    if (unread > 0) "$unread 条未读" else "没有未读消息",
                     Modifier.padding(top = 3.dp),
                 )
             }
             if (unread > 0) {
                 Text(
-                    text = if (unread > 99) "99+" else "$unread",
-                    fontSize = 13.sp,
-                    color = ToneRed,
+                    text = "$unread",
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Medium,
+                    color = colorScheme.primary,
                 )
             }
         }
@@ -317,38 +453,40 @@ private fun ScanCard(onScan: () -> Unit) {
                     imageVector = MiuixIcons.Scan,
                     contentDescription = null,
                     tint = colorScheme.primary,
-                    modifier = Modifier.size(22.dp),
                 )
-                Spacer(Modifier.width(8.dp))
-                Text("扫描入团志愿书", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurface)
+                Text(
+                    text = "扫描入团志愿书",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
             }
             MutedText(
-                "拍纸质志愿书，自动摆正裁边，按团员姓名命名后直接上传。",
+                "自动裁边摆正，按团员姓名命名后直接上传。",
                 Modifier.padding(top = 6.dp),
             )
-            Button(
-                onClick = onScan,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 14.dp),
-                colors = ButtonDefaults.buttonColorsPrimary(),
-            ) {
-                Text("开始扫描")
-            }
+        }
+        Button(
+            onClick = onScan,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .height(44.dp),
+            colors = ButtonDefaults.buttonColorsPrimary(),
+        ) {
+            Text("开始扫描")
         }
     }
 }
 
-internal fun relativeTime(ts: Long): String {
-    val diff = System.currentTimeMillis() - ts
-    val minute = 60_000L
-    val hour = 60 * minute
-    val day = 24 * hour
+private fun relativeTime(ts: Long): String {
+    if (ts <= 0) return "—"
+    val minutes = (System.currentTimeMillis() - ts) / 60000
     return when {
-        diff < minute -> "刚刚"
-        diff < hour -> "${diff / minute} 分钟前"
-        diff < day -> "${diff / hour} 小时前"
-        diff < 2 * day -> "昨天"
-        else -> "${diff / day} 天前"
+        minutes < 1 -> "刚刚"
+        minutes < 60 -> "$minutes 分钟前"
+        minutes < 1440 -> "${minutes / 60} 小时前"
+        else -> "${minutes / 1440} 天前"
     }
 }

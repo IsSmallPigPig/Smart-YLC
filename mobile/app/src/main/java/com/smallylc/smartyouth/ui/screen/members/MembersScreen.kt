@@ -78,6 +78,7 @@ enum class RosterFilter(val label: String, val key: String?) {
 @Composable
 fun MembersScreen(
     loggedIn: Boolean,
+    siteDown: Boolean,
     members: List<Member>,
     initialFilter: String?,
     bottomPadding: Dp,
@@ -170,10 +171,21 @@ fun MembersScreen(
 
             if (members.isEmpty() && !loggedIn) {
                 item {
-                    Card(Modifier.fillMaxWidth(), onClick = onLogin) {
+                    Card(Modifier.fillMaxWidth(), onClick = if (siteDown) ({}) else onLogin) {
                         Column(Modifier.padding(20.dp)) {
-                            Text("登录后同步团员名单", fontSize = 15.sp, color = colorScheme.onSurface)
-                            MutedText("名单会缓存在本机，断网也能按姓名补齐文件名。", Modifier.padding(top = 4.dp))
+                            Text(
+                                text = if (siteDown) "站点正在维护" else "登录后同步团员名单",
+                                fontSize = 15.sp,
+                                color = colorScheme.onSurface,
+                            )
+                            MutedText(
+                                text = if (siteDown) {
+                                    "账号已保存，维护结束后自动恢复同步。"
+                                } else {
+                                    "名单会缓存在本机，断网也能按姓名补齐文件名。"
+                                },
+                                Modifier.padding(top = 4.dp),
+                            )
                         }
                     }
                 }
@@ -181,11 +193,16 @@ fun MembersScreen(
                 item {
                     EmptyHint(
                         title = when {
+                            members.isEmpty() && siteDown -> "站点正在维护"
                             members.isEmpty() && !loggedIn -> "登录后同步团员名单"
                             members.isEmpty() -> "名单还没同步"
                             else -> "没有符合条件的人"
                         },
-                        detail = if (members.isEmpty()) "回到首页点右上角刷新，或检查账号是否已登录。" else null,
+                        detail = when {
+                            !members.isEmpty() -> null
+                            siteDown -> "恢复后会自动同步，账号不用重新登录。"
+                            else -> "首页右上角可以手动刷新。"
+                        },
                     )
                 }
             } else {

@@ -113,6 +113,10 @@ fun LoginScreen(
                     loading = false
                     error = outcome.message
                 }
+                is LoginOutcome.Unavailable -> {
+                    loading = false
+                    error = "站点正在维护，稍后再试"
+                }
             }
         }
     }

@@ -266,6 +266,7 @@ fun MainScreen(
                         syncing = sync.syncing,
                         lastSync = sync.lastSync,
                         error = sync.error,
+                        siteDown = session.siteDown,
                         bottomPadding = bottom,
                         onLogin = onOpenLogin,
                         onScan = onOpenScan,
@@ -279,6 +280,7 @@ fun MainScreen(
 
                     1 -> MembersScreen(
                         loggedIn = session.loggedIn,
+                        siteDown = session.siteDown,
                         members = members,
                         initialFilter = ScanIntent.filter,
                         bottomPadding = bottom,
@@ -311,6 +313,7 @@ fun MainScreen(
                         userName = session.userName,
                         loggedIn = session.loggedIn,
                         syncing = sync.syncing,
+                        siteDown = session.siteDown,
                         memberCount = members.size,
                         accountCount = Repo.accounts.accounts.size,
                         bottomPadding = bottom,

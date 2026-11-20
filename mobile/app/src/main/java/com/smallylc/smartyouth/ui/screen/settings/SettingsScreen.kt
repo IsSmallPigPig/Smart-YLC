@@ -52,6 +52,7 @@ import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 fun SettingsScreen(
     userName: String,
     loggedIn: Boolean,
+    siteDown: Boolean,
     syncing: Boolean,
     memberCount: Int,
     accountCount: Int,
@@ -104,12 +105,17 @@ fun SettingsScreen(
                 ) {
                     Column(Modifier.padding(16.dp)) {
                         Text(
-                            text = if (loggedIn) userName else "未登录",
+                            text = when {
+                                siteDown -> "站点维护中"
+                                loggedIn -> userName
+                                else -> "未登录"
+                            },
                             fontSize = 18.sp,
                             color = colorScheme.onSurface,
                         )
                         MutedText(
                             text = when {
+                                siteDown -> "账号已保存，维护结束后自动恢复"
                                 !loggedIn -> "登录支部账号后才能同步名单与上传"
                                 syncing -> "正在同步…"
                                 else -> "本机已缓存 $memberCount 名团员"

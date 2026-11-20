@@ -71,18 +71,20 @@ class SiteClient(private val accountStore: AccountStore, val userName: String) {
 
     private class SiteException(message: String) : RuntimeException(message)
 
+    /** 站点在维护或网关异常：不是用户的问题，界面要单独说明。 */
+    class SiteUnavailableException(message: String) : RuntimeException(message)
+
     private fun jsonOf(response: okhttp3.Response): JSONObject {
         val body = response.body?.string().orEmpty()
+        if (response.code >= 500) throw SiteUnavailableException("站点返回 ${response.code}")
         if (!response.isSuccessful) throw SiteException("HTTP ${response.code}")
         if (body.isBlank()) throw SiteException("站点返回空响应")
         return runCatching { JSONObject(body) }.getOrElse {
             // 被重定向到登录页或防护页时返回 HTML，原样抛出会把界面撑爆
-            val hint = if (body.trimStart().startsWith("<")) {
-                "站点返回了网页，登录可能已失效"
-            } else {
-                "站点返回的内容无法识别"
+            if (body.trimStart().startsWith("<")) {
+                throw SiteUnavailableException("站点正在维护")
             }
-            throw SiteException(hint)
+            throw SiteException("站点返回的内容无法识别")
         }
     }
 
@@ -101,7 +103,12 @@ class SiteClient(private val accountStore: AccountStore, val userName: String) {
             }
         }
         val raw = runCatching { jsonOf(call(baseRequest(url).get().build())) }
-            .getOrElse { return LoginVerdict("failed", "网络错误：${it.message}") }
+            .getOrElse { error ->
+                if (error is SiteUnavailableException) {
+                    return LoginVerdict("unavailable", error.message ?: "站点正在维护")
+                }
+                return LoginVerdict("failed", "网络错误：${error.message}")
+            }
         val verdict = parseLogin(raw)
         if (verdict.kind == "ok") {
             loggedIn = true
@@ -157,7 +164,10 @@ class SiteClient(private val accountStore: AccountStore, val userName: String) {
             loggedIn = false
             false to msg.ifBlank { "会话已失效" }
         }
-    }.getOrElse { false to "会话探测失败：${it.message}" }
+    }.getOrElse {
+        if (it is SiteUnavailableException) false to "unavailable:${it.message}"
+        else false to "会话探测失败：${it.message}"
+    }
 
     // ---------- 组织 / 团员 / 站内信 ----------
 

@@ -107,6 +107,10 @@ fun AccountsScreen(
                     message = outcome.message
                     messageOk = false
                 }
+                is LoginOutcome.Unavailable -> {
+                    message = "站点正在维护，恢复后再切换"
+                    messageOk = false
+                }
             }
             switching = ""
         }

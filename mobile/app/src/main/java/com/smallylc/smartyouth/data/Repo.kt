@@ -67,7 +67,13 @@ object Repo {
         loadCache(account.userName)
         val c = clientFor() ?: return@withContext
         val (ok, message) = c.sessionAccount()
-        _sessionState.value = SessionState(loggedIn = ok, userName = account.userName, message = message)
+        val down = message.startsWith("unavailable:")
+        _sessionState.value = SessionState(
+            loggedIn = ok,
+            userName = account.userName,
+            message = message.removePrefix("unavailable:"),
+            siteDown = down,
+        )
         if (ok) refreshAll(quiet = true)
     }
 
@@ -83,6 +89,15 @@ object Repo {
                     LoginOutcome.Success
                 }
                 "captcha" -> LoginOutcome.NeedCaptcha(verdict.message)
+                "unavailable" -> {
+                    _sessionState.value = SessionState(
+                        loggedIn = false,
+                        userName = userName,
+                        message = verdict.message,
+                        siteDown = true,
+                    )
+                    LoginOutcome.Unavailable(verdict.message)
+                }
                 else -> {
                     _sessionState.value = SessionState(loggedIn = false, userName = userName, message = verdict.message)
                     LoginOutcome.Failed(verdict.message)
@@ -202,6 +217,8 @@ data class SessionState(
     val loggedIn: Boolean = false,
     val userName: String = "",
     val message: String = "",
+    /** 站点在维护：本地有账号但拉不到数据，界面不该显示「未登录」。 */
+    val siteDown: Boolean = false,
 )
 
 data class SyncState(
@@ -215,4 +232,7 @@ sealed interface LoginOutcome {
     data object Success : LoginOutcome
     data class NeedCaptcha(val message: String) : LoginOutcome
     data class Failed(val message: String) : LoginOutcome
+
+    /** 站点维护：凭据可能没问题，只是现在拿不到数据。 */
+    data class Unavailable(val message: String) : LoginOutcome
 }
