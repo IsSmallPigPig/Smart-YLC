@@ -39,7 +39,7 @@ fun CameraCapture(
     modifier: Modifier = Modifier,
     onReady: (CameraHandle) -> Unit = {},
     /** 逐帧回调，运行在分析线程；回调方负责回收传进来的 Bitmap。 */
-    onFrame: ((android.graphics.Bitmap) -> Unit)? = null,
+    onFrame: ((android.graphics.Bitmap, Int) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -89,7 +89,7 @@ fun CameraCapture(
                     .also { useCase ->
                         useCase.setAnalyzer(analysisExecutor) { proxy ->
                             try {
-                                sink(proxy.toBitmap())
+                                sink(proxy.toBitmap(), proxy.imageInfo.rotationDegrees)
                             } catch (_: Throwable) {
                                 // 单帧失败不影响取景
                             } finally {

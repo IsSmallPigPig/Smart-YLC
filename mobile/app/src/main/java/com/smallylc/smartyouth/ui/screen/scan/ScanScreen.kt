@@ -3,6 +3,7 @@ package com.smallylc.smartyouth.ui.screen.scan
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -46,9 +47,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -64,6 +68,7 @@ import com.smallylc.smartyouth.scan.DocStore
 import com.smallylc.smartyouth.scan.DocDetect
 import com.smallylc.smartyouth.scan.Naming
 import com.smallylc.smartyouth.scan.ScanPage
+import kotlin.math.max
 import com.smallylc.smartyouth.scan.LiveScanner
 import com.smallylc.smartyouth.scan.ScanSession
 import com.smallylc.smartyouth.ui.component.CardGap
@@ -162,6 +167,10 @@ fun ScanScreen(
             onImport = {
                 picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
             },
+            onOpenPage = { page ->
+                editingId = page.id
+                step = ScanStep.Crop
+            },
             onDone = {
                 if (pages.isEmpty()) {
                     onExit()
@@ -234,6 +243,7 @@ private fun CaptureStep(
     onCapture: (java.io.File) -> Unit,
     onCaptureError: (String) -> Unit,
     onImport: () -> Unit,
+    onOpenPage: (ScanPage) -> Unit,
     onDone: () -> Unit,
     onExit: () -> Unit,
 ) {
@@ -242,7 +252,6 @@ private fun CaptureStep(
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        LaunchedEffect(Unit) { LiveScanner.setFilter(currentFilter()) }
         DisposableEffect(Unit) { onDispose { LiveScanner.reset() } }
         CameraCapture(
             modifier = Modifier.fillMaxSize(),
@@ -294,39 +303,38 @@ private fun CaptureStep(
             }
         }
 
-        // 取景框：识别到纸张时，框内直接显示校正后的平铺效果
-        val liveFlat by LiveScanner.flat.collectAsState()
+        // 识别边界：白色细线实时圈出「按下快门会裁下来的范围」
         val liveQuad by LiveScanner.quad.collectAsState()
-        val locked = liveQuad != null
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.86f)
-                .aspectRatio(0.72f)
-                .align(Alignment.Center)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color.Black.copy(alpha = 0.45f))
-                .border(
-                    width = if (locked) 2.dp else 1.dp,
-                    color = if (locked) Color(0xFF7FE3A6) else Color.White.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(14.dp),
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            val frame = liveFlat
-            if (frame != null) {
-                Image(
-                    bitmap = frame.asImageBitmap(),
-                    contentDescription = "校正后的预览",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().padding(5.dp),
-                )
-            } else {
-                Text(
-                    text = "把纸放进框内",
-                    color = Color.White.copy(alpha = 0.75f),
-                    fontSize = 13.sp,
-                )
+        val frameAspect by LiveScanner.aspect.collectAsState()
+        Canvas(Modifier.fillMaxSize()) {
+            val q = liveQuad ?: return@Canvas
+            val a = frameAspect
+            if (a <= 0f) return@Canvas
+            // 预览用 FILL_CENTER：等比放大到铺满，超出部分裁掉
+            val scale = max(size.width / a, size.height)
+            val dx = (size.width - a * scale) / 2f
+            val dy = (size.height - scale) / 2f
+            val pts = q.points.map { (x, y) -> Offset(x * a * scale + dx, y * scale + dy) }
+            val path = Path().apply {
+                moveTo(pts[0].x, pts[0].y)
+                lineTo(pts[1].x, pts[1].y)
+                lineTo(pts[2].x, pts[2].y)
+                lineTo(pts[3].x, pts[3].y)
+                close()
             }
+            drawPath(path, Color.White, style = Stroke(width = 1.4.dp.toPx()))
+            pts.forEach { drawCircle(Color.White, radius = 3.dp.toPx(), center = it) }
+        }
+        if (liveQuad == null) {
+            Text(
+                text = "把纸放进画面，白框会自动贴合纸边",
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
         }
 
         Box(
@@ -357,7 +365,7 @@ private fun CaptureStep(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(pages, key = { it.id }) { page ->
-                        PageThumb(page, height = 64)
+                        PageThumb(page, height = 64, onClick = { onOpenPage(page) })
                     }
                 }
                 Spacer(Modifier.height(14.dp))
@@ -538,7 +546,13 @@ private fun ReviewStep(
 }
 
 @Composable
-private fun PageThumb(page: ScanPage, height: Int = 0, aspect: Float? = null, fillWidth: Boolean = false) {
+private fun PageThumb(
+    page: ScanPage,
+    height: Int = 0,
+    aspect: Float? = null,
+    fillWidth: Boolean = false,
+    onClick: (() -> Unit)? = null,
+) {
     val bitmap by produceState<android.graphics.Bitmap?>(null, page.id, page.quad, page.filter) {
         value = ScanSession.render(page, 300)
     }
@@ -550,7 +564,8 @@ private fun PageThumb(page: ScanPage, height: Int = 0, aspect: Float? = null, fi
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(Color(0xFF2A2A2A)),
+            .background(Color(0xFF2A2A2A))
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
         contentAlignment = Alignment.Center,
     ) {
         bitmap?.let {

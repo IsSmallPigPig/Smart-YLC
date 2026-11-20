@@ -141,7 +141,7 @@ private val IconSize = 22.dp
 private val LabelSize = 11.sp
 
 /** 单个 tab 的宽度：图标 22dp、两个汉字约 22dp，两侧各留 4dp。 */
-private val ItemWidth = 52.dp
+private val ItemWidth = 62.dp
 /** 选中块高度：盖住图标与文字，比整条矮一圈。 */
 private val ItemHeight = 58.dp
 /** 选中块圆角：宽度大于两倍圆角，两侧是弧、中间留一段直线。 */
