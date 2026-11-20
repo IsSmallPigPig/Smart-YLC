@@ -35,7 +35,7 @@ object DocDetect {
         }
     }
 
-    private const val DETECT_MAX_EDGE = 900f
+    private const val DETECT_MAX_EDGE = 1080f
 
     fun detect(bitmap: Bitmap): Quad? {
         val scale = (DETECT_MAX_EDGE / max(bitmap.width, bitmap.height)).coerceAtMost(1f)
@@ -129,8 +129,8 @@ object DocDetect {
                 val aspect = if (shortSide <= 0.0) 0.0 else longSide / shortSide
 
                 // 框住整幅画面没有意义；过小的色块也不是纸
-                if (ratio <= 0.12 || ratio >= 0.60) continue
-                if (fill <= 0.72 || aspect <= 1.0 || aspect >= 3.0) continue
+                if (ratio <= 0.08 || ratio >= 0.72) continue
+                if (fill <= 0.68 || aspect <= 1.0 || aspect >= 3.2) continue
 
                 val score = fill - kotlin.math.abs(aspect - 1.6) * 0.06
                 if (score <= bestScore) continue
@@ -168,7 +168,11 @@ object DocDetect {
         }
         curve.release(); approx.release()
         if (ordered.size != 4) return null
-        return toQuad(ordered, width, height)
+        // 形态学开运算会把边界吃进去几像素，按质心放大 1.5% 把框推回纸边
+        val cx = ordered.sumOf { it.x } / 4.0
+        val cy = ordered.sumOf { it.y } / 4.0
+        val grown = ordered.map { Point(cx + (it.x - cx) * 1.015, cy + (it.y - cy) * 1.015) }
+        return toQuad(grown, width, height)
     }
 
     /** 归一化用的起点：左上。 */

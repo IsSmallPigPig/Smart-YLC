@@ -29,9 +29,23 @@ object LiveScanner {
 
     private var lastAt = 0L
     private var working = false
+    private var smoothed: DocDetect.Quad? = null
+    private var misses = 0
 
     fun reset() {
         _quad.value = null
+        smoothed = null
+        misses = 0
+    }
+
+    private fun blend(from: DocDetect.Quad, to: DocDetect.Quad): DocDetect.Quad {
+        if (from.points.size != to.points.size) return to
+        val weight = 0.55f
+        return DocDetect.Quad(
+            from.points.zip(to.points) { (fx, fy), (tx, ty) ->
+                (fx + (tx - fx) * weight) to (fy + (ty - fy) * weight)
+            },
+        )
     }
 
     /**
@@ -58,7 +72,20 @@ object LiveScanner {
                 android.util.Log.w("LiveScanner", "detect failed", t)
                 null
             }
-            _quad.value = found
+            // 逐帧结果有抖动，做一次指数平滑，框会稳一些
+            if (found != null) {
+                misses = 0
+                val previous = smoothed
+                smoothed = if (previous == null) found else blend(previous, found)
+                _quad.value = smoothed
+            } else {
+                // 偶尔一两帧没检出是正常的，连续丢帧才撤掉框
+                misses++
+                if (misses > 3) {
+                    smoothed = null
+                    _quad.value = null
+                }
+            }
             if (small !== usable) small.recycle()
         } finally {
             owned?.recycle()
