@@ -142,7 +142,7 @@ fun ScansScreen(
                                     maxLines = 1,
                                 )
                                 MutedText(
-                                    "${formatSize(doc.size)} · ${formatDate(doc.savedAt)}",
+                                    "${formatSize(doc.size)}  ${formatDate(doc.savedAt)}",
                                     Modifier.padding(top = 3.dp),
                                 )
                             }

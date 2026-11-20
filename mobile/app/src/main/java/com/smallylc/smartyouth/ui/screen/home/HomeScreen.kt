@@ -182,7 +182,7 @@ private fun AccountCard(userName: String, syncing: Boolean, lastSync: Long, erro
                 val status = when {
                     syncing -> "正在同步名单…"
                     error != null -> "同步失败：$error"
-                    lastSync > 0 -> "名单已同步 · ${relativeTime(lastSync)}"
+                    lastSync > 0 -> "名单已同步  ${relativeTime(lastSync)}"
                     else -> "名单尚未同步"
                 }
                 Text(

@@ -113,7 +113,7 @@ fun AboutScreen(onBack: () -> Unit) {
                     ValueRow("版本", BuildConfig.VERSION_NAME)
                     ValueRow("构建号", BuildConfig.VERSION_CODE.toString())
                     ValueRow("站点", "tuan.12355.net")
-                    ValueRow("界面", "Miuix · Compose")
+                    ValueRow("界面", "Miuix Compose")
                 }
             }
 

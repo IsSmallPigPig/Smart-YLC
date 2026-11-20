@@ -87,7 +87,8 @@ fun MessagesScreen(
         topBar = {
             BlurredBar(backdrop) {
                 TopAppBar(
-                    title = if (unread > 0) "站内信 · $unread 条未读" else "站内信",
+                    title = "站内信",
+                    subtitle = if (unread > 0) "$unread 条未读" else "",
                     color = barColor,
                     scrollBehavior = scrollBehavior,
                 )

@@ -188,7 +188,7 @@ internal fun SaveStep(
                     CardGap()
                     Card(Modifier.fillMaxWidth()) {
                         ValueRow("页数", "${pages.size} 页")
-                        ValueRow("保存位置", "本机 · 扫描件")
+                        ValueRow("保存位置", "本机扫描件")
                     }
                 }
 
@@ -262,7 +262,7 @@ internal fun SaveStep(
                                 modifier = Modifier.padding(top = 6.dp),
                             )
                             MutedText(
-                                text = "${pages.size} 页 · ${formatSize(doc.size)}",
+                                text = "${pages.size} 页  ${formatSize(doc.size)}",
                                 modifier = Modifier.padding(top = 4.dp),
                             )
                         }

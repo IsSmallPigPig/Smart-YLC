@@ -1292,7 +1292,7 @@ class OrgPage(FluentPage):
             card = TintedCard("danger" if kinds is None else "warning")
         else:
             card = MemberCard()
-            set_tip(card, f"点击查看「{branch}」的团员名单")
+            set_tip(card, f"「{branch}」的团员名单")
             card.clicked.connect(lambda b=branch: self._goto_branch(b))
         v = QVBoxLayout(card)
         v.setContentsMargins(18, 9, 18, 9)
