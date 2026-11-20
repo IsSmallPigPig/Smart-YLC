@@ -100,7 +100,7 @@ fun ScansScreen(
                 .scrollEndHaptic()
                 .overScrollVertical()
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = 16.dp),
             contentPadding = innerPadding,
             overscrollEffect = null,
         ) {

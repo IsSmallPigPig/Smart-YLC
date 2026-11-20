@@ -56,7 +56,6 @@ import com.smallylc.smartyouth.ui.component.ToneRed
 import com.smallylc.smartyouth.ui.theme.LocalEnableBlur
 import com.smallylc.smartyouth.ui.util.BlurredBar
 import com.smallylc.smartyouth.ui.util.rememberBlurBackdrop
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -88,7 +87,7 @@ fun PairScreen(
     deviceName: String,
     onBack: () -> Unit,
 ) {
-    val scope = rememberCoroutineScopeSafe()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val scrollBehavior = MiuixScrollBehavior()
     val backdrop = rememberBlurBackdrop(LocalEnableBlur.current)
     val barColor = if (backdrop != null) androidx.compose.ui.graphics.Color.Transparent else colorScheme.surface
@@ -104,7 +103,7 @@ fun PairScreen(
     var busy by remember { mutableStateOf(false) }
     var total by remember { mutableIntStateOf(0) }
     var doneCount by remember { mutableIntStateOf(0) }
-    val results = remember { mutableStateListOf<String>() }
+    val results = remember { mutableStateListOf<Pair<String, Boolean>>() }
 
     fun connect(client: PairClient) {
         if (busy) return
@@ -116,6 +115,11 @@ fun PairScreen(
                     message = outcome.message
                     messageOk = false
                     busy = false
+                    if (outcome.kind == "config") {
+                        host = client.base.removePrefix("http://")
+                        pin = client.pin
+                        step = PairStep.Manual
+                    }
                 }
 
                 is PairClient.Result.Ok -> {
@@ -135,13 +139,14 @@ fun PairScreen(
                         messageOk = true
                     }
                     todo.forEach { doc ->
-                        val result = client.upload(session, doc.file)
+                        val result = runCatching { client.upload(session, doc.file) }
+                            .getOrElse { PairClient.Result.Fail(it.message ?: "上传中断") }
                         withContext(Dispatchers.Main) {
                             doneCount += 1
                             results.add(
                                 when (result) {
-                                    is PairClient.Result.Ok -> "${doc.name}：${result.value}"
-                                    is PairClient.Result.Fail -> "${doc.name}：${result.message}"
+                                    is PairClient.Result.Ok -> "${doc.name}：${result.value}" to true
+                                    is PairClient.Result.Fail -> "${doc.name}：${result.message}" to false
                                 }
                             )
                         }
@@ -220,9 +225,11 @@ fun PairScreen(
                                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                                     horizontalArrangement = Arrangement.End,
                                 ) {
-                                    TextButtonSmall("手动配对") {
-                                        step = PairStep.Manual
-                                    }
+                                    top.yukonga.miuix.kmp.basic.TextButton(
+                                        text = "手动配对",
+                                        onClick = { step = PairStep.Manual },
+                                        colors = ButtonDefaults.textButtonColors(color = colorScheme.primary),
+                                    )
                                 }
                             }
                         }
@@ -279,7 +286,7 @@ fun PairScreen(
 
                 PairStep.Transfer -> {
                     item {
-                        Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                        Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                             Column(Modifier.padding(16.dp)) {
                                 Text(
                                     text = if (total == 0) "没有要传的档案" else "已传 $doneCount / $total",
@@ -290,19 +297,19 @@ fun PairScreen(
                             }
                         }
                     }
-                    items(results) { line ->
-                        Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                    items(results) { (line, ok) ->
+                        Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                             Text(
                                 text = line,
                                 fontSize = 13.sp,
-                                color = if (line.contains("电脑拒收") || line.contains("失败")) ToneRed else ToneGreen,
+                                color = if (ok) ToneGreen else ToneRed,
                                 modifier = Modifier.padding(14.dp),
                             )
                         }
                     }
                     item {
                         CardGap(12)
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                             Button(
                                 onClick = {
                                     step = PairStep.Scan
@@ -338,29 +345,19 @@ fun PairScreen(
     }
 }
 
-@Composable
-private fun TextButtonSmall(text: String, onClick: () -> Unit) {
-    top.yukonga.miuix.kmp.basic.TextButton(
-        text = text,
-        onClick = onClick,
-        colors = ButtonDefaults.textButtonColors(color = colorScheme.primary),
-    )
-}
-
-@Composable
-private fun rememberCoroutineScopeSafe(): CoroutineScope =
-    androidx.compose.runtime.rememberCoroutineScope()
-
 /** CameraX 预览 + 帧分析；退出页面时解绑，避免相机被占住。 */
 @Composable
 private fun ScannerPreview(modifier: Modifier = Modifier, onQr: (String) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val latestOnQr by rememberUpdatedState(onQr)
+    val currentOnQr = rememberUpdatedState(onQr)
     val previewView = remember {
         PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
     }
     val executor = remember { Executors.newSingleThreadExecutor() }
+    val analyzer = remember(context) {
+        QrAnalyzer { text -> context.mainExecutor.execute { currentOnQr.value(text) } }
+    }
 
     DisposableEffect(Unit) {
         val future = ProcessCameraProvider.getInstance(context)
@@ -372,13 +369,7 @@ private fun ScannerPreview(modifier: Modifier = Modifier, onQr: (String) -> Unit
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-                .also { analyzer ->
-                    analyzer.setAnalyzer(executor) { image ->
-                        QrAnalyzer { text ->
-                            context.mainExecutor.execute { latestOnQr(text) }
-                        }.analyze(image)
-                    }
-                }
+                .also { it.setAnalyzer(executor, analyzer) }
             runCatching {
                 provider.unbindAll()
                 provider.bindToLifecycle(

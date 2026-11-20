@@ -225,7 +225,7 @@ fun MainScreen(
             HorizontalPager(
                 modifier = Modifier
                     .pagerGestureOverride(pagerState = mainPagerState.pagerState, mode = pagerMode)
-                    .then(if (wideScreen) Modifier.widthIn(max = 1100.dp) else Modifier),
+                    .then(if (wideScreen) Modifier.widthIn(max = 720.dp) else Modifier),
                 state = mainPagerState.pagerState,
                 beyondViewportPageCount = 1,
                 overscrollEffect = null,

@@ -156,7 +156,7 @@ fun ValueRow(
 fun MutedText(text: String, modifier: Modifier = Modifier, color: Color? = null) {
     Text(
         text = text,
-        fontSize = 13.sp,
+        fontSize = 14.sp,
         color = color ?: colorScheme.onSurfaceVariantSummary,
         modifier = modifier,
     )

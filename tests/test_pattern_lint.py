@@ -150,3 +150,32 @@ def test_naming_normalizes_before_parse():
 
 def test_current_codebase_is_clean():
     assert lint_patterns.run(quiet=True) == []
+
+
+# —— 手机端：配对传输相关的两条真实缺陷 ——
+
+def test_analyzer_created_inside_frame_callback():
+    """扫码无反应的根因：分析器在每帧回调里新建，节流失效。"""
+    source = """
+        analysis.setAnalyzer(executor) { image ->
+            QrAnalyzer { text -> onQr(text) }.analyze(image)
+        }
+    """
+    problems = lint_patterns._kt_problems(source, "Sample.kt")
+    assert any("分析器每帧重建" in p for p in problems), problems
+
+
+def test_shared_analyzer_is_allowed():
+    source = """
+        val analyzer = remember { QrAnalyzer { text -> onQr(text) } }
+        analysis.setAnalyzer(executor, analyzer)
+    """
+    assert lint_patterns._kt_problems(source, "Sample.kt") == []
+
+
+def test_cleartext_lan_requires_config():
+    """电脑配对走 http://局域网IP，配置没放开明文时请求会被系统拒绝。"""
+    only_loopback = '<network-security-config><domain-config cleartextTrafficPermitted="true">'
+    assert lint_patterns._network_problems(only_loopback, "net.xml")
+    good = '<network-security-config><base-config cleartextTrafficPermitted="true" />'
+    assert lint_patterns._network_problems(good, "net.xml") == []

@@ -288,11 +288,57 @@ def check_deploy_configs(configs: tuple[Path, ...] | None = None) -> list[str]:
     return problems
 
 
+KT_ROOT = ROOT / "mobile" / "app" / "src" / "main"
+
+
+def _kt_problems(source: str, rel: str) -> list[str]:
+    problems: list[str] = []
+    # 规则（2026-11-20 扫码无反应）：setAnalyzer 的回调里现场 new 分析器。
+    # 该回调每帧执行，分析器里的节流与解码器状态全部作废，帧率被打满。
+    for m in re.finditer(r"setAnalyzer\([^)]*\)\s*\{([\s\S]{0,400}?)\}", source):
+        if re.search(r"Analyzer\s*[({]", m.group(1)):
+            line = source.count("\n", 0, m.start()) + 1
+            problems.append(
+                f"{rel}:{line} [分析器每帧重建] setAnalyzer 回调里新建 Analyzer，"
+                "节流与解码状态每帧丢失；把分析器提到 remember 里，只 setAnalyzer(executor, analyzer)")
+    return problems
+
+
+def check_kotlin_patterns() -> list[str]:
+    """手机端代码反模式。每条同样对应一次真实缺陷。"""
+    problems: list[str] = []
+    if not KT_ROOT.exists():
+        return problems
+    for path in sorted(KT_ROOT.rglob("*.kt")):
+        source = path.read_text(encoding="utf-8", errors="replace")
+        problems.extend(_kt_problems(source, _rel(path)))
+    return problems
+
+
+def check_android_network_config() -> list[str]:
+    """局域网配对走明文 HTTP，系统默认拒绝非回环明文。"""
+    xml = KT_ROOT / "res" / "xml" / "network_security_config.xml"
+    if not xml.exists():
+        return []
+    return _network_problems(xml.read_text(encoding="utf-8"), _rel(xml))
+
+
+def _network_problems(body: str, rel: str) -> list[str]:
+    # 只认 base-config：domain-config 只能列具体域名/IP，覆盖不了任意局域网地址
+    if not re.search(r'<base-config[^>]*cleartextTrafficPermitted="true"', body):
+        return [
+            f"{rel} [局域网明文被拦] 电脑配对请求 http://局域网IP，"
+            "系统会直接拒绝；network_security_config 需要放开 cleartext"]
+    return []
+
+
 def run(quiet: bool = False) -> list[str]:
     problems: list[str] = []
     for path in _iter_py():
         problems.extend(check_file(path))
     problems.extend(check_deploy_configs())
+    problems.extend(check_kotlin_patterns())
+    problems.extend(check_android_network_config())
     if not quiet:
         for line in problems:
             print(line)

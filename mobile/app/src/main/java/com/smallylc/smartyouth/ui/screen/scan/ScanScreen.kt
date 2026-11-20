@@ -439,7 +439,7 @@ private fun ReviewStep(
                 columns = GridCells.Fixed(3),
                 modifier = Modifier
                     .fillMaxHeight()
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 16.dp),
                 contentPadding = innerPadding,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),

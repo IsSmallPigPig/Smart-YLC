@@ -7,48 +7,56 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.File
+import java.net.URLEncoder
 import java.security.MessageDigest
 
 /**
  * 电脑端「接收手机档案」的配对客户端，对应 docs/app-pair-protocol.md v1。
  *
  * 流程：扫码拿到 base + pin → 配对换 token → 拉已有摘要 → 只传缺的 → 报结束。
- * 所有请求都打同一台电脑的 host:port，token 走 query。
+ * 会话只活一次服务生命周期，401 一律按「重新配对」处理，不重试。
  */
 class PairClient(val base: String, val pin: String, val configCode: String) {
 
     private val http = app.okhttpClient
-    private val json = "application/json; charset=utf-8".toMediaType()
-
-    data class Paired(val token: String)
+    private val jsonType = "application/json; charset=utf-8".toMediaType()
 
     sealed interface Result<out T> {
         data class Ok<T>(val value: T) : Result<T>
         data class Fail(val message: String, val kind: String = "") : Result<Nothing>
     }
 
-    private fun post(path: String, body: String? = null, share: File? = null): JSONObject? {
-        val builder = Request.Builder().url("$base$path").post(
-            when {
-                share != null -> share.asRequestBody("application/pdf".toMediaType())
-                body != null -> body.toRequestBody(json)
-                else -> ByteArray(0).toRequestBody(json)
-            }
-        )
-        val response = runCatching { http.newCall(builder.build()).execute() }.getOrNull() ?: return null
-        val text = runCatching { response.body.string() }.getOrNull().orEmpty()
-        return runCatching { JSONObject(text) }.getOrNull()
+    private data class Resp(val code: Int, val body: JSONObject?)
+
+    private fun post(path: String, body: String? = null, share: File? = null): Resp {
+        val request = Request.Builder()
+            .url("$base$path")
+            .post(
+                when {
+                    share != null -> share.asRequestBody("application/pdf".toMediaType())
+                    body != null -> body.toRequestBody(jsonType)
+                    else -> ByteArray(0).toRequestBody(jsonType)
+                }
+            )
+            .build()
+        val response = runCatching { http.newCall(request).execute() }.getOrNull()
+            ?: return Resp(0, null)
+        response.use { resp ->
+            val text = runCatching { resp.body.string() }.getOrNull().orEmpty()
+            return Resp(resp.code, runCatching { JSONObject(text) }.getOrNull())
+        }
     }
 
-    /** 配对：pin 错让用户刷新二维码，config 错让用户核对提取码。 */
+    /** 配对：pin 错让用户刷新二维码，config 错让用户补提取码。 */
     fun pair(device: String): Result<String> {
         val payload = JSONObject()
             .put("pin", pin)
             .put("device", device)
             .put("configCode", configCode)
             .toString()
-        val obj = post("/api/pair", payload)
-            ?: return Result.Fail("连不上电脑，确认两边在同一 Wi-Fi")
+        val resp = post("/api/pair", payload)
+        if (resp.code == 0) return Result.Fail("连不上电脑，确认两边在同一 Wi-Fi")
+        val obj = resp.body ?: return Result.Fail("电脑返回的内容看不懂")
         if (obj.optBoolean("ok")) {
             val token = obj.optString("token")
             return if (token.isBlank()) Result.Fail("电脑没有返回会话凭证") else Result.Ok(token)
@@ -62,7 +70,7 @@ class PairClient(val base: String, val pin: String, val configCode: String) {
 
     /** 电脑上已有档案的 SHA-256，用来跳过重复内容。 */
     fun manifest(token: String): Set<String> {
-        val obj = post("/api/manifest?token=$token") ?: return emptySet()
+        val obj = post("/api/manifest?token=$token").body ?: return emptySet()
         val array = obj.optJSONArray("digests") ?: return emptySet()
         return buildSet {
             for (i in 0 until array.length()) add(array.optString(i))
@@ -70,13 +78,14 @@ class PairClient(val base: String, val pin: String, val configCode: String) {
     }
 
     fun upload(token: String, file: File): Result<String> {
-        val name = java.net.URLEncoder.encode(file.name, "UTF-8")
+        val name = URLEncoder.encode(file.name, "UTF-8")
         val digest = sha256(file)
-        val obj = post("/api/upload?token=$token&name=$name&sha256=$digest", share = file)
-            ?: return Result.Fail("上传中断")
+        val resp = post("/api/upload?token=$token&name=$name&sha256=$digest", share = file)
+        if (resp.code == 401) return Result.Fail("会话已失效，重新配对", "session")
+        if (resp.code == 0) return Result.Fail("上传中断")
+        val obj = resp.body ?: return Result.Fail("电脑返回的内容看不懂")
         if (!obj.optBoolean("ok")) {
-            return if (obj.optString("error") == "会话无效，重新扫码配对") Result.Fail("会话已失效，重新配对", "session")
-            else Result.Fail(obj.optString("note").ifBlank { obj.optString("error") })
+            return Result.Fail(obj.optString("note").ifBlank { obj.optString("error") })
         }
         return when (obj.optString("status")) {
             "ok" -> Result.Ok("已传到电脑")
@@ -96,14 +105,14 @@ class PairClient(val base: String, val pin: String, val configCode: String) {
             val uri = runCatching { java.net.URI(text.trim()) }.getOrNull() ?: return null
             val host = uri.host ?: return null
             val port = if (uri.port > 0) uri.port else 8765
-            val query = uri.rawQuery.orEmpty()
-            val k = query.split('&')
+            val pin = uri.rawQuery.orEmpty()
+                .split('&')
                 .map { it.split('=', limit = 2) }
                 .firstOrNull { it.size == 2 && it[0] == "k" }
                 ?.get(1)
                 ?: return null
-            if (k.isBlank()) return null
-            return PairClient("http://$host:$port", k.uppercase(), "")
+            if (pin.isBlank()) return null
+            return PairClient("http://$host:$port", pin.uppercase(), "")
         }
 
         fun sha256(file: File): String {
