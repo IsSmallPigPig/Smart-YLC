@@ -98,6 +98,7 @@ class FileStatus:
     path: str
     name: str
     root: str = ""            # 来自哪个来源目录（空 = 待上传列表里的散件）
+    work_path: str = ""       # 工作目录里的压缩副本（空格检查/上传读它）；空=没有
     pages: int | None = None
     naming: str = "ok"  # ok | fixed | error
     page: str = "skip"  # ok | error | skip

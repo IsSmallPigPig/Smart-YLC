@@ -131,6 +131,28 @@ def test_smoke_checks_cv2_abi():
     assert any("冒烟漏检 cv2" in x for x in check(bad, "main.py"))
 
 
+def test_upload_uses_work_copy():
+    """规则 17：上传必须筛 work_path，不能退回原件。"""
+    p = ROOT / "app" / "ui" / "upload_page.py"
+    assert not any("上传绕开副本" in x for x in lint_patterns.check_file(p))
+
+    bad = ('def _start_upload(self):\n'
+           '    usable = [s for s in self.statuses if s.usable]\n'
+           '    jobs = [{"path": s.path, "account": s.account} for s in usable]\n')
+    assert any("上传绕开副本" in x for x in check(bad, "upload_page.py"))
+
+
+def test_scan_skips_work_dir():
+    """规则 18：扫描必须跳过工作目录子树。"""
+    p = ROOT / "app" / "domain" / "archive_scan.py"
+    assert not any("扫描工作目录" in x for x in lint_patterns.check_file(p))
+
+    bad = ('def scan_folder(root):\n'
+           '    for dirpath, dirnames, files in os.walk(root):\n'
+           '        pass\n')
+    assert any("扫描工作目录" in x for x in check(bad, "archive_scan.py"))
+
+
 def test_build_collect_all_enforced():
     p = ROOT / "scripts" / "build.py"
     problems = lint_patterns.check_file(p)

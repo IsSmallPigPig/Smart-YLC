@@ -159,7 +159,7 @@ class ArchivePreviewView(FluentPage):
         self.abnormal_btn = PushButton(FIF.INFO, "存在异常", self)
         self.abnormal_btn.setCheckable(True)
         self.abnormal_btn.clicked.connect(self._toggle_abnormal)
-        set_tip(self.abnormal_btn, "标记异常：档案移入「异常档案」子文件夹，不参与上传；再点一次移回原处")
+        set_tip(self.abnormal_btn, "标记异常：把「压缩」里的副本挪到工作目录的「异常」，不再上传；再点一次移回，原件始终不动")
         head.addWidget(self.abnormal_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addLayout(head)
 
@@ -265,7 +265,7 @@ class ArchivePreviewView(FluentPage):
         else:
             details = "；".join(f"第{i.page}页 {i.detail}" for i in exam.blocking_issues)
             self.exam_label.setText(f"存在 {len(exam.blocking_issues)} 处异常：{details}")
-            # 异常档案默认标记不上传，用户仍可手动取消
+            # 结构异常默认标记不上传，用户仍可手动取消
             self._set_abnormal(True)
 
     def _start_cell_check(self):
@@ -537,7 +537,7 @@ class ArchivePreviewView(FluentPage):
                 thread.wait(2500)
 
     def retarget(self, path: str):
-        """标记异常会把档案搬进「异常档案」文件夹：路径跟着换，页面不用重渲染。"""
+        """改指向另一份文件（原件永不移动，正常浏览路径不变）。"""
         self.path = path
 
     @property

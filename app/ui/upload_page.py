@@ -15,8 +15,6 @@
 from __future__ import annotations
 
 import os
-import shutil
-import tempfile
 
 from PyQt5.QtCore import QRectF, Qt, QThread, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
@@ -35,10 +33,11 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
-from app.constants import LIMITS, MB
+from app.constants import LIMITS
+from app.domain import work_area
 from app.domain.account_health import excluded_summary, split_accounts
-from app.domain.archive_scan import (FolderScan, abnormal_target, is_abnormal_path,
-                                     normal_target, relative_to, scan_folders)
+from app.domain.archive_scan import (ABNORMAL_DIR_NAME as LEGACY_ABNORMAL_DIR,
+                                     FolderScan, relative_to, scan_folders)
 from app.domain.naming import analyze_file_name
 from app.domain.upload_inspect import (archived_index, group_by_branch, inspect,
                                        member_index,
@@ -212,6 +211,7 @@ class ScanWorker(QThread):
 
     done = Signal(object, object)   # scans, statuses
     failed = Signal(str)
+    stage = Signal(str)             # 检查阶段进度文案（压缩中…）
 
     def __init__(self, dirs: list[str], expected_pages: int, accounts: list[dict],
                  roster, members: dict | None = None, archived: dict | None = None):
@@ -225,6 +225,8 @@ class ScanWorker(QThread):
 
     def run(self):
         try:
+            from app.services import prepare
+
             scans = scan_folders(self.dirs)
             roots: dict[str, str] = {}
             files: list[str] = []
@@ -237,9 +239,19 @@ class ScanWorker(QThread):
                 path = entry.get("path", "")
                 if path and os.path.isfile(path) and path not in roots:
                     files.append(path)
+            # 一、命名 + 页数（原件只读，命名不合规就地改名沿用既有行为）
             statuses = inspect(files, self.expected_pages, self.accounts, self.roster,
                                members=self.members, archived=self.archived,
                                roots=roots)
+            # 二、压缩：通过命名/页数的档案生成副本落到「工作目录/压缩」。
+            # inspect 可能已改名，FileStatus.root 才是可靠的来源目录。
+            roots = {s.path: s.root for s in statuses}
+
+            def on_progress(done, total):
+                self.stage.emit(f"压缩工作副本 {done}/{total}")
+
+            prepare.prepare_all(statuses, roots, progress=on_progress)
+            self.stage.emit("")
             self.done.emit(scans, statuses)
         except Exception as e:  # 整体失败要显式报出来，不静默留空列表
             self.failed.emit(str(e))
@@ -301,27 +313,6 @@ class UploadWorker(QThread):
             return {}
         return {(m.name, m.mobile): m for m in members}
 
-    def _compress(self, job: dict, tmpdir: str, seq: int) -> str | None:
-        """超过目标大小的压到临时副本；返回上传用路径，失败返回 None。"""
-        path = job["path"]
-        if os.path.getsize(path) <= self.target:
-            return path
-        from app.services.compress import compress_pdf
-
-        # seq 保证同名档案各有各的临时副本，并发压缩不会互相覆盖
-        tmp = os.path.join(tmpdir, f"{seq}_{os.path.basename(path)}")
-        try:
-            result = compress_pdf(path, tmp, self.target)
-        except Exception as e:
-            self.row_ready.emit(job["account"], path, "失败", f"压缩失败：{e}")
-            return None
-        if result.get("over"):
-            self.row_ready.emit(
-                job["account"], path, "失败",
-                f"压到最低参数仍 {result['dst_size'] / MB:.1f}MB，超过站点限制")
-            return None
-        return tmp
-
     def _upload_account(self, account: str, jobs: list[dict]) -> dict[str, int]:
         """提交一个支部的全部档案，返回这一步的计数。
 
@@ -346,7 +337,8 @@ class UploadWorker(QThread):
         for job in jobs:
             if self._stop:
                 break
-            path = job["path"]
+            path = job.get("display", job["path"])   # 界面回传键：原件路径
+            upload_path = job["path"]                # 上传源：压缩副本
             name = os.path.basename(path)
             analysis = analyze_file_name(name)
             member = member_map.get(analysis.parsed) if analysis.parsed else None
@@ -359,7 +351,7 @@ class UploadWorker(QThread):
                     continue
 
             self.stage.emit(f"上传 {name} 到 {account}")
-            result = client.upload_file(job["upload_path"])
+            result = client.upload_file(upload_path)
             if not result.ok:
                 self.row_ready.emit(account, path, "失败", result.message)
                 continue
@@ -386,68 +378,35 @@ class UploadWorker(QThread):
 
         total = len(self.jobs)
         summary = {"ok": 0, "skipped": 0, "audit_ok": 0, "audit_manual": 0}
-        tmpdir = tempfile.mkdtemp(prefix="gd-upload-")
-        try:
-            # 一、压缩：超过目标体积的才压，几份之间互不依赖，并行处理
-            prepared: list[dict] = []
-            if self.jobs:
-                workers = _worker_count(3)
-                done = 0
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {pool.submit(self._compress, job, tmpdir, index): (index, job)
-                               for index, job in enumerate(self.jobs)}
-                    for future in as_completed(futures):
-                        index, job = futures[future]
-                        done += 1
-                        self.stage.emit(
-                            f"压缩 {done}/{total}：{os.path.basename(job['path'])}")
-                        if self._stop:
-                            continue
-                        try:
-                            upload_path = future.result()
-                        except Exception as exc:      # noqa: BLE001
-                            self.row_ready.emit(job["account"], job["path"], "失败",
-                                                f"压缩失败：{exc}")
-                            continue
-                        if upload_path is not None:
-                            prepared.append({"path": job["path"],
-                                             "account": job["account"],
-                                             "upload_path": upload_path,
-                                             "order": index})
-            if self._stop:
-                self.all_done.emit(0, 0, total, 0, 0)
-                return
+        if self._stop:
+            self.all_done.emit(0, 0, total, 0, 0)
+            return
 
-            # 压缩是并发的，回来的顺序不是用户看到的顺序：按原始次序重排，
-            # 同一支部内部仍按列表中的先后提交
-            prepared.sort(key=lambda item: item["order"])
+        # 压缩已在预检查阶段完成并落盘（工作目录/压缩），这里直接提交副本。
+        # 支部之间并发（每个支部一套独立会话），支部内部串行。
+        groups: dict[str, list[dict]] = {}
+        for job in self.jobs:
+            groups.setdefault(job["account"], []).append(job)
 
-            # 二、按支部提交：支部之间并发（每个支部一套独立会话），支部内部串行
-            groups: dict[str, list[dict]] = {}
-            for job in prepared:
-                groups.setdefault(job["account"], []).append(job)
-
-            if groups:
-                workers = min(3, len(groups))
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {}
-                    for account, jobs in groups.items():
-                        self.stage.emit(f"提交 {account}（{len(jobs)} 份）")
-                        futures[pool.submit(self._upload_account, account, jobs)] = account
-                    for future in as_completed(futures):
-                        account = futures[future]
-                        self.stage.emit(f"{account} 已提交")
-                        try:
-                            counts = future.result()
-                        except Exception as exc:      # noqa: BLE001
-                            for job in groups[account]:
-                                self.row_ready.emit(account, job["path"], "失败",
-                                                    f"提交失败：{exc}")
-                            continue
-                        for key in summary:
-                            summary[key] += counts[key]
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+        if groups:
+            workers = min(3, len(groups))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {}
+                for account, jobs in groups.items():
+                    self.stage.emit(f"提交 {account}（{len(jobs)} 份）")
+                    futures[pool.submit(self._upload_account, account, jobs)] = account
+                for future in as_completed(futures):
+                    account = futures[future]
+                    self.stage.emit(f"{account} 已提交")
+                    try:
+                        counts = future.result()
+                    except Exception as exc:      # noqa: BLE001
+                        for job in groups[account]:
+                            self.row_ready.emit(account, job.get("display", job["path"]),
+                                                "失败", f"提交失败：{exc}")
+                        continue
+                    for key in summary:
+                        summary[key] += counts[key]
         self.all_done.emit(summary["ok"], summary["skipped"], total,
                            summary["audit_ok"], summary["audit_manual"])
 
@@ -833,6 +792,7 @@ class UploadPage(FluentPage):
         worker.done.connect(
             lambda scans, statuses, w=worker: self._on_inspected(w, scans, statuses))
         worker.failed.connect(lambda msg, w=worker: self._on_inspect_failed(w, msg))
+        worker.stage.connect(self._set_status)
         worker.start()
 
     def _on_inspected(self, worker, scans, statuses):
@@ -904,11 +864,22 @@ class UploadPage(FluentPage):
         self._start_cell_check()
 
     def _sync_abnormal(self, statuses):
-        """异常以磁盘位置为准：「异常档案」文件夹里的一律算异常。
+        """异常以磁盘位置为准：工作目录/异常 里的副本对应原件算异常。
 
-        标记异常会把文件移进去，所以每次扫描都按路径重建；移动失败（只读盘等）
-        时退回内存标记，这里把还存在的旧路径保留下来，别被重扫冲掉。"""
-        auto = {str(s.path) for s in statuses if is_abnormal_path(str(s.path))}
+        标记异常会把副本挪进异常区，所以每次扫描按异常区倒推原件路径重建；
+        移动失败（只读盘等）时退回内存标记，把还存在的旧路径保留下来。
+        兼容升级前旧「异常档案」目录里的档案。"""
+        from app.services import prepare
+
+        roots = {str(s.path): s.root for s in statuses}
+        auto = prepare.abnormal_originals(roots)
+        for s in statuses:
+            # 副本落在异常区就算异常（覆盖原件改名后按路径倒推失配的情况）
+            if s.work_path and work_area.is_abnormal_copy(s.work_path):
+                auto.add(str(s.path))
+            # 旧目录就地异常：路径本身带「异常档案」的也算
+            if LEGACY_ABNORMAL_DIR in os.path.normpath(str(s.path)).split(os.sep):
+                auto.add(str(s.path))
         keep = {p for p in self._abnormal_paths if os.path.isfile(p)}
         self._abnormal_paths = auto | keep
 
@@ -1029,14 +1000,25 @@ class UploadPage(FluentPage):
         同一份档案按 (路径, 修改时间) 缓存，没改过就跳过。"""
         from app.services.form_cells import check as check_cells
 
-        paths = [str(s.path) for s in self.statuses
-                 if self._cell_key(str(s.path)) not in self._cell_cache]
-        if not paths:
+        # 空格从压缩副本上查（与上传同一份文件）；结果仍按原件路径回填给界面。
+        # 异常副本、未生成副本的档案不查——它们不参与上传。
+        targets: list[tuple[str, str]] = []   # (原件路径, 副本路径)
+        for s in self.statuses:
+            original = str(s.path)
+            copy = s.work_path
+            if not copy or not os.path.isfile(copy):
+                continue
+            if work_area.is_abnormal_copy(copy):
+                continue
+            if self._cell_key(copy) not in self._cell_cache:
+                targets.append((original, copy))
+        if not targets:
             return
         if self._cell_worker is not None and self._cell_worker.isRunning():
             return
 
-        self._cell_total = len(paths)
+        self._cell_targets = {original: copy for original, copy in targets}
+        self._cell_total = len(targets)
         self._cell_done = 0
         self._cell_skipped = 0
         self._cell_skip_reason = ""
@@ -1045,7 +1027,7 @@ class UploadPage(FluentPage):
         self._cell_toast.show()
 
         class _Worker(QThread):
-            one = Signal(str, int, str)   # path, 空格数（-1=没查成）, 跳过原因
+            one = Signal(str, int, str)   # 原件路径, 空格数（-1=没查成）, 跳过原因
             finished_all = Signal()
 
             def run(inner):
@@ -1055,16 +1037,17 @@ class UploadPage(FluentPage):
 
                 workers = _worker_count(4)
                 with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {pool.submit(check_cells, p): p for p in paths}
+                    futures = {pool.submit(check_cells, copy): original
+                               for original, copy in targets}
                     for future in as_completed(futures):
-                        path = futures[future]
+                        original = futures[future]
                         try:
                             result = future.result()
                             count = -1 if result.skipped else len(result.blanks)
                             reason = result.skipped
                         except Exception as exc:   # noqa: BLE001 - 单份失败不拖垮整批
                             count, reason = -1, str(exc)
-                        inner.one.emit(path, count, reason)
+                        inner.one.emit(original, count, reason)
                 inner.finished_all.emit()
 
         worker = _Worker(self)
@@ -1076,7 +1059,8 @@ class UploadPage(FluentPage):
     def _on_cell_count(self, path: str, count: int, reason: str = ""):
         if count >= 0:
             self._cell_counts[path] = count
-            self._cell_cache[self._cell_key(path)] = count
+            copy = (getattr(self, "_cell_targets", {}) or {}).get(path, path)
+            self._cell_cache[self._cell_key(copy)] = count
         else:
             self._cell_skipped += 1
             self._cell_skip_reason = reason or self._cell_skip_reason
@@ -1182,12 +1166,20 @@ class UploadPage(FluentPage):
             "ignoredBlanks", sorted(self._ignored_blanks)))
         self._rebuild_branches()
 
-    def _mark_abnormal(self, path: str, bad: bool):
-        """标记/取消异常：文件跟着搬进或搬出「异常档案」子文件夹。
+    def _work_path_of(self, path: str) -> str:
+        """原件路径 → 工作副本路径。原件永不移动，标记异常搬的是副本。"""
+        for s in getattr(self, "statuses", []) or []:
+            if str(s.path) == path:
+                return s.work_path
+        return ""
 
-        异常状态不另存清单——文件夹就是清单：拷走来源目录、换电脑都带着走，
-        扫描时该文件夹下的一律归入异常。"""
-        if bad == is_abnormal_path(path):
+    def _mark_abnormal(self, path: str, bad: bool):
+        """标记/取消异常：把工作副本在工作目录的 压缩↔异常 之间搬运。
+
+        原件始终留在来源目录不动；异常状态不另存清单，副本所在的文件夹就是
+        清单——拷走来源目录、换电脑都带着走，刷新时按异常区倒推重建。
+        """
+        if bad == (path in self._abnormal_paths):
             return
         target = self._relocate(path, bad)
         if target is None:
@@ -1198,25 +1190,43 @@ class UploadPage(FluentPage):
                 self._abnormal_paths.discard(path)
             return
 
-        if self._preview_view is not None and self._preview_view.path == path:
-            self._preview_view.retarget(target)
-        self._cell_counts.pop(path, None)      # 路径变了，旧的空格结果作废
-        InfoBar.success("已移入「异常档案」" if bad else "已移出「异常档案」",
+        if bad:
+            self._abnormal_paths.add(path)
+        else:
+            self._abnormal_paths.discard(path)
+        self._cell_counts.pop(path, None)      # 状态变了，旧的空格结果作废
+        InfoBar.success("已移入「异常」" if bad else "已移出「异常」",
                         os.path.basename(target), duration=3000, parent=self)
         self.refresh()
 
     def _relocate(self, path: str, bad: bool) -> str | None:
-        """把档案搬进/搬出「异常档案」；返回新路径，失败提示并返回 None。"""
+        """把工作副本搬进「异常」或搬回「压缩」；返回新路径，失败返回 None。
+
+        原件永远不动。目标落点直接由原件路径算出，与副本当前在哪无关——
+        这样即使上次移动失败留下半截状态，这次也能纠正到正确的一侧。
+        """
         import shutil
 
-        target = abnormal_target(path) if bad else normal_target(path)
+        status = next((s for s in (getattr(self, "statuses", []) or [])
+                       if str(s.path) == path), None)
+        root = (status.root if status else "") or os.path.dirname(path)
+        target = work_area.copy_target(root, path, abnormal=bad)
+        copy = status.work_path if status is not None else ""
+
         try:
             os.makedirs(os.path.dirname(target), exist_ok=True)
-            shutil.move(path, target)
+            if copy and os.path.isfile(copy):
+                if os.path.abspath(copy) != os.path.abspath(target):
+                    shutil.move(copy, target)
+            else:
+                # 还没有副本（上次压缩失败）：从原件复制一份到目标区
+                shutil.copyfile(path, target)
         except OSError as exc:
             InfoBar.error("移动失败", f"{os.path.basename(path)}：{exc}",
                           duration=6000, parent=self)
             return None
+        if status is not None:
+            status.work_path = target
         return target
 
     def _row_item(self, status) -> dict:
@@ -1332,10 +1342,12 @@ class UploadPage(FluentPage):
 
     def _start_upload(self):
         usable = [s for s in self.statuses
-                  if s.usable and str(s.path) not in self._abnormal_paths]
+                  if s.usable and str(s.path) not in self._abnormal_paths
+                  and s.work_path and os.path.isfile(s.work_path)
+                  and not work_area.is_abnormal_copy(s.work_path)]
         skipped = len([s for s in self.statuses if s.usable]) - len(usable)
         if skipped:
-            InfoBar.info("已跳过异常档案", f"{skipped} 份被标记为异常，未加入本次上传",
+            InfoBar.info("已跳过异常档案", f"{skipped} 份被标记为异常或压缩未达标，未加入本次上传",
                          duration=4000, parent=self)
         if not usable:
             InfoBar.warning("没有可上传档案", "先处理状态列表里的异常文件",
@@ -1348,7 +1360,9 @@ class UploadPage(FluentPage):
                             duration=6000, parent=self)
         creds = {a["userName"]: a.get("password", "")
                  for a in accounts if a.get("password")}
-        jobs = [{"path": s.path, "account": s.account}
+        jobs = [{"path": s.work_path or s.path,   # 上传源：压缩副本（缺失时退回原件）
+                 "display": s.path,               # 界面回传键：原件
+                 "account": s.account}
                 for s in usable if s.account in creds]
         missing = sum(1 for s in usable if s.account not in creds)
         if missing:
