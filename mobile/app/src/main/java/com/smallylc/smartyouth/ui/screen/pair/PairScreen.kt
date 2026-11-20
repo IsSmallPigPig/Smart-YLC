@@ -7,6 +7,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -49,6 +51,8 @@ import androidx.core.content.ContextCompat
 import com.smallylc.smartyouth.scan.DocStore
 import com.smallylc.smartyouth.scan.QrAnalyzer
 import com.smallylc.smartyouth.data.CloudSync
+import com.smallylc.smartyouth.site.DiscoveredPeer
+import com.smallylc.smartyouth.site.LanDiscovery
 import com.smallylc.smartyouth.site.PairClient
 import com.smallylc.smartyouth.site.RelayClient
 import com.smallylc.smartyouth.ui.component.CardGap
@@ -59,6 +63,7 @@ import com.smallylc.smartyouth.ui.theme.LocalEnableBlur
 import com.smallylc.smartyouth.ui.util.BlurredBar
 import com.smallylc.smartyouth.ui.util.rememberBlurBackdrop
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Button
@@ -106,6 +111,19 @@ fun PairScreen(
     var total by remember { mutableIntStateOf(0) }
     var doneCount by remember { mutableIntStateOf(0) }
     val results = remember { mutableStateListOf<Pair<String, Boolean>>() }
+    var peers by remember { mutableStateOf<List<DiscoveredPeer>>(emptyList()) }
+    var discovering by remember { mutableStateOf(false) }
+
+    // 停在扫码页就持续找：电脑可能刚点「开始接收」，也可能比手机晚几秒才上线
+    LaunchedEffect(step) {
+        if (step != PairStep.Scan) return@LaunchedEffect
+        while (true) {
+            discovering = true
+            peers = withContext(Dispatchers.IO) { LanDiscovery.scan() }
+            discovering = false
+            delay(4000)
+        }
+    }
 
     fun connect(client: PairClient) {
         if (busy) return
@@ -225,6 +243,44 @@ fun PairScreen(
         ) {
             when (step) {
                 PairStep.Scan -> {
+                    item {
+                        Card(Modifier.fillMaxWidth().padding(12.dp)) {
+                            Column(Modifier.padding(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("附近的电脑", fontSize = 16.sp)
+                                    Spacer(Modifier.weight(1f))
+                                    if (discovering && peers.isEmpty()) MutedText("正在查找")
+                                }
+                                if (peers.isEmpty()) {
+                                    MutedText(
+                                        "没发现同一 Wi-Fi 下的电脑",
+                                        Modifier.padding(top = 8.dp),
+                                    )
+                                }
+                                peers.forEach { peer ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable(enabled = !busy) {
+                                                connect(peer.client(configCode.trim().uppercase()))
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(peer.name, fontSize = 15.sp)
+                                            MutedText(peer.host)
+                                        }
+                                        Text("连接", fontSize = 14.sp, color = colorScheme.primary)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     item {
                         Card(Modifier.fillMaxWidth().padding(12.dp)) {
                             Column(Modifier.padding(14.dp)) {
