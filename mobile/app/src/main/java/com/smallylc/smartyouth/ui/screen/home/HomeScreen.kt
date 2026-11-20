@@ -90,7 +90,24 @@ fun HomeScreen(
     val barColor = if (backdrop != null) Color.Transparent else colorScheme.surface
 
     Scaffold(
-        topBar = {},
+        topBar = {
+            BlurredBar(backdrop) {
+                TopAppBar(
+                    title = "智慧团委",
+                    color = barColor,
+                    scrollBehavior = scrollBehavior,
+                    actions = {
+                        IconButton(onClick = onSync, enabled = loggedIn && !syncing) {
+                            Icon(
+                                imageVector = MiuixIcons.Refresh,
+                                contentDescription = "同步名单",
+                                tint = colorScheme.onBackground,
+                            )
+                        }
+                    },
+                )
+            }
+        },
         popupHost = { },
         contentWindowInsets = WindowInsets.systemBars.add(WindowInsets.displayCutout)
             .only(WindowInsetsSides.Horizontal),
@@ -106,29 +123,7 @@ fun HomeScreen(
             contentPadding = innerPadding,
             overscrollEffect = null,
         ) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp, bottom = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "智慧团委",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colorScheme.onBackground,
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconButton(onClick = onSync, enabled = loggedIn && !syncing) {
-                        Icon(
-                            imageVector = MiuixIcons.Refresh,
-                            contentDescription = "同步名单",
-                            tint = colorScheme.onBackground,
-                        )
-                    }
-                }
-            }
+            item { Spacer(Modifier.height(8.dp)) }
 
             item { StatusHero(loggedIn = loggedIn, userName = userName, siteDown = siteDown) }
 

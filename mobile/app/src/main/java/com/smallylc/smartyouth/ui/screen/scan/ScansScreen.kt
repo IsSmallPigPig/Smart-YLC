@@ -1,5 +1,16 @@
 package com.smallylc.smartyouth.ui.screen.scan
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
+import com.smallylc.smartyouth.scan.PdfPages
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -67,6 +78,7 @@ fun ScansScreen(
 ) {
     var docs by remember { mutableStateOf(DocStore.list()) }
     var pendingDelete by remember { mutableStateOf<DocStore.SavedDoc?>(null) }
+    var previewing by remember { mutableStateOf<DocStore.SavedDoc?>(null) }
     val scrollBehavior = MiuixScrollBehavior()
     val backdrop = rememberBlurBackdrop(LocalEnableBlur.current)
     val barColor = if (backdrop != null) Color.Transparent else colorScheme.surface
@@ -138,7 +150,7 @@ fun ScansScreen(
                 items(docs, key = { it.file.absolutePath }) { doc ->
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        onClick = { DocStore.open(doc) },
+                        onClick = { previewing = doc },
                     ) {
                         Row(
                             modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
@@ -181,6 +193,10 @@ fun ScansScreen(
         }
     }
 
+    previewing?.let { doc ->
+        DocPreviewDialog(doc = doc, onDismiss = { previewing = null })
+    }
+
     pendingDelete?.let { doc ->
         OverlayDialog(
             show = true,
@@ -212,3 +228,61 @@ fun ScansScreen(
 
 private fun formatDate(ts: Long): String =
     SimpleDateFormat("M月d日 HH:mm", Locale.CHINA).format(Date(ts))
+
+/** 已保存扫描件的应用内预览：先看页面列表，点某一页放大。 */
+@Composable
+private fun DocPreviewDialog(doc: DocStore.SavedDoc, onDismiss: () -> Unit) {
+    var pageCount by remember(doc.file) { mutableStateOf(0) }
+    var zoom by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(doc.file) {
+        pageCount = withContext(Dispatchers.IO) { PdfPages.count(doc.file) }
+    }
+
+    OverlayDialog(
+        show = true,
+        title = doc.name,
+        summary = if (zoom == null) "$pageCount 页" else "第 ${(zoom ?: 0) + 1} 页",
+        onDismissRequest = { if (zoom != null) zoom = null else onDismiss() },
+        content = {
+            Column {
+                if (zoom == null) {
+                    LazyColumn(Modifier.fillMaxWidth().height(440.dp)) {
+                        items(pageCount) { index ->
+                            PdfPageImage(doc.file, index, 700) { zoom = index }
+                        }
+                    }
+                } else {
+                    PdfPageImage(doc.file, zoom ?: 0, 1200, onClick = null)
+                    TextButton(
+                        text = "返回",
+                        onClick = { zoom = null },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun PdfPageImage(
+    file: java.io.File,
+    index: Int,
+    width: Int,
+    onClick: (() -> Unit)?,
+) {
+    val rendered by produceState<android.graphics.Bitmap?>(null, file, index) {
+        value = withContext(Dispatchers.IO) { PdfPages.render(file, index, width) }
+    }
+    val bitmap = rendered ?: return
+    Image(
+        bitmap = bitmap.asImageBitmap(),
+        contentDescription = "第 ${index + 1} 页",
+        contentScale = ContentScale.FillWidth,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
+    )
+}

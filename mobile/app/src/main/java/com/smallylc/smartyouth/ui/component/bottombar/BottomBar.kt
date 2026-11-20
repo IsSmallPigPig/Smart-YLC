@@ -5,6 +5,9 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Box
@@ -181,6 +184,16 @@ fun BottomBar(
                 items.forEachIndexed { index, destination ->
                     val selected = mainState.selectedPage == index
                     val interaction = remember { MutableInteractionSource() }
+                    val fill by animateFloatAsState(
+                        targetValue = if (selected) 1f else 0f,
+                        animationSpec = tween(220),
+                        label = "tabFill",
+                    )
+                    val fg by animateColorAsState(
+                        targetValue = if (selected) colors.onPrimary else colors.onSurfaceVariantActions,
+                        animationSpec = tween(220),
+                        label = "tabFg",
+                    )
                     Box(
                         modifier = Modifier
                             .width(ItemWidth)
@@ -196,7 +209,7 @@ fun BottomBar(
                                 .fillMaxWidth()
                                 .height(ItemHeight)
                                 .clip(RoundedCornerShape(ItemCorner))
-                                .background(if (selected) colors.primary else Color.Transparent),
+                                .background(colors.primary.copy(alpha = fill)),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center,
                         ) {
@@ -204,7 +217,7 @@ fun BottomBar(
                                 Icon(
                                     imageVector = destination.icon,
                                     contentDescription = destination.label,
-                                    tint = if (selected) colors.onPrimary else colors.onSurfaceVariantActions,
+                                    tint = fg,
                                     modifier = Modifier.size(IconSize),
                                 )
                                 if (destination == MainDestination.Messages && unreadCount > 0) {
@@ -223,7 +236,7 @@ fun BottomBar(
                                 text = destination.label,
                                 fontSize = LabelSize,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (selected) colors.onPrimary else colors.onSurfaceVariantActions,
+                                color = fg,
                                 modifier = Modifier.padding(top = 2.dp),
                             )
                         }
