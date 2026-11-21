@@ -7,6 +7,13 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.1.3
+
+- [d4f1d72] refactor: mixin 拆分超长 UI 文件与复杂度热点，codeview 达 100 分
+- [ed649da] refactor: 降低 codeview 复杂度与超长文件，补全静默失败诊断
+
+@IsSmallPigPig
+
 ## v1.1.2
 
 - [63c850d] fix: 修复手机同步线程模型与多处静默失败
