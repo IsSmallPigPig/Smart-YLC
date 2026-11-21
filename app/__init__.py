@@ -1,4 +1,4 @@
-__version__ = "1.1.4"
+__version__ = "1.2.0"
 
 # 构建目标：打包时由 scripts/build.py 写成 app/_build_target.py（不进仓库）。
 # 源码运行时没有这个文件，两个值为空，更新器退回按运行时系统推断。

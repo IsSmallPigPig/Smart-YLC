@@ -7,6 +7,36 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.2.0
+
+- [675dba7] fix(mobile): 更新检查取 100 条 release，避免手机版被桌面版本挤出窗口
+- [883d281] feat(mobile): GitHub 更新检查、云端多配置与档案查看
+- [76f06a6] fix(mobile-v2): 旋转后四角顺序重排，框与图不再错位
+- [b2336ce] fix(mobile-v2): 底栏指示胶囊居中，裁剪不再外扩，预览提清晰度
+- [211a91c] fix(mobile-v2): 照片按 EXIF 自动摆正，修旋转闪退与预览不一致
+- [997621e] feat(mobile-v2): 底栏改回标准贴底样式，修旋转后图片不刷新
+- [2c58f87] fix(mobile-v2): 提高纸边检出率与贴合度
+- [8402451] fix(mobile-v2): 重写纸边检测，改用色度通道与纹理平坦度分割
+- [c502fee] feat(mobile-v2): 底栏过渡动画、标题对齐名单页、扫描件应用内预览
+- [4e85eaa] fix(mobile-v2): 标题随列表滚动、选中框圆角同心、增强保留彩色
+- [bac5610] feat(mobile-v2): 取景白框实时贴合纸边，缩略图可点开预览
+- [3eb3a2e] feat(mobile-v2): 拍摄页实时识别与平铺预览，首页顶栏与底栏对齐参考
+- [6c03f7f] fix(mobile-v2): 补回主卡标志，固定卡片底色，底栏加宽上移
+- [ddd4d06] feat(mobile): 局域网自动发现电脑，配对页按卡片列出
+- [82cbe11] feat(mobile-v2): 站点维护状态独立，首页按参考版式重做
+- [40102aa] feat(mobile-v2): 账号统一进管理页切换
+- [8585eca] feat(mobile-v2): 登录页可直接选择已保存账号
+- [32830d3] feat(mobile-v2): 局域网不通时自动走中转站
+- [190cb05] feat(mobile-v2): 云端同步配置，修登录页控件过密
+- [4471c64] feat(mobile-v2): 补设计规范并按规范校正界面
+- [49e00b5] feat(mobile-v2): 实现电脑配对传输（协议 v1）
+- [baf0e2b] feat(mobile-v2): 底栏改为 Classy 风格悬浮胶囊
+- [e33f817] feat(lint): anti-slop 书写规则覆盖 Kotlin 与 Python
+- [903a903] feat(mobile-v2): 平板宽屏改用 Miuix 侧边导航
+- [b29d015] feat(mobile-v2): 用 Miuix 模板重建原生手机端
+
+@IsSmallPigPig @AnkoQAQ
+
 ## v1.1.4
 
 - [a62b302] fix: 修复 Win11 实测暴露的材质、单实例、路径与线程收尾问题
