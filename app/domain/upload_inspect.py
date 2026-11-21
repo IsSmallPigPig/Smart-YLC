@@ -156,6 +156,46 @@ def cached_page_counter():
     return count
 
 
+def _apply_route(statuses: list[FileStatus], targets, branch_of: dict) -> None:
+    """把路由结果写回状态；路由失败要清掉 account，但保留已改名标记。"""
+    for status, target in zip(statuses, targets):
+        status.account = target.account or ""
+        status.branch = branch_of.get(target.account, "")  # 用清空前的 account
+        if target.problem:
+            status.account = ""
+            if not status.problem:
+                status.problem = target.problem
+            if status.naming != "fixed":
+                status.naming = "error"
+
+
+def _mark_archived(statuses: list[FileStatus], archived: dict, parsed: dict) -> None:
+    """已审核通过的团员标为已有档案；缺.account/缺名单的跳过。"""
+    for status in statuses:
+        table = archived.get(status.account) if status.account else None
+        pair = parsed.get(status.name)
+        if not table or not pair or not status.account:
+            continue
+        if (pair[0].strip(), pair[1].strip()) in table:
+            status.archive = True
+            status.member = "ok"
+            status.notice = ARCHIVED
+
+
+def _mark_members(statuses: list[FileStatus], members: dict, parsed: dict) -> None:
+    """支部团员核对：缺人只写提示、不拦上传；已有档案的不再关心。"""
+    for status in statuses:
+        table = members.get(status.account) if status.account else None
+        pair = parsed.get(status.name)
+        if not table or not pair:
+            continue
+        if status.archive:
+            continue
+        status.member = "ok" if (pair[0].strip(), pair[1].strip()) in table else "missing"
+        if status.member == "missing":
+            status.notice = MEMBER_MISSING
+
+
 def inspect(files, expected_pages: int, accounts: list[dict], roster,
             auto_fix: bool = True, counter=None,
             members: dict[str, set[tuple[str, str]]] | None = None,
@@ -212,39 +252,13 @@ def inspect(files, expected_pages: int, accounts: list[dict], roster,
         [s.name for s in statuses], parsed,
         [a.get("userName", "") for a in accounts], roster_class_lookup(roster))
 
-    for status, target in zip(statuses, targets):
-        status.account = target.account or ""
-        status.branch = branch_of.get(target.account, "")
-        if target.problem:
-            status.account = ""
-            if not status.problem:
-                status.problem = target.problem
-            if status.naming != "fixed":
-                status.naming = "error"
+    _apply_route(statuses, targets, branch_of)
 
     # 支部团员核对放在最后：只对已路由到支部的文件查，缺人不拦上传
     if archived:
-        for status in statuses:
-            table = archived.get(status.account) if status.account else None
-            pair = parsed.get(status.name)
-            if not table or not pair or not status.account:
-                continue
-            if (pair[0].strip(), pair[1].strip()) in table:
-                status.archive = True
-                status.member = "ok"
-                status.notice = ARCHIVED
-
+        _mark_archived(statuses, archived, parsed)
     if members:
-        for status in statuses:
-            table = members.get(status.account) if status.account else None
-            pair = parsed.get(status.name)
-            if not table or not pair:
-                continue
-            if status.archive:      # 已有档案的文件不再关心缺不缺团员
-                continue
-            status.member = "ok" if (pair[0].strip(), pair[1].strip()) in table else "missing"
-            if status.member == "missing":
-                status.notice = MEMBER_MISSING
+        _mark_members(statuses, members, parsed)
 
     mark_duplicates(statuses)
     return statuses

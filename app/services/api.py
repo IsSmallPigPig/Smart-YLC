@@ -36,6 +36,8 @@ from app.domain.login_protocol import (
 )
 
 DEFAULT_TIMEOUT = 20
+# 分片上传：单片可能几 MB，站点落盘慢，超时单独放宽，不能共用查询的 20s
+UPLOAD_TIMEOUT = 120
 
 
 @dataclass
@@ -93,8 +95,11 @@ class SiteClient:
             )
             if resp.ok and resp.headers.get("content-type", "").startswith("image"):
                 return resp.content
-        except requests.RequestException:
-            pass
+        except requests.RequestException as e:
+            # 验证码取不到是有意的降级路径（调用方走手输），但要有日志可排查
+            from app.services import app_log
+
+            app_log.warning("获取验证码失败：%s", e)
         return None
 
     def session_account(self) -> ApiResult:
@@ -261,7 +266,7 @@ class SiteClient:
                 try:
                     resp = self.http.post(
                         API_BASE_URL + "/file/breakpoint-upload",
-                        data=fields, files=files, timeout=120,
+                        data=fields, files=files, timeout=UPLOAD_TIMEOUT,
                     )
                     resp.raise_for_status()
                     try:

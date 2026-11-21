@@ -174,3 +174,44 @@ def member_kinds(members: list[MemberRecord],
                  results: list[CheckResult]) -> dict[str, int]:
     """四类异常各自的人数（与 summarize_members 同口径，供卡片直接取）。"""
     return summarize_members(members, results).by_kind
+
+
+def aggregate_org_stats(cache: dict) -> dict:
+    """把整份 orgStatsCache 汇总成页面要的数字与名单。
+
+    从 org_page._aggregate 提出来的纯函数：只读 cache，不碰任何 UI 状态。
+    「恢复上次结果」和「后台离线重算」共用这一份口径——重算只覆盖本次
+    同步到的支部，其余支部的数字照样在总量里（所以必须聚合整份 cache）。
+    """
+    total = uploaded = 0
+    by_kind = {"identity": 0, "report": 0, "archive": 0, "fees": 0}
+    rows: list[ErrorMemberRow] = []
+    applied = succeeded = pending = returned = 0
+    amount = 0.0
+    names: list[str] = []
+    updated = ""
+    # 辅助指标：手机号重复、电子团员证未采集、欠缴月数、最长欠缴
+    extras = {"dupMobile": 0, "ecardMissing": 0, "unpaidMonths": 0,
+              "oldestUnpaid": 0}
+    for entry in (cache or {}).values():
+        total += int(entry.get("total") or 0)
+        uploaded += int(entry.get("uploaded") or 0)
+        for k, v in (entry.get("by_kind") or {}).items():
+            if k in by_kind:
+                by_kind[k] += int(v or 0)
+        rows.extend(ErrorMemberRow(**r) for r in entry.get("error_rows") or [])
+        amount += float(entry.get("unpaidAmount") or 0)
+        extra = entry.get("extras") or {}
+        for key in extras:
+            extras[key] += int(extra.get(key) or 0)
+        t = entry.get("transfer") or {}
+        applied += int(t.get("applied") or 0)
+        succeeded += int(t.get("succeeded") or 0)
+        pending += int(t.get("pending") or 0)
+        returned += int(t.get("returned") or 0)
+        names.extend(t.get("names") or [])
+        updated = max(updated, str(entry.get("updatedAt") or ""))
+    return {"total": total, "uploaded": uploaded, "by_kind": by_kind, "rows": rows,
+            "applied": applied, "succeeded": succeeded, "pending": pending,
+            "returned": returned, "names": names, "updated": updated,
+            "unpaid_amount": round(amount, 2), "extras": extras}

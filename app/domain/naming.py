@@ -81,22 +81,22 @@ def analyze_file_name(original_name: str, allow_alternate_separator: bool = Fals
     normalized = _normalize_width(base)
     cleaned = SPACE_RE.sub("", normalized)
 
-    if not has_pdf_ext:
-        codes.append("EXT_NOT_PDF")
-        problems.append("不是 .pdf 文件")
-        reasons.append("站点 PC 端只接受 PDF")
-    if base != normalized:
-        codes.append("FULLWIDTH_SEPARATOR")
-        problems.append("使用了全角 ＋ / －")
-        reasons.append("全角符号会导致系统按文件名匹配团员失败")
-    if ILLEGAL_CHARS_RE.search(cleaned):
-        codes.append("ILLEGAL_CHAR")
-        problems.append('含非法字符 \\ / : * ? " < > |')
-        reasons.append("文件名非法字符无法上传")
-    if SPACE_RE.search(base):
-        codes.append("HAS_SPACE")
-        problems.append("含空格")
-        reasons.append("空格会破坏「姓名+手机号+入团志愿书」解析")
+    # 并列的诊断规则：命中就往三个列表各追加一项，顺序即报告里的顺序。
+    # 表驱动只为压缩重复 append，判定表达式与文案逐字保留。
+    static_checks = (
+        (not has_pdf_ext, "EXT_NOT_PDF", "不是 .pdf 文件", "站点 PC 端只接受 PDF"),
+        (base != normalized, "FULLWIDTH_SEPARATOR", "使用了全角 ＋ / －",
+         "全角符号会导致系统按文件名匹配团员失败"),
+        (bool(ILLEGAL_CHARS_RE.search(cleaned)), "ILLEGAL_CHAR",
+         '含非法字符 \\ / : * ? " < > |', "文件名非法字符无法上传"),
+        (bool(SPACE_RE.search(base)), "HAS_SPACE", "含空格",
+         "空格会破坏「姓名+手机号+入团志愿书」解析"),
+    )
+    for hit, code, problem, reason in static_checks:
+        if hit:
+            codes.append(code)
+            problems.append(problem)
+            reasons.append(reason)
 
     plus_parts = cleaned.split("+")
     minus_parts = cleaned.split("-")
@@ -135,18 +135,20 @@ def analyze_file_name(original_name: str, allow_alternate_separator: bool = Fals
         reasons.append("无法解析团员姓名与手机号")
     else:
         name, mobile, suffix = parts
-        if suffix != NAME_SUFFIX:
-            codes.append("SUFFIX_MISMATCH")
-            problems.append("后缀不是「入团志愿书」")
-            reasons.append(f"应为 {NAME_SUFFIX}，实际为「{suffix or '空'}」")
-        if not MOBILE_RE.fullmatch(mobile):
-            codes.append("MOBILE_INVALID")
-            problems.append("手机号不是 11 位有效号码")
-            reasons.append(f"应为 1[3-9] 开头的 11 位数字，实际为「{mobile or '空'}」")
-        if not name or ILLEGAL_CHARS_RE.search(name) or DIGIT_RE.search(name):
-            codes.append("NAME_INVALID")
-            problems.append("姓名段为空或含非法内容")
-            reasons.append("姓名段应为中文姓名，不含数字与符号")
+        part_checks = (
+            (suffix != NAME_SUFFIX, "SUFFIX_MISMATCH", "后缀不是「入团志愿书」",
+             f"应为 {NAME_SUFFIX}，实际为「{suffix or '空'}」"),
+            (not MOBILE_RE.fullmatch(mobile), "MOBILE_INVALID", "手机号不是 11 位有效号码",
+             f"应为 1[3-9] 开头的 11 位数字，实际为「{mobile or '空'}」"),
+            (not name or bool(ILLEGAL_CHARS_RE.search(name)) or bool(DIGIT_RE.search(name)),
+             "NAME_INVALID", "姓名段为空或含非法内容", "姓名段应为中文姓名，不含数字与符号"),
+        )
+        for hit, code, problem, reason in part_checks:
+            if hit:
+                codes.append(code)
+                problems.append(problem)
+                reasons.append(reason)
+        # parsed 的口径与 NAME_INVALID 不同（这里不复查非法字符），是既有行为，保持原样
         if suffix == NAME_SUFFIX and MOBILE_RE.fullmatch(mobile) and name and not DIGIT_RE.search(name):
             parsed = (name, mobile)
 

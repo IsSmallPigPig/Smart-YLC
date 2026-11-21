@@ -203,14 +203,18 @@ class LanShare:
 
         只带配对码，不带提取码——提取码参与云端备份加密，不进入局域网广播；
         配对码本来就在二维码和电脑屏幕上明文显示，可见范围没有变大。
-        端口被占（多开程序）就跳过，扫码路径照常可用。
+        端口被占（多开程序）就跳过，扫码路径照常可用，但要记日志能排查。
         """
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("0.0.0.0", DISCOVERY_PORT))
             sock.settimeout(0.5)
-        except OSError:
+        except OSError as e:
+            from app.services import app_log
+
+            app_log.warning("自动发现端口 %d 绑定失败，手机需用扫码配对：%s",
+                            DISCOVERY_PORT, e)
             return
         self._discovery = sock
         threading.Thread(target=self._serve_discovery, args=(sock, port),
