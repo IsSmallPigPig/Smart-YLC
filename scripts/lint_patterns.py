@@ -301,6 +301,36 @@ def _kt_problems(source: str, rel: str) -> list[str]:
             problems.append(
                 f"{rel}:{line} [分析器每帧重建] setAnalyzer 回调里新建 Analyzer，"
                 "节流与解码状态每帧丢失；把分析器提到 remember 里，只 setAnalyzer(executor, analyzer)")
+
+    # 规则（2026-11-21 旋转闪退）：显示中的位图一旦交给 Compose 状态，
+    # 绘制队列可能还在用；此时 recycle() 会让下一帧直接崩在渲染线程。
+    # 临时位图（source/result/bitmaps 等局部对象）回收是合法的，不在此列。
+    for m in re.finditer(r"\b(?:preview|display\w*|shown|visible)\w*\??\.recycle\(\)", source):
+        line = source.count("\n", 0, m.start()) + 1
+        problems.append(
+            f"{rel}:{line} [显示位图提前回收] 显示中的位图不能 recycle()："
+            "渲染队列仍可能读它，旋转时会闪退；让 Compose 缓存自然释放")
+
+    # 规则（2026-11-21 侧拍照片）：相机 JPEG 带 EXIF 方向，ScanSession 是唯一的
+    # 入库解码点；这里不应用方向，侧拍照片进入裁切时就是歪的。
+    # 已校正图的再次解码（CropEditor）、验证码（LoginScreen）不走这条。
+    if rel.endswith("ScanSession.kt") and re.search(r"BitmapFactory\.decode(File|Stream|ByteArray)", source) \
+            and "ExifInterface" not in source:
+        line = source.count("\n", 0, re.search(r"BitmapFactory\.decode", source).start()) + 1
+        problems.append(
+            f"{rel}:{line} [EXIF 未应用] 相机 JPEG 解码后必须过 ExifInterface 旋转/翻转，"
+            "否则侧拍照片进入裁切时就是歪的")
+
+    # 规则（2026-11-21 旋转后识别框错位）：影响渲染效果的 remember/LaunchedEffect
+    # 若只以页面 id 为 key，旋转后不会重算预览与识别框，框与图错位。
+    if "page.rotation" in source:
+        for m in re.finditer(r"LaunchedEffect\(([^)]*)\)", source):
+            key = m.group(1)
+            if "page.id" in key and "rotation" not in key:
+                line = source.count("\n", 0, m.start()) + 1
+                problems.append(
+                    f"{rel}:{line} [旋转未进 effect key] LaunchedEffect 用了 page.id 但漏了 rotation，"
+                    "点旋转后预览/识别框不重算会错位；key 里补上 page.rotation")
     return problems
 
 
@@ -313,6 +343,44 @@ def check_kotlin_patterns() -> list[str]:
         source = path.read_text(encoding="utf-8", errors="replace")
         problems.extend(_kt_problems(source, _rel(path)))
     return problems
+
+
+def _update_install_problems(source: str, rel: str) -> list[str]:
+    """更新流程里下载成功不得自动拉起安装。
+
+    桌面端规则 19 的 Kotlin 镜像：下载完只停在 Ready，安装必须由用户点。
+    否则用户以为在「检查更新」，手机已经弹出安装器——尤其在静默检查后。
+    """
+    problems: list[str] = []
+    for m in re.finditer(r"fun\s+download\s*\(", source):
+        # 粗粒度函数体切片：从 fun 的 '{' 配到同层 '}'，够识别自动安装调用
+        open_at = source.find("{", m.end())
+        if open_at < 0:
+            continue
+        depth = 0
+        end_at = open_at
+        for i in range(open_at, len(source)):
+            if source[i] == "{":
+                depth += 1
+            elif source[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    end_at = i
+                    break
+        body = source[open_at:end_at]
+        if re.search(r"startActivity\s*\(|installIntent\s*\(|ACTION_MANAGE_UNKNOWN_APP_SOURCES", body):
+            line = source.count("\n", 0, m.start()) + 1
+            problems.append(
+                f"{rel}:{line} [下载后自动安装] download() 里拉起安装器或权限页："
+                "下载完只能停在 Ready，安装必须由用户点；把跳转放进 installReady()")
+    return problems
+
+
+def check_update_no_auto_install() -> list[str]:
+    manager = KT_ROOT / "update" / "UpdateManager.kt"
+    if not manager.exists():
+        return []
+    return _update_install_problems(manager.read_text(encoding="utf-8"), _rel(manager))
 
 
 def check_android_network_config() -> list[str]:
@@ -376,6 +444,7 @@ def run(quiet: bool = False) -> list[str]:
     problems.extend(check_kotlin_patterns())
     problems.extend(check_android_network_config())
     problems.extend(check_roster_cache_keys())
+    problems.extend(check_update_no_auto_install())
     if not quiet:
         for line in problems:
             print(line)

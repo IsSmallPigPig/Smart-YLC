@@ -201,3 +201,99 @@ def test_roster_cache_key_known():
         )
     """
     assert lint_patterns._roster_key_problems(repo, parser) == []
+
+
+# —— 手机端：2026-11-21 修正扫描/更新链路的四条真实缺陷 ——
+
+def test_bitmap_recycle_while_visible():
+    """旋转时闪退：显示中的位图被 LaunchedEffect 里 recycle，渲染队列还在读。"""
+    source = """
+        LaunchedEffect(page.id, page.rotation) {
+            preview?.recycle()
+            preview = render(page)
+        }
+    """
+    problems = lint_patterns._kt_problems(source, "CropEditor.kt")
+    assert any("显示位图提前回收" in p for p in problems), problems
+
+
+def test_no_recycle_is_clean():
+    source = """
+        LaunchedEffect(page.id, page.rotation) {
+            preview = render(page)
+        }
+    """
+    assert lint_patterns._kt_problems(source, "CropEditor.kt") == []
+
+
+def test_temporary_bitmap_recycle_is_allowed():
+    """渲染中间的 source/result 回收是合法的，不能误伤。"""
+    source = """
+        val source = decode(page.file, maxEdge)
+        val result = DocDetect.rectify(source, page.quad, page.filter)
+        source.recycle()
+        return result
+    """
+    assert lint_patterns._kt_problems(source, "ScanSession.kt") == []
+
+
+def test_decode_without_exif():
+    """侧拍照片进裁切就是歪的：BitmapFactory 解码后没应用 EXIF 方向。"""
+    source = """
+        val bitmap = BitmapFactory.decodeFile(path)
+    """
+    problems = lint_patterns._kt_problems(source, "ScanSession.kt")
+    assert any("EXIF 未应用" in p for p in problems), problems
+
+
+def test_decode_with_exif_is_clean():
+    source = """
+        val bitmap = BitmapFactory.decodeFile(path)
+        val oriented = applyExifOrientation(bitmap, ExifInterface(path))
+    """
+    assert lint_patterns._kt_problems(source, "ScanSession.kt") == []
+
+
+def test_rotation_missing_from_effect_key():
+    """点旋转后识别框和图片错位：effect 只以 page.id 为 key，不重算。"""
+    source = """
+        val page by viewModel.page
+        LaunchedEffect(page.id) { preview = render(page) }
+        val turned = page.rotation
+    """
+    problems = lint_patterns._kt_problems(source, "CropEditor.kt")
+    assert any("旋转未进 effect key" in p for p in problems), problems
+
+
+def test_rotation_in_effect_key_is_clean():
+    source = """
+        val page by viewModel.page
+        LaunchedEffect(page.id, page.rotation) { preview = render(page) }
+        val turned = page.rotation
+    """
+    assert lint_patterns._kt_problems(source, "CropEditor.kt") == []
+
+
+def test_download_auto_installs():
+    """下载完自动弹安装器：用户还没确认，桌面端规则 19 在移动端重演。"""
+    source = """
+        fun download(info: Info) {
+            scope.launch {
+                GitHubUpdate.download(info).onSuccess { uri ->
+                    app.startActivity(GitHubUpdate.installIntent(uri))
+                }
+            }
+        }
+    """
+    problems = lint_patterns._update_install_problems(source, "UpdateManager.kt")
+    assert problems and "下载后自动安装" in problems[0], problems
+
+
+def test_download_leaves_install_to_user_is_clean():
+    source = """
+        fun download(info: Info) {
+            scope.launch { _state.value = UpdateUi.Ready(info, uri) }
+        }
+        fun installReady(uri: Uri) { app.startActivity(GitHubUpdate.installIntent(uri)) }
+    """
+    assert lint_patterns._update_install_problems(source, "UpdateManager.kt") == []
