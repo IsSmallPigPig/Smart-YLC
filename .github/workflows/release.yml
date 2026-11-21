@@ -412,8 +412,62 @@ jobs:
           path: dist/${{ env.APP_NAME }}-Linux-x64.deb
           if-no-files-found: error
 
+  build-android:
+    # 手机端跟桌面端进同一个 Release：用户在一页里拿齐所有平台，
+    # 不必再去另一条 mobile-v* 发布里找安装包。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装 SDK 组件
+        # 版本对齐 mobile/build.gradle.kts 的 compileSdk / buildToolsVersion；
+        # 只装这两个就够，AGP 自带其余按需依赖解析
+        run: sdkmanager "platforms;android-37" "build-tools;37.0.0" "platform-tools"
+
+      - name: 恢复调试签名
+        # 手机上已经装着旧版，只认当初那份 key。换一份签名，新包会提示「应用未安装」，
+        # 用户得先卸载——扫描件目录跟着一起被清掉。所以密钥必须来自同一个来源。
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::缺少 ANDROID_DEBUG_KEYSTORE_B64：签出来的包装不上旧版，这次发布等于白做"
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+
+      - name: 编译 APK
+        run: |
+          # mobile/settings.gradle.kts 把构建目录钉在移动硬盘路径上（本机系统盘只剩百来 MB），
+          # runner 没有那块盘，先把位置建出来，产物路径才跟本地一致
+          sudo mkdir -p /Volumes/AnkoQAQ/kotlin-dev/build/smart-youth
+          sudo chown -R "$USER":"$(id -g)" /Volumes/AnkoQAQ
+          cd mobile
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          VER=$(sed -n 's/.*appVersionName"\] = "\([^"]*\)".*/\1/p' build.gradle.kts)
+          test -n "$VER" || { echo "::error::读不到 appVersionName"; exit 1; }
+          APK=/Volumes/AnkoQAQ/kotlin-dev/build/smart-youth/_app/outputs/apk/debug/app-debug.apk
+          test -f "$APK" || { echo "::error::没有生成 $APK"; exit 1; }
+          mkdir -p ../dist/mobile
+          cp "$APK" "../dist/mobile/SmartYouth-mobile-$VER.apk"
+          ls -lh ../dist/mobile/
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: SmartYouth-Android
+          path: dist/mobile/*.apk
+          if-no-files-found: error
+
   release:
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-macos, build-windows, build-linux, build-android]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -436,12 +490,12 @@ jobs:
           } > release_body.md
 
       - name: 校验主产物齐全
-        # 四类主产物（dmg / 4 个 Windows setup / deb）缺任何一个都算发布失败，
+        # 六类主产物（dmg / 4 个 Windows setup / deb / apk）缺任何一个都算发布失败，
         # 但不能让「可选的 .cer」缺失把整条发布判红
         run: |
           missing=0
           for pat in "*.dmg" "*Windows10-x64-setup.exe" "*Windows10-x86-setup.exe" \
-                     "*Windows7-x64-setup.exe" "*Windows7-x86-setup.exe" "*.deb"; do
+                     "*Windows7-x64-setup.exe" "*Windows7-x86-setup.exe" "*.deb" "*.apk"; do
             if ! find artifacts -name "$pat" | grep -q .; then
               echo "::error::缺少产物 $pat"
               missing=1
@@ -465,4 +519,5 @@ jobs:
             artifacts/**/*setup.exe
             artifacts/**/*.cer
             artifacts/**/*.deb
+            artifacts/**/*.apk
 

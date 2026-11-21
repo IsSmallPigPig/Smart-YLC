@@ -6,6 +6,7 @@
 - **Windows 7（64 位）**：`SmartYouth-Windows7-x64-setup.exe`
 - **Windows 7（32 位）**：`SmartYouth-Windows7-x86-setup.exe`
 - **Linux（x86_64）**：`SmartYouth-Linux-x64.deb`（装好后命令 `smartyouth` 或应用列表里的「智慧团委」；面向 Ubuntu 22.04+/Debian 12+）
+- **Android 12 及以上**：`SmartYouth-mobile-<版本号>.apk`（发布列表里那个 .apk；直接覆盖安装，账号与扫描件保留）
 
 > macOS 仅支持 Apple Silicon。Windows 按系统与位数选包：Win10/11 用 Windows10-x64 或 Windows10-x86，Windows 7 用 Windows7-x64 或 Windows7-x86（Win7 包基于 Python 3.8，无法使用 Win10/11 包）。安装包用英文名（GitHub 下载文件名不支持中文），装好后的应用名是「智慧团委」。
 
