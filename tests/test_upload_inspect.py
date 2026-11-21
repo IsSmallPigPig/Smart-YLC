@@ -33,6 +33,18 @@ def make(tmp_path, name: str) -> str:
     return str(path)
 
 
+def app_pdf(pages: int = 1) -> bytes:
+    """生成一个真能被 PyMuPDF 打开的最小 PDF，用来测页数读取。"""
+    import pymupdf
+
+    doc = pymupdf.open()
+    for _ in range(pages):
+        doc.new_page()
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
 def test_standard_name_routes_to_branch(tmp_path):
     name = standard_name("张三+13800000001")
     path = make(tmp_path, name)
@@ -239,3 +251,58 @@ def test_duplicate_within_one_folder(tmp_path):
                        roots={one: str(tmp_path), two: str(tmp_path)})
     assert statuses[1].duplicate_of == one
     assert statuses[0].name in statuses[1].problem      # 指出去重后留下的那一份
+
+
+def test_cached_counter_skips_repeat_reads(tmp_path, monkeypatch):
+    """同一份内容第二次检查不再读 PDF：这是「已检查过的不重跑」的核心。
+
+    用真实 PDF 走 pdf_page_count，并通过替换它来数调用次数；
+    第二份是同一内容的副本（不同文件名），必须命中缓存。
+    """
+    from app.services import check_cache
+
+    monkeypatch.setattr(check_cache, "CACHE_FILE", str(tmp_path / "cache.json"))
+    check_cache.clear()
+
+    real = app_pdf()
+    src = tmp_path / "张三+13800000001+入团志愿书.pdf"
+    src.write_bytes(real)
+    copy = tmp_path / "副本" / "张三+13800000001+入团志愿书.pdf"
+    copy.parent.mkdir()
+    copy.write_bytes(real)
+
+    calls = []
+    import app.domain.upload_inspect as ui
+    original = ui.pdf_page_count
+    monkeypatch.setattr(ui, "pdf_page_count", lambda p: calls.append(p) or original(p))
+
+    counter = ui.cached_page_counter()
+    first = counter(str(src))
+    second = counter(str(copy))
+    assert first == second == 1        # 一页的 PDF
+    assert len(calls) == 1             # 第二份走缓存，没再读盘
+
+    check_cache.clear()
+
+
+def test_cached_counter_recounts_changed_file(tmp_path, monkeypatch):
+    """内容变了必须重读，不能沿用旧页数。"""
+    from app.services import check_cache
+
+    monkeypatch.setattr(check_cache, "CACHE_FILE", str(tmp_path / "cache.json"))
+    check_cache.clear()
+
+    import app.domain.upload_inspect as ui
+    original = ui.pdf_page_count
+    calls = []
+    monkeypatch.setattr(ui, "pdf_page_count", lambda p: calls.append(p) or original(p))
+
+    path = tmp_path / "李四+13800000002+入团志愿书.pdf"
+    path.write_bytes(app_pdf(pages=1))
+    counter = ui.cached_page_counter()
+    assert counter(str(path)) == 1
+
+    path.write_bytes(app_pdf(pages=3))
+    assert counter(str(path)) == 3
+    assert len(calls) == 2
+    check_cache.clear()

@@ -39,6 +39,14 @@ def test_is_abnormal_path_matches_any_level(tmp_path):
     assert not is_abnormal_path(str(tmp_path / "异常档案说明.pdf"))
 
 
+def test_is_abnormal_path_recognizes_legacy_folder(tmp_path):
+    """升级前原件被移进「异常档案」，不能当正常档案误传。"""
+    legacy = tmp_path / "高一1班" / "异常档案" / "张三.pdf"
+    assert is_abnormal_path(str(legacy))
+    # 文件名里带这三个字仍不算（分段精确匹配）
+    assert not is_abnormal_path(str(tmp_path / "高一1班" / "异常档案.pdf"))
+
+
 def test_abnormal_target_is_sibling_folder(tmp_path):
     path = _pdf(tmp_path / "高一1班")
     assert abnormal_target(path) == os.path.join(
@@ -81,24 +89,37 @@ def _stub_page():
     return stub
 
 
-def test_mark_abnormal_moves_file_in_and_back(app, tmp_path, monkeypatch):
+def test_mark_abnormal_moves_copy_in_and_back(app, tmp_path, monkeypatch):
+    """标记异常只搬工作副本：原件不动，副本在 压缩↔异常 之间切换。"""
+    from app.domain import work_area
+    from app.domain.upload_inspect import FileStatus
     from app.ui import upload_page
 
     monkeypatch.setattr(upload_page.InfoBar, "success", lambda *a, **k: None)
     monkeypatch.setattr(upload_page.InfoBar, "error", lambda *a, **k: None)
 
     original = _pdf(tmp_path / "高一1班")
+    root = str(tmp_path)
+    work_area.ensure_work_dirs(root)
+    normal_copy = work_area.copy_target(root, original)
+    os.makedirs(os.path.dirname(normal_copy), exist_ok=True)
+    with open(normal_copy, "wb") as f:
+        f.write(b"%PDF-1.4")
+
     stub = _stub_page()
+    stub.statuses = [FileStatus(path=original, name=os.path.basename(original),
+                                root=root, work_path=normal_copy)]
     stub._mark_abnormal(original, True)
 
-    moved = os.path.join(str(tmp_path / "高一1班"), ABNORMAL_DIR_NAME,
-                         os.path.basename(original))
-    assert not os.path.exists(original)
-    assert os.path.isfile(moved)
+    abnormal_copy = work_area.copy_target(root, original, abnormal=True)
+    assert os.path.isfile(original)            # 原件始终在原地
+    assert os.path.isfile(abnormal_copy)       # 副本进了异常区
+    assert not os.path.exists(normal_copy)     # 压缩区不再有它
 
-    stub._mark_abnormal(moved, False)
+    stub._mark_abnormal(original, False)
     assert os.path.isfile(original)
-    assert not os.path.exists(moved)
+    assert os.path.isfile(normal_copy)         # 副本搬回压缩区
+    assert not os.path.exists(abnormal_copy)
 
 
 def test_mark_abnormal_rejects_redundant_toggle(app, tmp_path, monkeypatch):
@@ -106,9 +127,30 @@ def test_mark_abnormal_rejects_redundant_toggle(app, tmp_path, monkeypatch):
     from app.ui import upload_page
 
     monkeypatch.setattr(upload_page.InfoBar, "success", lambda *a, **k: None)
-    original = _pdf(tmp_path / "高一1班" / ABNORMAL_DIR_NAME)
+    original = _pdf(tmp_path / "高一1班")
     stub = _stub_page()
+    stub._abnormal_paths = {original}
     stub._mark_abnormal(original, True)
+    assert os.path.isfile(original)
+
+
+def test_relocate_with_missing_copy_falls_back_to_original(app, tmp_path, monkeypatch):
+    """副本还没生成时标记异常：从原件复制一份到异常区，原件不动。"""
+    from app.domain import work_area
+    from app.ui import upload_page
+
+    monkeypatch.setattr(upload_page.InfoBar, "success", lambda *a, **k: None)
+    monkeypatch.setattr(upload_page.InfoBar, "error", lambda *a, **k: None)
+
+    from app.domain.upload_inspect import FileStatus
+
+    original = _pdf(tmp_path / "高一1班")
+    stub = _stub_page()
+    stub.statuses = [FileStatus(path=original, name=os.path.basename(original),
+                                root=str(tmp_path), work_path="")]
+    target = stub._relocate(original, True)
+    assert target == work_area.copy_target(str(tmp_path), original, abnormal=True)
+    assert os.path.isfile(target)
     assert os.path.isfile(original)
 
 

@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import secrets
@@ -50,6 +49,11 @@ class _LanHTTPServer(ThreadingHTTPServer):
 
 
 DEFAULT_PORT = 8765
+# 自动发现的 UDP 端口：手机在局域网广播 MAGIC，这里回一条设备信息，
+# 省掉「对准屏幕扫码」这一步。TCP 8765 与 UDP 8766 互不影响，
+# 分开编号是为了抓包和排查时一眼能分清是发现流量还是上传流量。
+DISCOVERY_PORT = 8766
+DISCOVERY_MAGIC = b"SMARTYOUTH/1"
 # 单次上传上限。入团志愿书扫描件实测 1.2~8MB，留到 40MB 足够，
 # 也挡住误传的大文件（全程流式写盘，不吃内存）
 MAX_UPLOAD = 40 * 1024 * 1024
@@ -130,6 +134,7 @@ class LanShare:
     _last_active: float = 0.0
     _sessions: dict[str, PairSession] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _discovery: socket.socket | None = None
     # 本机配置档案的提取码。非空时，手机必须报一个相同的 code 才能配对——
     # 这就是「相同配置的设备」。空列表表示本机没启用这项校验。
     allowed_codes: list[str] = field(default_factory=list)
@@ -175,10 +180,14 @@ class LanShare:
                                             daemon=True)
             self._thread.start()
             self._last_active = time.time()
+            self._start_discovery(server.server_port)
             return self.url()
         raise OSError(f"无法启动局域网服务：{last_error}")
 
     def stop(self) -> None:
+        sock, self._discovery = self._discovery, None
+        if sock is not None:
+            sock.close()
         server, self._server = self._server, None
         if server is not None:
             server.shutdown()
@@ -186,6 +195,53 @@ class LanShare:
         thread, self._thread = self._thread, None
         if thread is not None and thread.is_alive():
             thread.join(timeout=2)
+
+    # ---- 自动发现（手机无需扫码）----
+
+    def _start_discovery(self, port: int) -> None:
+        """起一个 UDP 应答：手机广播 MAGIC 时回一条设备信息。
+
+        只带配对码，不带提取码——提取码参与云端备份加密，不进入局域网广播；
+        配对码本来就在二维码和电脑屏幕上明文显示，可见范围没有变大。
+        端口被占（多开程序）就跳过，扫码路径照常可用，但要记日志能排查。
+        """
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("0.0.0.0", DISCOVERY_PORT))
+            sock.settimeout(0.5)
+        except OSError as e:
+            from app.services import app_log
+
+            app_log.warning("自动发现端口 %d 绑定失败，手机需用扫码配对：%s",
+                            DISCOVERY_PORT, e)
+            return
+        self._discovery = sock
+        threading.Thread(target=self._serve_discovery, args=(sock, port),
+                         daemon=True).start()
+
+    def _serve_discovery(self, sock: socket.socket, port: int) -> None:
+        """循环应答，直到 stop() 把 _discovery 换成 None 或套接字被关闭。"""
+        while self._discovery is sock:
+            try:
+                data, addr = sock.recvfrom(256)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            if data.strip() != DISCOVERY_MAGIC:
+                continue
+            reply = json.dumps({
+                "service": "smartyouth",
+                "v": 1,
+                "name": socket.gethostname().split(".")[0],
+                "port": port,
+                "pin": self._pin,
+            }).encode()
+            try:
+                sock.sendto(reply, addr)
+            except OSError:
+                continue
 
     def touch(self) -> None:
         self._last_active = time.time()

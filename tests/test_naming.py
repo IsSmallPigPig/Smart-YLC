@@ -104,3 +104,13 @@ def test_hidden_characters_and_fullwidth_digits_are_cleaned():
 
     parsed = analyze_file_name("张三＋１３８００１３８０００＋入团志愿书.pdf").parsed
     assert parsed == ("张三", "13800138000")
+
+
+def test_illegal_char_in_name():
+    r = analyze_file_name("张/三+13800000000+入团志愿书.pdf")
+    assert "ILLEGAL_CHAR" in r.codes
+
+
+def test_name_with_digit_is_invalid():
+    r = analyze_file_name("张三1+13800000000+入团志愿书.pdf")
+    assert "NAME_INVALID" in r.codes

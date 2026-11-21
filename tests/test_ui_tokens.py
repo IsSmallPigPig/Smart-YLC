@@ -154,29 +154,23 @@ def test_every_bundled_weight_resolves(app):
     只注册 Regular 时 Qt 会合成假粗体：笔画发糊，而且字宽与真粗体不同，
     等宽数字的对齐也会跟着歪。
     """
-    from PyQt5.QtGui import QFont, QFontDatabase, QFontInfo, QFontMetricsF
+    from PyQt5.QtGui import QFont, QFontDatabase, QFontInfo
 
     from app.setup import FONT_FAMILY, register_fonts
 
     assert register_fonts() == FONT_FAMILY
     db = QFontDatabase()
+    # 四档字重要落到四个不同的字体文件。判据用字体库给的样式名，不用字宽：
+    # MiSans 各字重刻意共用同一字宽，按宽度判断会在真字重齐全的机器上误报。
+    styles = set()
     for weight in (QFont.Weight.Normal, QFont.Weight.Medium,
                    QFont.Weight.DemiBold, QFont.Weight.Bold):
         font = QFont(FONT_FAMILY)
         font.setPixelSize(14)
         font.setWeight(weight)
         assert QFontInfo(font).exactMatch(), f"字重 {weight} 没有匹配到字体文件"
-        assert db.styleString(font) != "", f"字重 {weight} 没有样式名"
-
-    # 四档字重的数字宽度应各不相同——相同说明都落到同一个文件（即合成粗体）
-    widths = set()
-    for weight in (QFont.Weight.Normal, QFont.Weight.Medium,
-                   QFont.Weight.DemiBold, QFont.Weight.Bold):
-        font = QFont(FONT_FAMILY)
-        font.setPixelSize(14)
-        font.setWeight(weight)
-        widths.add(round(QFontMetricsF(font).horizontalAdvance("9"), 2))
-    assert len(widths) == 4, f"字重没有真正生效：{sorted(widths)}"
+        styles.add(db.styleString(font))
+    assert "" not in styles and len(styles) == 4, f"字重没有真正生效：{sorted(styles)}"
 
 
 def test_inner_radius_is_concentric():

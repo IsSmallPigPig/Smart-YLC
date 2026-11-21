@@ -13,21 +13,26 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from app.domain import work_area
 from app.domain.naming import analyze_file_name
 
 # 系统/编辑器留下的垃圾目录，进不进都一样拖慢扫描
 SKIP_DIRS = {"__MACOSX", ".git", ".idea", ".vscode", "node_modules"}
 
-ABNORMAL_DIR_NAME = "异常档案"
-"""来源目录下的这个子文件夹是异常档案的存放处：标记异常=移进来，
-取消标记=移回上一层。扫描照常收这里的 PDF，但它们在界面上归入异常、
-不参与上传——「存在异常」按钮查的就是它。"""
+ABNORMAL_DIR_NAME = work_area.ABNORMAL_DIR_NAME
+LEGACY_ABNORMAL_DIR_NAME = "异常档案"
+"""升级前原件被移进的旧目录名；新异常区在工作目录/异常下，见 work_area。"""
 
 
 def is_abnormal_path(path: str) -> bool:
-    """路径是否落在「异常档案」文件夹里（任意一层）。"""
+    """路径是否落在异常区：新的「工作目录/异常」或旧的「异常档案」都算。
+
+    原件现在永不移动，异常标记改搬工作副本；保留旧判定是为了让升级前
+    已经移进「异常档案」的档案仍被识别为异常，不会误传。"""
     parts = os.path.normpath(path).split(os.sep)
-    return ABNORMAL_DIR_NAME in parts
+    return (work_area.is_abnormal_copy(path)
+            or ABNORMAL_DIR_NAME in parts
+            or LEGACY_ABNORMAL_DIR_NAME in parts)
 
 
 @dataclass
@@ -60,7 +65,10 @@ def scan_folder(root: str) -> FolderScan:
     files: list[str] = []
     ignored: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if not _skip_dir(d))
+        # 「工作目录」里全是本程序生成的副本：原件已经在上面几层，扫进去
+        # 会把一份档案算两遍，越扫越多。整棵子树跳过。
+        dirnames[:] = sorted(d for d in dirnames
+                             if not _skip_dir(d) and d != work_area.WORK_DIR_NAME)
         for name in sorted(filenames):
             if name.startswith(".") or name.startswith("~$"):
                 continue

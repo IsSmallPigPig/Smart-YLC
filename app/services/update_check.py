@@ -164,19 +164,6 @@ def _notify_failure(title: str, message: str):
     send(title, message[:180])
 
 
-def _start_silent_install(path: str, version: str = "") -> bool:
-    from app.services import silent_update
-
-    try:
-        silent_update.start(path)
-    except Exception as e:
-        record("error", f"启动静默安装失败：{e}")
-        _notify_failure("更新未完成", f"更新包已下载，但无法静默安装：{e}")
-        return False
-    record("installing", version)
-    return True
-
-
 def last_check_text() -> str:
     c = store.load().get("lastUpdateCheck") or {}
     if not c.get("at"):
@@ -187,6 +174,8 @@ def last_check_text() -> str:
         tail = "已是最新版本"
     elif status == "update":
         tail = f"发现新版本 {c.get('detail', '')}"
+    elif status == "ready":
+        tail = f"更新包 {c.get('detail', '')} 已就绪，等待重启"
     elif status == "installing":
         tail = f"正在静默安装 {c.get('detail', '')}"
     elif status == "error":
@@ -226,7 +215,15 @@ def check_on_startup(delay_ms: int = 2500, parent=None):
             lambda: _WORKERS.remove(downloader) if downloader in _WORKERS else None)
 
         def _downloaded(path: str):
-            _start_silent_install(path, info.version)
+            # 下载完不自动安装退出：留给用户确认重启。主窗口有就弹常驻提示，
+            # 没有（托盘后台）就只记状态，下次启动主窗口时再提示。
+            from app.services import silent_update
+
+            silent_update.save_pending_installer(path, info.version)
+            record("ready", info.version)
+            show = getattr(parent, "show_update_ready", None)
+            if callable(show):
+                show(path, info.version)
 
         def _download_failed(message: str):
             record("error", f"后台下载失败：{message[:150]}")

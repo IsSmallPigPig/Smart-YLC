@@ -47,8 +47,10 @@ def restore_session(client) -> None:
         try:
             client.http.cookies.set(c.get("name", ""), c.get("value", ""),
                                     domain=c.get("domain", ""), path=c.get("path", "/"))
-        except Exception:
-            pass  # 单条 cookie 损坏不影响其余
+        except Exception as e:                 # noqa: BLE001 - 单条损坏不影响其余
+            from app.services import app_log
+
+            app_log.warning("恢复会话 cookie「%s」失败：%s", c.get("name", ""), e)
 
 
 def save_session(client) -> None:

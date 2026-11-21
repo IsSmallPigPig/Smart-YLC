@@ -163,3 +163,25 @@ def test_none_clears_system_backdrop_on_win11(win32):
     window, effect = win32(22621)
     assert materials.apply_windows_effect(window, "none") is False
     assert ("dwm", materials.DWMWA_SYSTEMBACKDROP_TYPE) in effect.calls
+
+
+def test_material_hint_no_longer_hides_dark(win32, monkeypatch):
+    """深色不再当作「不启用」：旧文案来自会刷白的旧通路，现在已不走那条。"""
+    monkeypatch.setattr(materials, "_is_dark", lambda: True)
+    win32(22621)
+    hint = materials.material_hint("mica")
+    assert "不启用" not in hint
+    assert "Acrylic" in hint          # 要实时模糊得改选另一档
+
+
+def test_material_hint_reports_system_transparency_off(win32, monkeypatch):
+    """系统关掉透明效果时，说明要指向那个开关，而不是让用户以为选错了。"""
+    win32(22621)
+    monkeypatch.setattr(materials, "system_transparency_enabled", lambda: False)
+    hint = materials.material_hint("mica")
+    assert "透明效果" in hint and "个性化" in hint
+
+
+def test_transparency_probe_is_true_off_windows():
+    """非 Windows 没有这个概念；探测要返回 True，不能顺手拦掉 macOS 的材质。"""
+    assert materials.system_transparency_enabled() is True

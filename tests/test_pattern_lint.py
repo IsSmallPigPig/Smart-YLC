@@ -131,10 +131,69 @@ def test_smoke_checks_cv2_abi():
     assert any("冒烟漏检 cv2" in x for x in check(bad, "main.py"))
 
 
-def test_build_collect_all_enforced():
+def test_upload_uses_work_copy():
+    """规则 17：上传必须筛 work_path，不能退回原件。"""
+    p = ROOT / "app" / "ui" / "upload_page.py"
+    assert not any("上传绕开副本" in x for x in lint_patterns.check_file(p))
+
+    bad = ('def _start_upload(self):\n'
+           '    usable = [s for s in self.statuses if s.usable]\n'
+           '    jobs = [{"path": s.path, "account": s.account} for s in usable]\n')
+    assert any("上传绕开副本" in x for x in check(bad, "upload_page.py"))
+
+
+def test_scan_skips_work_dir():
+    """规则 18：扫描必须跳过工作目录子树。"""
+    p = ROOT / "app" / "domain" / "archive_scan.py"
+    assert not any("扫描工作目录" in x for x in lint_patterns.check_file(p))
+
+    bad = ('def scan_folder(root):\n'
+           '    for dirpath, dirnames, files in os.walk(root):\n'
+           '        pass\n')
+    assert any("扫描工作目录" in x for x in check(bad, "archive_scan.py"))
+
+
+def test_check_cache_must_use_content_digest():
+    """规则 20：检查缓存不能按路径 + mtime，否则改名/重压/重启后全部失效。"""
+    p = ROOT / "app" / "ui" / "upload_page.py"
+    assert not any("检查缓存按路径" in x for x in lint_patterns.check_file(p))
+
+    bad = ('class Page:\n'
+           '    def _cell_key(self, path):\n'
+           '        return (path, os.path.getmtime(path))\n')
+    assert any("检查缓存按路径" in x for x in check(bad, "upload_page.py"))
+
+
+def test_download_must_not_auto_install():
+    """规则 19：下载完成不能自动安装退出，等用户确认重启。"""
+    p = ROOT / "app" / "ui" / "about_card.py"
+    assert not any("下载即自动安装" in x for x in lint_patterns.check_file(p))
+
+    bad = ('def _on_downloaded(self, path):\n'
+           '    silent_update.start(path)\n'
+           '    self._quit_app()\n')
+    assert any("下载即自动安装" in x for x in check(bad, "about_card.py"))
+
+
+def test_build_collect_all_enforced(monkeypatch):
     p = ROOT / "scripts" / "build.py"
     problems = lint_patterns.check_file(p)
     assert not any("打包漏库" in x for x in problems), problems
+
+    # 能拦住旧写法：缺 --collect-all 的构建脚本（规则按 scripts/build.py 路径生效）
+    monkeypatch.setattr(lint_patterns, "_rel", lambda path: "scripts/build.py")
+    bad = 'cmd = ["pyinstaller", "--onefile", "app.py"]\n'
+    assert any("打包漏库" in x for x in check(bad, "build.py"))
+
+
+def test_ui_hex_color_rejected(monkeypatch):
+    """规则 8：app/ui 下硬编码 hex 色——语义色必须从 palette 取。"""
+    # 规则按 app/ui/ 路径前缀生效，临时文件在 tests/ 下，伪装一下路径
+    monkeypatch.setattr(lint_patterns, "_rel", lambda path: "app/ui/sample.py")
+    assert check('from app.ui.palette import P\ncolor = P.BRAND\n') == []
+    assert any("硬编码色" in x for x in check('w.setStyleSheet("color: #0078d4;")\n'))
+    # 注释里的示例色不算命中
+    assert check('# 参照 #0078d4 取色\n') == []
 
 
 def test_store_never_returns_empty_on_corruption():
@@ -152,10 +211,21 @@ def test_current_codebase_is_clean():
     assert lint_patterns.run(quiet=True) == []
 
 
-# —— 手机端：配对传输相关的两条真实缺陷 ——
+def test_body_in_exception_message():
+    """站点返回 HTML 时，整页会被塞进提示框。"""
+    source = 'throw SiteException("站点返回无法解析：${body.take(120)}")'
+    problems = lint_patterns._kt_problems(source, "Sample.kt")
+    assert any("响应体进提示" in p for p in problems), problems
+
+
+def test_readable_hint_is_allowed():
+    source = 'throw SiteException("站点返回了网页，登录可能已失效")'
+    assert lint_patterns._kt_problems(source, "Sample.kt") == []
+
+
+# —— 手机端：配对与提示相关的真实缺陷 ——
 
 def test_analyzer_created_inside_frame_callback():
-    """扫码无反应的根因：分析器在每帧回调里新建，节流失效。"""
     source = """
         analysis.setAnalyzer(executor) { image ->
             QrAnalyzer { text -> onQr(text) }.analyze(image)
@@ -174,149 +244,148 @@ def test_shared_analyzer_is_allowed():
 
 
 def test_cleartext_lan_requires_config():
-    """电脑配对走 http://局域网IP，配置没放开明文时请求会被系统拒绝。"""
     only_loopback = '<network-security-config><domain-config cleartextTrafficPermitted="true">'
     assert lint_patterns._network_problems(only_loopback, "net.xml")
     good = '<network-security-config><base-config cleartextTrafficPermitted="true" />'
     assert lint_patterns._network_problems(good, "net.xml") == []
 
 
-def test_roster_cache_key_unknown_to_parser():
-    """注入名单后全员显示「未报到」：缓存写 reportStatus，解析表却没有这个键。"""
-    repo = '.put("mid", m.mid).put("reportStatus", m.reportStatus)'
-    parser = """
-        private val aliases = mapOf(
-            "reportStatus" to listOf("auditStatus", "reportDataStatus"),
-        )
-    """
-    problems = lint_patterns._roster_key_problems(repo, parser)
-    assert problems and "reportStatus" in problems[0], problems
+# —— 线程模型：QThread.wait 当 sleep、无事件循环线程建 QTimer（i016/i017）——
+
+def test_qthread_wait_as_sleep_rejected():
+    """能拦住旧写法：QThread 子类 run() 里 self.wait(毫秒)。"""
+    bad = '''\
+from PyQt5.QtCore import QThread
+class Worker(QThread):
+    def run(self):
+        while True:
+            self.do_work()
+            self.wait(5000)
+'''
+    assert any("wait 当 sleep" in p for p in check(bad)), check(bad)
 
 
-def test_roster_cache_key_known():
-    repo = '.put("reportStatus", m.reportStatus)'
-    parser = """
-        private val aliases = mapOf(
-            "reportStatus" to listOf("auditStatus", "reportStatus"),
-        )
-    """
-    assert lint_patterns._roster_key_problems(repo, parser) == []
+def test_qthread_wait_cond_is_allowed():
+    """当前库干净：QWaitCondition 的正确写法不该命中。"""
+    good = '''\
+from PyQt5.QtCore import QThread, QMutex, QWaitCondition
+class Worker(QThread):
+    def run(self):
+        while True:
+            self._wakeup.wait(self._mutex, 5000)
+'''
+    assert check(good) == []
 
 
-# —— 手机端：2026-11-21 修正扫描/更新链路的四条真实缺陷 ——
-
-def test_bitmap_recycle_while_visible():
-    """旋转时闪退：显示中的位图被 LaunchedEffect 里 recycle，渲染队列还在读。"""
-    source = """
-        LaunchedEffect(page.id, page.rotation) {
-            preview?.recycle()
-            preview = render(page)
-        }
-    """
-    problems = lint_patterns._kt_problems(source, "CropEditor.kt")
-    assert any("显示位图提前回收" in p for p in problems), problems
-
-
-def test_no_recycle_is_clean():
-    source = """
-        LaunchedEffect(page.id, page.rotation) {
-            preview = render(page)
-        }
-    """
-    assert lint_patterns._kt_problems(source, "CropEditor.kt") == []
+def test_timer_in_http_callback_rejected():
+    """能拦住旧写法：_on_received 里用 QTimer.singleShot 切回 UI。"""
+    bad = '''\
+from PyQt5.QtCore import QTimer
+class Dlg:
+    def _on_received(self, item):
+        QTimer.singleShot(0, lambda: self._show_received(item))
+    def _show_received(self, item):
+        pass
+'''
+    assert any("_on_received 用 QTimer" in p for p in check(bad)), check(bad)
 
 
-def test_temporary_bitmap_recycle_is_allowed():
-    """渲染中间的 source/result 回收是合法的，不能误伤。"""
-    source = """
-        val source = decode(page.file, maxEdge)
-        val result = DocDetect.rectify(source, page.quad, page.filter)
-        source.recycle()
-        return result
-    """
-    assert lint_patterns._kt_problems(source, "ScanSession.kt") == []
+def test_signal_in_http_callback_is_allowed():
+    """当前库干净：emit 信号回到 GUI 线程的写法不该命中。"""
+    good = '''\
+class Dlg:
+    def _on_received(self, item):
+        self._http_received.emit(item)
+    def _show_received(self, item):
+        pass
+'''
+    assert check(good) == []
 
 
-def test_decode_without_exif():
-    """侧拍照片进裁切就是歪的：BitmapFactory 解码后没应用 EXIF 方向。"""
-    source = """
-        val bitmap = BitmapFactory.decodeFile(path)
-    """
-    problems = lint_patterns._kt_problems(source, "ScanSession.kt")
-    assert any("EXIF 未应用" in p for p in problems), problems
+def test_save_config_silent_pass_rejected():
+    """能拦住旧写法：保存配置时 except: pass 静默丢用户设置。"""
+    bad = '''\
+def _save_cloud_state(self, patch):
+    try:
+        store.update(lambda cfg: cfg.update(patch))
+    except Exception:
+        pass
+'''
+    assert any("保存静默失败" in p for p in check(bad)), check(bad)
 
 
-def test_decode_with_exif_is_clean():
-    source = """
-        val bitmap = BitmapFactory.decodeFile(path)
-        val oriented = applyExifOrientation(bitmap, ExifInterface(path))
-    """
-    assert lint_patterns._kt_problems(source, "ScanSession.kt") == []
+def test_save_config_with_log_is_allowed():
+    """当前库干净：失败时记日志+提示就不算静默。"""
+    good = '''\
+def _save_cloud_state(self, patch):
+    try:
+        store.update(lambda cfg: cfg.update(patch))
+    except Exception as e:
+        app_log.error("写盘失败：%s", e)
+        InfoBar.error("设置没保存", str(e), parent=self)
+'''
+    assert check(good) == []
 
 
-def test_rotation_missing_from_effect_key():
-    """点旋转后识别框和图片错位：effect 只以 page.id 为 key，不重算。"""
-    source = """
-        val page by viewModel.page
-        LaunchedEffect(page.id) { preview = render(page) }
-        val turned = page.rotation
-    """
-    problems = lint_patterns._kt_problems(source, "CropEditor.kt")
-    assert any("旋转未进 effect key" in p for p in problems), problems
+# —— Windows 实测报告（2026-11-21）：材质、单实例、拖放三类反模式 ——
+
+def test_dark_mode_material_gate_rejected():
+    """能拦住旧写法：Windows 材质被深浅模式条件关掉。"""
+    bad = '''
+def setup(material):
+    from qfluentwidgets import isDarkTheme as _dark
+    return windows_material_available(material) and not _dark()
+'''
+    assert any("材质被深浅关掉" in p for p in check(bad)), check(bad)
 
 
-def test_rotation_in_effect_key_is_clean():
-    source = """
-        val page by viewModel.page
-        LaunchedEffect(page.id, page.rotation) { preview = render(page) }
-        val turned = page.rotation
-    """
-    assert lint_patterns._kt_problems(source, "CropEditor.kt") == []
+def test_material_without_dark_gate_is_allowed():
+    """当前库干净：深色照样挂材质。"""
+    good = '''
+def setup(material):
+    ok = windows_material_available(material)
+    remove_windows_effect(window)
+    return ok
+'''
+    assert check(good) == []
 
 
-def test_download_auto_installs():
-    """下载完自动弹安装器：用户还没确认，桌面端规则 19 在移动端重演。"""
-    source = """
-        fun download(info: Info) {
-            scope.launch {
-                GitHubUpdate.download(info).onSuccess { uri ->
-                    app.startActivity(GitHubUpdate.installIntent(uri))
-                }
-            }
-        }
-    """
-    problems = lint_patterns._update_install_problems(source, "UpdateManager.kt")
-    assert problems and "下载后自动安装" in problems[0], problems
+def test_ready_read_without_buffer_check_rejected():
+    """能拦住旧写法：连了 readyRead 却不查缓冲区，先到的命令会丢。"""
+    bad = '''
+def _on_connection(self):
+    sock = self._server.nextPendingConnection()
+    sock.readyRead.connect(self._read)
+'''
+    assert any("readyRead 未补读" in p for p in check(bad)), check(bad)
 
 
-def test_download_leaves_install_to_user_is_clean():
-    source = """
-        fun download(info: Info) {
-            scope.launch { _state.value = UpdateUi.Ready(info, uri) }
-        }
-        fun installReady(uri: Uri) { app.startActivity(GitHubUpdate.installIntent(uri)) }
-    """
-    assert lint_patterns._update_install_problems(source, "UpdateManager.kt") == []
+def test_ready_read_with_buffer_check_is_allowed():
+    """当前库干净：连信号后立刻补读一次。"""
+    good = '''
+def _on_connection(self):
+    sock = self._server.nextPendingConnection()
+    sock.readyRead.connect(self._read)
+    if sock.bytesAvailable():
+        self._read(sock)
+'''
+    assert check(good) == []
 
 
-def test_remember_scanning_directory_is_flagged():
-    """切页卡顿：页面首次组合时同步扫目录，顿在切页那一帧。"""
-    source = """
-        @Composable
-        fun ScansScreen() {
-            var docs by remember { mutableStateOf(DocStore.list()) }
-        }
-    """
-    problems = lint_patterns._kt_problems(source, "ScansScreen.kt")
-    assert any("组合期读盘" in p for p in problems), problems
+def test_drop_payload_without_normpath_rejected():
+    """能拦住旧写法：拖放路径直接取用，Windows 上是正斜杠。"""
+    bad = '''
+def _drop_payload(mime):
+    return [url.toLocalFile() for url in mime.urls()]
+'''
+    assert any("拖放路径未归一" in p for p in check(bad)), check(bad)
 
 
-def test_remember_then_load_in_effect_is_clean():
-    source = """
-        @Composable
-        fun ScansScreen() {
-            var docs by remember { mutableStateOf<List<SavedDoc>>(emptyList()) }
-            LaunchedEffect(Unit) { docs = withContext(Dispatchers.IO) { DocStore.list() } }
-        }
-    """
-    assert lint_patterns._kt_problems(source, "ScansScreen.kt") == []
+def test_drop_payload_with_normpath_is_allowed():
+    """当前库干净：取到路径先 normpath。"""
+    good = '''
+import os
+def _drop_payload(mime):
+    return [os.path.normpath(url.toLocalFile()) for url in mime.urls()]
+'''
+    assert check(good) == []

@@ -166,17 +166,8 @@ def _fill_from_stats(data: BranchData, stats: dict, branch: str):
                                      "说明": problems})
 
 
-def load_dataset(cfg: dict) -> dict[str, BranchData]:
-    """按班级汇总可导出数据。
-
-    班级取团员自己的「所属组织」，一个账号覆盖多个班时各回各的班；取不到才
-    退回账号备注。转接申请只有姓名，按本账号的成员表把姓名对回班级，对不上
-    就落在账号备注那个班。
-    """
-    accounts = list(cfg.get("accounts") or [])
-    cache = cfg.get("memberCache") or {}
-    stats = cfg.get("orgStatsCache") or {}
-
+def _branch_order(accounts: list[dict], cache: dict) -> tuple[dict[str, str], list[str]]:
+    """账号备注优先的支部映射与稳定顺序；缓存里多出来的账号补在后面。"""
     branch_of: dict[str, str] = {}
     order: list[str] = []
     for acc in accounts:
@@ -189,41 +180,74 @@ def load_dataset(cfg: dict) -> dict[str, BranchData]:
         if user not in branch_of:
             branch_of[user] = str((cache.get(user) or {}).get("branch") or user)
             order.append(user)
+    return branch_of, order
+
+
+def _fill_members_by_class(dataset: dict[str, BranchData],
+                           members: list[MemberRecord], fallback: str,
+                           stats_blob: dict) -> dict[str, list[MemberRecord]]:
+    """按团员自己的班级分表并填各类检查行；没成员时用 stats 兜底。"""
+    by_class: dict[str, list[MemberRecord]] = {}
+    for m in members:
+        by_class.setdefault(_class_of(m, fallback), []).append(m)
+
+    if by_class:
+        for cls, group in by_class.items():
+            data = dataset.setdefault(cls, BranchData(cls))
+            data.rows["members"].extend(_member_rows(group, cls))
+            results = (
+                build_identity_results(group, default_identity_template())
+                + build_report_results(group, default_report_template())
+                + build_fee_results(group)
+            )
+            identity, archive, fee = _error_rows(results, cls)
+            data.rows["identity"].extend(identity)
+            data.rows["archive"].extend(archive)
+            data.rows["fee"].extend(fee)
+    else:
+        _fill_from_stats(dataset.setdefault(fallback, BranchData(fallback)),
+                         stats_blob, fallback)
+    return by_class
+
+
+def _fill_transfer(dataset: dict[str, BranchData], by_class: dict,
+                   transfer: dict, fallback: str) -> None:
+    """转接申请按姓名对回班级；对不上落账号备注那个班。"""
+    owner_of = {m.name: cls for cls, group in by_class.items() for m in group}
+    default_cls = next(iter(by_class), fallback) if by_class else fallback
+    for name in transfer.get("names") or []:
+        cls = owner_of.get(str(name)) or default_cls
+        dataset.setdefault(cls, BranchData(cls)).rows["transfer"].append(
+            {"班级": cls, "姓名": name, "申请状态": "已申请"})
+
+
+def _fallback_of(blob: dict, branch_of: dict, user: str) -> str:
+    """班级兜底：成员缓存里的分支 → 账号备注 → 账号名。"""
+    return str(blob.get("branch") or branch_of.get(user) or user).strip() or user
+
+
+def load_dataset(cfg: dict) -> dict[str, BranchData]:
+    """按班级汇总可导出数据。
+
+    班级取团员自己的「所属组织」，一个账号覆盖多个班时各回各的班；取不到才
+    退回账号备注。转接申请只有姓名，按本账号的成员表把姓名对回班级，对不上
+    就落在账号备注那个班。
+    """
+    accounts = list(cfg.get("accounts") or [])
+    cache = cfg.get("memberCache") or {}
+    stats = cfg.get("orgStatsCache") or {}
+
+    branch_of, order = _branch_order(accounts, cache)
 
     dataset: dict[str, BranchData] = {}
     for user in order:
         blob = cache.get(user) or {}
-        fallback = str(blob.get("branch") or branch_of.get(user) or user).strip() or user
+        stats_blob = stats.get(user) or {}
+        fallback = _fallback_of(blob, branch_of, user)
         members = [record_from_dict(d) for d in (blob.get("members") or [])]
 
-        by_class: dict[str, list[MemberRecord]] = {}
-        for m in members:
-            by_class.setdefault(_class_of(m, fallback), []).append(m)
-
-        if by_class:
-            for cls, group in by_class.items():
-                data = dataset.setdefault(cls, BranchData(cls))
-                data.rows["members"].extend(_member_rows(group, cls))
-                results = (
-                    build_identity_results(group, default_identity_template())
-                    + build_report_results(group, default_report_template())
-                    + build_fee_results(group)
-                )
-                identity, archive, fee = _error_rows(results, cls)
-                data.rows["identity"].extend(identity)
-                data.rows["archive"].extend(archive)
-                data.rows["fee"].extend(fee)
-        else:
-            _fill_from_stats(dataset.setdefault(fallback, BranchData(fallback)),
-                             stats.get(user) or {}, fallback)
-
-        owner_of = {m.name: cls for cls, group in by_class.items() for m in group}
-        default_cls = next(iter(by_class), fallback) if by_class else fallback
-        transfer = (stats.get(user) or {}).get("transfer") or {}
-        for name in transfer.get("names") or []:
-            cls = owner_of.get(str(name)) or default_cls
-            dataset.setdefault(cls, BranchData(cls)).rows["transfer"].append(
-                {"班级": cls, "姓名": name, "申请状态": "已申请"})
+        by_class = _fill_members_by_class(dataset, members, fallback, stats_blob)
+        _fill_transfer(dataset, by_class, stats_blob.get("transfer") or {}, fallback)
     return dataset
 
 

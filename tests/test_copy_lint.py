@@ -93,7 +93,6 @@ def test_current_copy_is_clean():
 
 
 # —— anti-slop：手机端 Kotlin ——
-# 每条都对应一次被点名改掉的界面写法，改回去必须变红。
 
 def _check_kotlin(tmp_path, source: str) -> list[str]:
     path = tmp_path / "Sample.kt"
@@ -102,7 +101,6 @@ def _check_kotlin(tmp_path, source: str) -> list[str]:
 
 
 def test_kotlin_middot_is_not_a_separator(tmp_path):
-    """用户与 Classy 都要求分层靠留白，不许拿「·」串信息。"""
     problems = _check_kotlin(tmp_path, '''
         @Composable
         fun Card1() {
@@ -113,7 +111,6 @@ def test_kotlin_middot_is_not_a_separator(tmp_path):
 
 
 def test_kotlin_note_must_not_teach_operations(tmp_path):
-    """「说明的小字用于概要描述功能，而不是教用户如何操作」。"""
     problems = _check_kotlin(tmp_path, '''
         @Composable
         fun Card1() {
@@ -134,7 +131,6 @@ def test_kotlin_button_over_four_chars(tmp_path):
 
 
 def test_kotlin_two_text_buttons_in_card(tmp_path):
-    """卡片里一行放三个文字按钮，就是用户说的「按钮粘腻」。"""
     problems = _check_kotlin(tmp_path, '''
         @Composable
         fun Card1() {
@@ -150,7 +146,6 @@ def test_kotlin_two_text_buttons_in_card(tmp_path):
 
 
 def test_kotlin_dialog_actions_are_allowed(tmp_path):
-    """对话框底的「取消 + 主操作」是标准布局，不是堆叠。"""
     problems = _check_kotlin(tmp_path, '''
         @Composable
         fun Dialog1() {
@@ -175,5 +170,4 @@ def test_python_note_must_not_teach_operations(tmp_path):
 
 
 def test_current_copy_is_clean():
-    """当前桌面端与手机端都不该再出现被禁用的写法。"""
     assert lint_copy.run(quiet=True) == []

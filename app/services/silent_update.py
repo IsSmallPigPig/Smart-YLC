@@ -92,6 +92,33 @@ def mark_pending(version: str) -> None:
     path.write_text(json.dumps({"version": version}), encoding="utf-8")
 
 
+def save_pending_installer(path: str, version: str = "") -> None:
+    """记下已下载、等用户确认重启的更新包；跨会话保留以便下次启动再提示。"""
+    from app.services import store
+
+    store.update(lambda cfg: cfg.__setitem__(
+        "pendingInstaller", {"path": str(path), "version": str(version or "")}))
+
+
+def pending_installer() -> dict:
+    """读取待安装包；文件已被移走或删除时返回空并顺手清掉记录。"""
+    from app.services import store
+
+    item = (store.load() or {}).get("pendingInstaller") or {}
+    path = str(item.get("path") or "")
+    if not path or not Path(path).is_file():
+        if path:
+            clear_pending_installer()
+        return {}
+    return {"path": path, "version": str(item.get("version") or "")}
+
+
+def clear_pending_installer() -> None:
+    from app.services import store
+
+    store.update(lambda cfg: cfg.pop("pendingInstaller", None))
+
+
 def take_updated(version: str) -> str:
     """如果这次启动是更新后的第一次，返回被替换的旧版本号，并清掉标记。
 
@@ -124,6 +151,9 @@ def _start_windows(target: Path) -> bool:
     也不再写 .cmd 做延迟：路径里可能有中文用户名，批处理按控制台代码页解析，
     写错编码就静默失败。安装器的 /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS
     本来就会等（必要时强制关闭）仍占用文件的进程，比脚本 sleep 更可靠。
+
+    安装器单独拉起、不与后续启动串成一条命令：串起来一旦 cmd 解析出错，
+    连安装都不会执行。启动另挂延迟任务，最坏只是没自动打开，安装照常完成。
     """
     log = Path(os.path.expanduser("~")) / ".gd12355-helper" / "updates" / "install.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +166,42 @@ def _start_windows(target: Path) -> bool:
                      stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=flags, close_fds=True)
+    _schedule_windows_relaunch()
     return True
+
+
+def _schedule_windows_relaunch(delay: int = 12) -> None:
+    """装完后把新版本重新打开，让「重启」真正回到应用。"""
+    if not _packaged():
+        return      # 源码版的解释器也叫 python.exe，按扩展名判断会连开发机一起重开
+    exe = Path(sys.executable)
+    command = f'timeout /t {delay} /nobreak >nul & start "" "{exe}"'
+    flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
+             | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    try:
+        subprocess.Popen(["cmd", "/c", command],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL,
+                         creationflags=flags, close_fds=True)
+    except OSError:
+        pass        # 自动重开失败不影响安装，用户可从桌面图标打开
+
+
+def _relaunch_macos() -> bool:
+    """macOS：从当前可执行文件推断 .app 包路径并打开。"""
+    exe = Path(sys.executable).resolve()
+    for parent in exe.parents:
+        if parent.suffix == ".app":
+            try:
+                subprocess.Popen(["open", str(parent)],
+                                 stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+                return True
+            except OSError:
+                return False
+    return False
 
 
 def installer_command(path: str) -> list[str] | None:
@@ -229,11 +294,14 @@ def _notify(title: str, body: str) -> None:
 
 
 def install_and_notify(path: str) -> int:
-    """隐藏入口：装完后通知用户重启；失败也给出可执行的下一步。"""
+    """隐藏入口：装完后自动打开新版本；失败也给出可执行的下一步。"""
     try:
         install(path)
     except SilentInstallError as e:
         _notify("更新未完成", f"{e}。请到「系统配置 - 关于项目」手动安装。")
         return 1
+    if sys.platform == "darwin" and _relaunch_macos():
+        return 0
+    # 自动打开失败（或非 mac）：至少让用户知道该手动打开
     _notify("更新已完成", "智慧团委已更新，重启应用后生效。")
     return 0

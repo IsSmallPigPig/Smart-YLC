@@ -15,8 +15,6 @@
 from __future__ import annotations
 
 import os
-import shutil
-import tempfile
 
 from PyQt5.QtCore import QRectF, Qt, QThread, QTimer, pyqtSignal as Signal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
@@ -35,10 +33,11 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
-from app.constants import LIMITS, MB
+from app.constants import LIMITS
+from app.domain import work_area
 from app.domain.account_health import excluded_summary, split_accounts
-from app.domain.archive_scan import (FolderScan, abnormal_target, is_abnormal_path,
-                                     normal_target, relative_to, scan_folders)
+from app.domain.archive_scan import (ABNORMAL_DIR_NAME as LEGACY_ABNORMAL_DIR,
+                                     FolderScan, relative_to, scan_folders)
 from app.domain.naming import analyze_file_name
 from app.domain.upload_inspect import (archived_index, group_by_branch, inspect,
                                        member_index,
@@ -53,403 +52,12 @@ from app.ui.page import (BatchedBuild, BusyOverlay, CollapsibleCard, FluentPage,
                          section_title, set_tip)
 from app.ui.widgets import PillLabel, ProgressToast, StatusList
 
-
-class _DropZone(QWidget):
-    """空态拖放区：虚线框 + 两行说明，点一下等同「添加文件夹」。"""
-
-    clicked = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(112)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        lay = QVBoxLayout(self)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.setSpacing(4)
-        title = note_label("拖入文件夹")
-        f = title.font()
-        f.setPixelSize(14)
-        f.setWeight(QFont.Weight.DemiBold)
-        title.setFont(f)
-        # 这是空态的主文案，不能跟说明一样灰：毛玻璃上会整行消失。
-        # 颜色取 palette 的前景 token，不在页面里另写一套 hex
-        title.setTextColor(*P.text_colors("fg"))
-        lay.addWidget(title, 0, Qt.AlignmentFlag.AlignHCenter)
-        hint = note_label("支持多选，自动扫描子文件夹")
-        hint.setWordWrap(False)   # 居中单行，折行会把这个框撑成两截
-        lay.addWidget(hint, 0, Qt.AlignmentFlag.AlignHCenter)
-
-    def paintEvent(self, _e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor(P.MUTED))
-        pen.setWidth(1)
-        pen.setStyle(Qt.PenStyle.DashLine)
-        pen.setColor(QColor(154, 160, 172) if not isDarkTheme() else QColor(96, 102, 112))
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 10, 10)
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-
-
-class _DropOverlay(QWidget):
-    """拖动文件夹经过窗口时盖在内容区的提示层：虚线框 + 一句话说明松手会发生什么。
-
-    文字直接画在 paintEvent 里（不用子控件）：这一层只活几百毫秒，
-    交给布局反而会因为它自己的尺寸变化把文案裁掉半行。"""
-
-    TITLE = "松开添加这些文件夹"
-    HINT = "子文件夹自动扫描，重复目录跳过"
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-
-    def paintEvent(self, _e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-
-        box = self.rect().adjusted(10, 10, -10, -10)
-        p.setPen(Qt.PenStyle.NoPen)
-        # 不透明页面底色：底下那层空态提示的字会从半透明里透出来，两层字叠在一起
-        p.setBrush(page_bg_color())
-        p.drawRoundedRect(box, 14, 14)
-
-        pen = QPen(QColor(P.BRAND))
-        pen.setWidth(2)
-        pen.setStyle(Qt.PenStyle.DashLine)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(box.adjusted(2, 2, -2, -2), 14, 14)
-
-        ink = P.fg("fg")
-        dim = P.fg("fg2")
-
-        title_font = QFont(self.font())
-        title_font.setPixelSize(15)
-        title_font.setWeight(QFont.Weight.DemiBold)
-        hint_font = QFont(self.font())
-        hint_font.setPixelSize(12)
-
-        # 标题底边、说明顶边各自贴住中线留 4px：两行才不会挤到一起去
-        title_rect = QRectF(box.left(), box.top(), box.width(), box.height() / 2 - 4)
-        p.setFont(title_font)
-        p.setPen(ink)
-        p.drawText(title_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
-                   self.TITLE)
-
-        hint_rect = QRectF(box.left(), box.center().y() + 4, box.width(), 40)
-        p.setFont(hint_font)
-        p.setPen(dim)
-        p.drawText(hint_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-                   self.HINT)
-
-
-class _FolderCard(CardWidget):
-    """来源目录里的一张普通卡片：文件夹名、完整路径、份数与移除。
-
-    折叠只发生在「来源目录」这一层；具体文件夹不再各自展开一份文件清单——
-    文件已经在下面的支部分组里，再列一遍只会让页面更长。
-    """
-
-    def __init__(self, name: str, path: str, tags: list[tuple[str, str]],
-                 on_remove=None, parent=None):
-        super().__init__(parent)
-        self.setBorderRadius(P.RADIUS["control"])
-        row = QHBoxLayout(self)
-        row.setContentsMargins(16, 10, 10, 10)
-        row.setSpacing(12)
-
-        icon = IconWidget(FIF.FOLDER)
-        icon.setFixedSize(20, 20)
-        row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        text = QVBoxLayout()
-        text.setSpacing(2)
-        self.title_label = StrongBodyLabel(name or "未命名目录")
-        f = self.title_label.font()
-        f.setPixelSize(14)
-        f.setWeight(QFont.Weight.DemiBold)
-        self.title_label.setFont(f)
-        text.addWidget(self.title_label)
-        self.desc_label = note_label(path)
-        text.addWidget(self.desc_label)
-        row.addLayout(text, 1)
-
-        self._tags = []
-        for text_value, tone in tags:
-            pill = PillLabel(str(text_value), tone)
-            row.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
-            self._tags.append(pill)
-
-        if on_remove is not None:
-            remove = ToolButton(FIF.DELETE)
-            set_tip(remove, "移除这个来源目录（磁盘文件不动）")
-            remove.clicked.connect(lambda _=False: on_remove())
-            row.addWidget(remove, 0, Qt.AlignmentFlag.AlignVCenter)
-
-
-# 站点单文件上限 10MB，统一压到 9.5MB 留余量；不再提供可选项
-COMPRESS_TARGET = LIMITS["PDF_DEFAULT_TARGET_BYTES"]
-MAX_BATCH = LIMITS["MAX_UPLOAD_PER_BATCH"]
-
-
-def _worker_count(cap: int) -> int:
-    """并发上限取 cap，同时留一个核给 UI，免得进度条卡住。"""
-    return min(cap, max(1, (os.cpu_count() or 4) - 1))
-RESULT_TONE = {"成功": "ok", "跳过": "warn", "失败": "error"}
-
-
-class ScanWorker(QThread):
-    """后台扫描：递归收 PDF → 按命名过滤 → 逐份检查（含重复团员）。
-
-    走子目录、读页数、改名都可能慢（几百份档案），放主线程会把界面顶住。"""
-
-    done = Signal(object, object)   # scans, statuses
-    failed = Signal(str)
-
-    def __init__(self, dirs: list[str], expected_pages: int, accounts: list[dict],
-                 roster, members: dict | None = None, archived: dict | None = None):
-        super().__init__()
-        self.dirs = list(dirs)
-        self.expected_pages = expected_pages
-        self.accounts = accounts
-        self.roster = roster
-        self.members = members
-        self.archived = archived
-
-    def run(self):
-        try:
-            scans = scan_folders(self.dirs)
-            roots: dict[str, str] = {}
-            files: list[str] = []
-            for scan in scans:
-                for path in scan.files:
-                    roots[path] = scan.root
-                    files.append(path)
-            # 设置页「工作区」自动处理过的散件也一并算上（路径不在目录里的那种）
-            for entry in load_pending():
-                path = entry.get("path", "")
-                if path and os.path.isfile(path) and path not in roots:
-                    files.append(path)
-            statuses = inspect(files, self.expected_pages, self.accounts, self.roster,
-                               members=self.members, archived=self.archived,
-                               roots=roots)
-            self.done.emit(scans, statuses)
-        except Exception as e:  # 整体失败要显式报出来，不静默留空列表
-            self.failed.emit(str(e))
-
-
-class UploadWorker(QThread):
-    """先压缩到目标大小，再按支部分组提交；单文件失败不中断整批。"""
-
-    row_ready = Signal(str, str, str, str)  # account, path, result, reason
-    stage = Signal(str)
-    all_done = Signal(int, int, int, int, int)  # ok, skipped, total, audit_ok, audit_manual
-
-    def __init__(self, creds: dict[str, str], jobs: list[dict], target: int):
-        super().__init__()
-        self.creds = creds
-        self.jobs = jobs  # [{path, account}]
-        self.target = target
-        self._stop = False
-
-    def stop(self):
-        self._stop = True
-
-    def _login(self, account: str):
-        from app.services import login_gate
-        from app.services.api import SiteClient
-
-        client = SiteClient(account, self.creds[account])
-        kind, msg = login_gate.ensure_logged_in(client)
-        if kind == "ok":
-            return client, ""
-        if kind == "cooldown":
-            return None, msg
-        if kind == "captcha":
-            return None, "需要验证码（密码失败过多），请先在网页端登录一次"
-        return None, msg or "登录失败"
-
-    def _member_map(self, client, account: str) -> dict:
-        """该支部的 (姓名, 手机号) → 团员记录；4 小时内的缓存直接复用。"""
-        from datetime import datetime, timezone
-
-        blob = (store.load().get("memberCache") or {}).get(account) or {}
-        ts = blob.get("fetchedAt", "")
-        if ts:
-            try:
-                age = (datetime.now(timezone.utc)
-                       - datetime.fromisoformat(ts)).total_seconds() / 3600
-                if 0 <= age < 4:
-                    from app.domain.org_manage import record_from_dict
-
-                    cached = {(d["name"], d["mobile"]): record_from_dict(d)
-                              for d in blob.get("members", [])}
-                    if cached:
-                        return cached
-            except (ValueError, KeyError, TypeError):
-                pass
-        try:
-            members, _ = client.get_all_members()
-        except Exception:
-            return {}
-        return {(m.name, m.mobile): m for m in members}
-
-    def _compress(self, job: dict, tmpdir: str, seq: int) -> str | None:
-        """超过目标大小的压到临时副本；返回上传用路径，失败返回 None。"""
-        path = job["path"]
-        if os.path.getsize(path) <= self.target:
-            return path
-        from app.services.compress import compress_pdf
-
-        # seq 保证同名档案各有各的临时副本，并发压缩不会互相覆盖
-        tmp = os.path.join(tmpdir, f"{seq}_{os.path.basename(path)}")
-        try:
-            result = compress_pdf(path, tmp, self.target)
-        except Exception as e:
-            self.row_ready.emit(job["account"], path, "失败", f"压缩失败：{e}")
-            return None
-        if result.get("over"):
-            self.row_ready.emit(
-                job["account"], path, "失败",
-                f"压到最低参数仍 {result['dst_size'] / MB:.1f}MB，超过站点限制")
-            return None
-        return tmp
-
-    def _upload_account(self, account: str, jobs: list[dict]) -> dict[str, int]:
-        """提交一个支部的全部档案，返回这一步的计数。
-
-        同一支部内部保持串行：站点的分片上传与审核接口按支部受理，并发只会
-        互相排队并放大被限流的风险。不同支部之间才并发。
-        """
-        counts = {"ok": 0, "skipped": 0, "audit_ok": 0, "audit_manual": 0}
-        if self._stop:
-            return counts
-        if len(jobs) > MAX_BATCH:
-            for job in jobs:
-                self.row_ready.emit(account, job["path"], "失败",
-                                    f"该支部单批超过 {MAX_BATCH} 份，请分批")
-            return counts
-        client, err = self._login(account)
-        if client is None:
-            for job in jobs:
-                self.row_ready.emit(account, job["path"], "失败", f"登录失败：{err}")
-            return counts
-        member_map = self._member_map(client, account)
-
-        for job in jobs:
-            if self._stop:
-                break
-            path = job["path"]
-            name = os.path.basename(path)
-            analysis = analyze_file_name(name)
-            member = member_map.get(analysis.parsed) if analysis.parsed else None
-            if member is not None:
-                reason = upload_skip_reason(member.report_data_status,
-                                            member.ebook_status)
-                if reason:
-                    self.row_ready.emit(account, path, "跳过", reason)
-                    counts["skipped"] += 1
-                    continue
-
-            self.stage.emit(f"上传 {name} 到 {account}")
-            result = client.upload_file(job["upload_path"])
-            if not result.ok:
-                self.row_ready.emit(account, path, "失败", result.message)
-                continue
-            counts["ok"] += 1
-            if member is not None and str(member.member_id).isdigit():
-                self.stage.emit(f"审核 {name}")
-                audit = client.audit_voluntary_book(member.member_id)
-                if audit.ok:
-                    counts["audit_ok"] += 1
-                    self.row_ready.emit(account, path, "成功", "已上传，审核已自动通过")
-                else:
-                    counts["audit_manual"] += 1
-                    self.row_ready.emit(
-                        account, path, "成功",
-                        f"已上传，自动审核失败：{audit.message}（请到网页端手动审核）")
-            else:
-                counts["audit_manual"] += 1
-                self.row_ready.emit(
-                    account, path, "成功", "已上传，未匹配到团员记录，请到网页端手动审核")
-        return counts
-
-    def run(self):
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        total = len(self.jobs)
-        summary = {"ok": 0, "skipped": 0, "audit_ok": 0, "audit_manual": 0}
-        tmpdir = tempfile.mkdtemp(prefix="gd-upload-")
-        try:
-            # 一、压缩：超过目标体积的才压，几份之间互不依赖，并行处理
-            prepared: list[dict] = []
-            if self.jobs:
-                workers = _worker_count(3)
-                done = 0
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {pool.submit(self._compress, job, tmpdir, index): (index, job)
-                               for index, job in enumerate(self.jobs)}
-                    for future in as_completed(futures):
-                        index, job = futures[future]
-                        done += 1
-                        self.stage.emit(
-                            f"压缩 {done}/{total}：{os.path.basename(job['path'])}")
-                        if self._stop:
-                            continue
-                        try:
-                            upload_path = future.result()
-                        except Exception as exc:      # noqa: BLE001
-                            self.row_ready.emit(job["account"], job["path"], "失败",
-                                                f"压缩失败：{exc}")
-                            continue
-                        if upload_path is not None:
-                            prepared.append({"path": job["path"],
-                                             "account": job["account"],
-                                             "upload_path": upload_path,
-                                             "order": index})
-            if self._stop:
-                self.all_done.emit(0, 0, total, 0, 0)
-                return
-
-            # 压缩是并发的，回来的顺序不是用户看到的顺序：按原始次序重排，
-            # 同一支部内部仍按列表中的先后提交
-            prepared.sort(key=lambda item: item["order"])
-
-            # 二、按支部提交：支部之间并发（每个支部一套独立会话），支部内部串行
-            groups: dict[str, list[dict]] = {}
-            for job in prepared:
-                groups.setdefault(job["account"], []).append(job)
-
-            if groups:
-                workers = min(3, len(groups))
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {}
-                    for account, jobs in groups.items():
-                        self.stage.emit(f"提交 {account}（{len(jobs)} 份）")
-                        futures[pool.submit(self._upload_account, account, jobs)] = account
-                    for future in as_completed(futures):
-                        account = futures[future]
-                        self.stage.emit(f"{account} 已提交")
-                        try:
-                            counts = future.result()
-                        except Exception as exc:      # noqa: BLE001
-                            for job in groups[account]:
-                                self.row_ready.emit(account, job["path"], "失败",
-                                                    f"提交失败：{exc}")
-                            continue
-                        for key in summary:
-                            summary[key] += counts[key]
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-        self.all_done.emit(summary["ok"], summary["skipped"], total,
-                           summary["audit_ok"], summary["audit_manual"])
+# 控件与 worker 已拆到独立模块；这里重导出原名，页面代码与测试 patch 路径不变
+from app.ui.upload_widgets import _DropZone, _DropOverlay, _FolderCard
+from app.ui.upload_workers import (
+    COMPRESS_TARGET, MAX_BATCH, RESULT_TONE, ScanWorker, UploadWorker,
+    _worker_count,
+)
 
 
 class UploadPage(FluentPage):
@@ -472,8 +80,10 @@ class UploadPage(FluentPage):
         self._phone_dialog = None
         # 逐格检查结果：{路径: 空格数}；-1 表示这项没查（缺 OpenCV 等）
         self._cell_counts: dict[str, int] = {}
-        # 按 (路径, 修改时间) 缓存：同一份档案没改过就不重复扫
-        self._cell_cache: dict[tuple[str, float], int] = {}
+        # 按内容摘要缓存（key 由 _cell_key 给出）：同一份档案无论改名、重压、
+        # 还是重启程序后重新扫描，都不会重复扫几百页
+        self._cell_cache: dict[str, int] = {}
+        self._cell_queued: set[str] = set()   # 本轮已入队的摘要，避免同内容副本重复检查
         self._cell_worker = None
         self._cell_total = 0
         self._cell_done = 0
@@ -677,11 +287,18 @@ class UploadPage(FluentPage):
         档案在列表里出现两次，重复团员的提示就没法看了。"""
         current = list(self._dirs) or load_workspace_dirs()
         added, skipped = [], 0
+        # 配置里的旧值与拖放来的新值可能一个正斜杠一个反斜杠（Windows 大小写也
+        # 不敏感），按原串比较会把同一个目录算成两个，档案在列表里重复出现。
+        def same_dir(p: str) -> str:
+            return os.path.normcase(os.path.normpath(os.path.abspath(p)))
+
         for raw in paths:
             path = os.path.abspath(str(raw or "").strip())
             if not path or not os.path.isdir(path):
                 continue
-            covered = any(path == d or path.startswith(d.rstrip(os.sep) + os.sep)
+            key = same_dir(path)
+            covered = any(key == same_dir(d)
+                          or key.startswith(same_dir(d).rstrip(os.sep) + os.sep)
                           for d in current + added)
             if covered:
                 skipped += 1
@@ -732,6 +349,9 @@ class UploadPage(FluentPage):
             path = url.toLocalFile()
             if not path:
                 continue
+            # Qt 在 Windows 上统一给正斜杠，和 os.path 产出的反斜杠是不同字符串；
+            # 不归一，同一个目录会被当成两个加进来源列表。
+            path = os.path.normpath(path)
             if os.path.isdir(path):
                 dirs.append(path)
             elif path.lower().endswith(".pdf") and os.path.isfile(path):
@@ -833,6 +453,7 @@ class UploadPage(FluentPage):
         worker.done.connect(
             lambda scans, statuses, w=worker: self._on_inspected(w, scans, statuses))
         worker.failed.connect(lambda msg, w=worker: self._on_inspect_failed(w, msg))
+        worker.stage.connect(self._set_status)
         worker.start()
 
     def _on_inspected(self, worker, scans, statuses):
@@ -891,7 +512,7 @@ class UploadPage(FluentPage):
         self._sync_abnormal(statuses)
         alive = {str(s.path) for s in statuses}
         self._cell_counts = {p: n for p, n in self._cell_counts.items() if p in alive}
-        self._cell_cache = {k: n for k, n in self._cell_cache.items() if k[0] in alive}
+        # 摘要缓存不按路径淘汰：同一份内容换个文件名还会命中，磁盘那份另有容量上限
         self._rebuild_sources()
         # 卡片建完再收起加载遮罩，避免中途露出半截内容导致闪屏
         self._rebuild_branches(on_done=self._after_branches)
@@ -904,11 +525,22 @@ class UploadPage(FluentPage):
         self._start_cell_check()
 
     def _sync_abnormal(self, statuses):
-        """异常以磁盘位置为准：「异常档案」文件夹里的一律算异常。
+        """异常以磁盘位置为准：工作目录/异常 里的副本对应原件算异常。
 
-        标记异常会把文件移进去，所以每次扫描都按路径重建；移动失败（只读盘等）
-        时退回内存标记，这里把还存在的旧路径保留下来，别被重扫冲掉。"""
-        auto = {str(s.path) for s in statuses if is_abnormal_path(str(s.path))}
+        标记异常会把副本挪进异常区，所以每次扫描按异常区倒推原件路径重建；
+        移动失败（只读盘等）时退回内存标记，把还存在的旧路径保留下来。
+        兼容升级前旧「异常档案」目录里的档案。"""
+        from app.services import prepare
+
+        roots = {str(s.path): s.root for s in statuses}
+        auto = prepare.abnormal_originals(roots)
+        for s in statuses:
+            # 副本落在异常区就算异常（覆盖原件改名后按路径倒推失配的情况）
+            if s.work_path and work_area.is_abnormal_copy(s.work_path):
+                auto.add(str(s.path))
+            # 旧目录就地异常：路径本身带「异常档案」的也算
+            if LEGACY_ABNORMAL_DIR in os.path.normpath(str(s.path)).split(os.sep):
+                auto.add(str(s.path))
         keep = {p for p in self._abnormal_paths if os.path.isfile(p)}
         self._abnormal_paths = auto | keep
 
@@ -1015,28 +647,56 @@ class UploadPage(FluentPage):
 
     # ---------- 逐格检查（扫描后自动跑） ----------
 
-    def _cell_key(self, path: str) -> tuple[str, float]:
-        """缓存键：路径 + 修改时间。档案没改过就不重复扫几百页。"""
-        try:
-            return (path, os.path.getmtime(path))
-        except OSError:
-            return (path, 0.0)
+    def _cell_key(self, path: str) -> str | None:
+        """缓存键：内容摘要；读不出文件返回 None（不进持久化缓存）。"""
+        from app.services import check_cache
+
+        return check_cache.fingerprint(path) or None
 
     def _start_cell_check(self):
         """逐格查表格空格：扫描完自动在后台跑，结果写进每行说明。
 
         进度挂在右下角浮动进度条上（ProgressToast），不占页面、不锁交互。
-        同一份档案按 (路径, 修改时间) 缓存，没改过就跳过。"""
+        查过的结论按内容摘要持久化，同一份档案改名、重压或重启后都不再重查。"""
+        from app.services import check_cache
         from app.services.form_cells import check as check_cells
 
-        paths = [str(s.path) for s in self.statuses
-                 if self._cell_key(str(s.path)) not in self._cell_cache]
-        if not paths:
+        # 空格从压缩副本上查（与上传同一份文件）；结果仍按原件路径回填给界面。
+        # 异常副本、未生成副本的档案不查——它们不参与上传。
+        targets: list[tuple[str, str]] = []   # (原件路径, 副本路径)
+        self._cell_queued.clear()
+        cached_hits = 0
+        for s in self.statuses:
+            original = str(s.path)
+            copy = s.work_path
+            if not copy or not os.path.isfile(copy):
+                continue
+            if work_area.is_abnormal_copy(copy):
+                continue
+            key = self._cell_key(copy)
+            if key is not None:
+                if key in self._cell_cache:
+                    continue                  # 本会话已出结果
+                known = check_cache.blanks_of(key)
+                if known is not None:
+                    self._cell_cache[key] = known
+                    self._cell_counts[original] = known
+                    cached_hits += 1
+                    continue
+                if key in self._cell_queued:
+                    continue                  # 内容相同的副本本轮已排队，不重复检查
+                self._cell_queued.add(key)
+            targets.append((original, copy))
+        if cached_hits:
+            # 命中缓存的也要重建卡片，否则行说明还是空的
+            self._rebuild_branches()
+        if not targets:
             return
         if self._cell_worker is not None and self._cell_worker.isRunning():
             return
 
-        self._cell_total = len(paths)
+        self._cell_targets = {original: copy for original, copy in targets}
+        self._cell_total = len(targets)
         self._cell_done = 0
         self._cell_skipped = 0
         self._cell_skip_reason = ""
@@ -1045,7 +705,7 @@ class UploadPage(FluentPage):
         self._cell_toast.show()
 
         class _Worker(QThread):
-            one = Signal(str, int, str)   # path, 空格数（-1=没查成）, 跳过原因
+            one = Signal(str, int, str)   # 原件路径, 空格数（-1=没查成）, 跳过原因
             finished_all = Signal()
 
             def run(inner):
@@ -1055,16 +715,17 @@ class UploadPage(FluentPage):
 
                 workers = _worker_count(4)
                 with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {pool.submit(check_cells, p): p for p in paths}
+                    futures = {pool.submit(check_cells, copy): original
+                               for original, copy in targets}
                     for future in as_completed(futures):
-                        path = futures[future]
+                        original = futures[future]
                         try:
                             result = future.result()
                             count = -1 if result.skipped else len(result.blanks)
                             reason = result.skipped
                         except Exception as exc:   # noqa: BLE001 - 单份失败不拖垮整批
                             count, reason = -1, str(exc)
-                        inner.one.emit(path, count, reason)
+                        inner.one.emit(original, count, reason)
                 inner.finished_all.emit()
 
         worker = _Worker(self)
@@ -1076,7 +737,14 @@ class UploadPage(FluentPage):
     def _on_cell_count(self, path: str, count: int, reason: str = ""):
         if count >= 0:
             self._cell_counts[path] = count
-            self._cell_cache[self._cell_key(path)] = count
+            copy = (getattr(self, "_cell_targets", {}) or {}).get(path, path)
+            key = self._cell_key(copy)
+            if key is not None:
+                self._cell_cache[key] = count
+                # 落盘：下次启动或重新扫描时这份就不必再查
+                from app.services import check_cache
+
+                check_cache.remember_blanks(key, count)
         else:
             self._cell_skipped += 1
             self._cell_skip_reason = reason or self._cell_skip_reason
@@ -1182,12 +850,20 @@ class UploadPage(FluentPage):
             "ignoredBlanks", sorted(self._ignored_blanks)))
         self._rebuild_branches()
 
-    def _mark_abnormal(self, path: str, bad: bool):
-        """标记/取消异常：文件跟着搬进或搬出「异常档案」子文件夹。
+    def _work_path_of(self, path: str) -> str:
+        """原件路径 → 工作副本路径。原件永不移动，标记异常搬的是副本。"""
+        for s in getattr(self, "statuses", []) or []:
+            if str(s.path) == path:
+                return s.work_path
+        return ""
 
-        异常状态不另存清单——文件夹就是清单：拷走来源目录、换电脑都带着走，
-        扫描时该文件夹下的一律归入异常。"""
-        if bad == is_abnormal_path(path):
+    def _mark_abnormal(self, path: str, bad: bool):
+        """标记/取消异常：把工作副本在工作目录的 压缩↔异常 之间搬运。
+
+        原件始终留在来源目录不动；异常状态不另存清单，副本所在的文件夹就是
+        清单——拷走来源目录、换电脑都带着走，刷新时按异常区倒推重建。
+        """
+        if bad == (path in self._abnormal_paths):
             return
         target = self._relocate(path, bad)
         if target is None:
@@ -1198,25 +874,43 @@ class UploadPage(FluentPage):
                 self._abnormal_paths.discard(path)
             return
 
-        if self._preview_view is not None and self._preview_view.path == path:
-            self._preview_view.retarget(target)
-        self._cell_counts.pop(path, None)      # 路径变了，旧的空格结果作废
-        InfoBar.success("已移入「异常档案」" if bad else "已移出「异常档案」",
+        if bad:
+            self._abnormal_paths.add(path)
+        else:
+            self._abnormal_paths.discard(path)
+        self._cell_counts.pop(path, None)      # 状态变了，旧的空格结果作废
+        InfoBar.success("已移入「异常」" if bad else "已移出「异常」",
                         os.path.basename(target), duration=3000, parent=self)
         self.refresh()
 
     def _relocate(self, path: str, bad: bool) -> str | None:
-        """把档案搬进/搬出「异常档案」；返回新路径，失败提示并返回 None。"""
+        """把工作副本搬进「异常」或搬回「压缩」；返回新路径，失败返回 None。
+
+        原件永远不动。目标落点直接由原件路径算出，与副本当前在哪无关——
+        这样即使上次移动失败留下半截状态，这次也能纠正到正确的一侧。
+        """
         import shutil
 
-        target = abnormal_target(path) if bad else normal_target(path)
+        status = next((s for s in (getattr(self, "statuses", []) or [])
+                       if str(s.path) == path), None)
+        root = (status.root if status else "") or os.path.dirname(path)
+        target = work_area.copy_target(root, path, abnormal=bad)
+        copy = status.work_path if status is not None else ""
+
         try:
             os.makedirs(os.path.dirname(target), exist_ok=True)
-            shutil.move(path, target)
+            if copy and os.path.isfile(copy):
+                if os.path.abspath(copy) != os.path.abspath(target):
+                    shutil.move(copy, target)
+            else:
+                # 还没有副本（上次压缩失败）：从原件复制一份到目标区
+                shutil.copyfile(path, target)
         except OSError as exc:
             InfoBar.error("移动失败", f"{os.path.basename(path)}：{exc}",
                           duration=6000, parent=self)
             return None
+        if status is not None:
+            status.work_path = target
         return target
 
     def _row_item(self, status) -> dict:
@@ -1332,10 +1026,12 @@ class UploadPage(FluentPage):
 
     def _start_upload(self):
         usable = [s for s in self.statuses
-                  if s.usable and str(s.path) not in self._abnormal_paths]
+                  if s.usable and str(s.path) not in self._abnormal_paths
+                  and s.work_path and os.path.isfile(s.work_path)
+                  and not work_area.is_abnormal_copy(s.work_path)]
         skipped = len([s for s in self.statuses if s.usable]) - len(usable)
         if skipped:
-            InfoBar.info("已跳过异常档案", f"{skipped} 份被标记为异常，未加入本次上传",
+            InfoBar.info("已跳过异常档案", f"{skipped} 份被标记为异常或压缩未达标，未加入本次上传",
                          duration=4000, parent=self)
         if not usable:
             InfoBar.warning("没有可上传档案", "先处理状态列表里的异常文件",
@@ -1348,7 +1044,9 @@ class UploadPage(FluentPage):
                             duration=6000, parent=self)
         creds = {a["userName"]: a.get("password", "")
                  for a in accounts if a.get("password")}
-        jobs = [{"path": s.path, "account": s.account}
+        jobs = [{"path": s.work_path or s.path,   # 上传源：压缩副本（缺失时退回原件）
+                 "display": s.path,               # 界面回传键：原件
+                 "account": s.account}
                 for s in usable if s.account in creds]
         missing = sum(1 for s in usable if s.account not in creds)
         if missing:

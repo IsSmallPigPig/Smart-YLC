@@ -7,145 +7,183 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.1.4
+
+- [a62b302] fix: 修复 Win11 实测暴露的材质、单实例、路径与线程收尾问题
+
+@IsSmallPigPig
+
+## v1.1.3
+
+- [d4f1d72] refactor: mixin 拆分超长 UI 文件与复杂度热点，codeview 达 100 分
+- [ed649da] refactor: 降低 codeview 复杂度与超长文件，补全静默失败诊断
+
+@IsSmallPigPig
+
+## v1.1.2
+
+- [63c850d] fix: 修复手机同步线程模型与多处静默失败
+- [42fcf87] perf(upload): 检查缓存加内存镜像，消除扫描期 O(N²) 磁盘读写
+- [a5e65c8] perf(upload): 按内容摘要缓存检查结果，查过的档案不再重跑
+- [66fb2aa] feat(lan): UDP 自动发现应答，手机无需扫码即可找到这台电脑
+- [e0d0f18] feat(mobile-v2): 首页状态卡融入品牌标志光效
+
+@IsSmallPigPig
+
+## v1.1.1
+
+- [aa85411] fix(copy): 设置页说明改为直白做法；关于页署名改用昵称
+- [f7042d1] fix(ui): 去掉公告卡片的 1px 描边，消除圆角锯齿白边
+
+@IsSmallPigPig
+
+## v1.1.0
+
+- [6bd319e] feat(update): 下载完弹常驻重启提示，由用户确认；按钮不再显示版本号
+- [53c73ff] fix(lint): 恢复被覆盖的 anti-slop 与手机端规则
+- [09a3aef] refactor(upload): 预检查改为 命名→页数→压缩→空格；原件只读，副本落工作目录
+
+@AnkoQAQ
+
 ## v1.0.17
 
-- [9cf955b] fix(build): 钉 numpy<2 修 Windows 查空格 _ARRAY_API not found；冒烟加 cv2 ABI 自检
+- [64d890b] fix(build): 钉 numpy<2 修 Windows 查空格 _ARRAY_API not found；冒烟加 cv2 ABI 自检
 
 @AnkoQAQ
 
 ## v1.0.16
 
-- [f35d7cd] feat(relay): 中转兜底收发；配对校验相同配置；界面自动降级
-- [cef5b3d] feat(pair): 配对加相同配置校验；新增中转接收客户端
-- [5e2ba40] feat(phone): App 扫码配对协议 v1；新增代码反模式 lint 与经验固化 hook
+- [a058385] feat(relay): 中转兜底收发；配对校验相同配置；界面自动降级
+- [3b2910f] feat(pair): 配对加相同配置校验；新增中转接收客户端
+- [e43045d] feat(phone): App 扫码配对协议 v1；新增代码反模式 lint 与经验固化 hook
 
 @AnkoQAQ
 
 ## v1.0.15
 
-- [1cfb1ab] fix(phone): 手机接收不再卡 30 秒；同步弹窗改为 Fluent 居中弹层
-- [77bf4d4] refactor(simplify): 收敛并发工具函数，修临时文件覆盖与失真的基准注释
-- [62be2d8] fix(upload): 提交阶段的进度文案改成「开始提交」与「已提交」
-- [61f618d] docs(copy): 引导页与行注释里与当前行为不一致的说明
-- [7aa1d8e] style(ui): 三处自写 hex 改用 palette token
-- [51767e8] refactor: 清理未使用的导入与死变量；修 fit_table_columns 忽略 skip_cols
-- [d48d6a1] perf(upload): 逐格检查与上传改并发；新增界面文案 lint
+- [cd24f62] fix(phone): 手机接收不再卡 30 秒；同步弹窗改为 Fluent 居中弹层
+- [d3e4fc4] refactor(simplify): 收敛并发工具函数，修临时文件覆盖与失真的基准注释
+- [27971e3] fix(upload): 提交阶段的进度文案改成「开始提交」与「已提交」
+- [5c0d7c2] docs(copy): 引导页与行注释里与当前行为不一致的说明
+- [41195a3] style(ui): 三处自写 hex 改用 palette token
+- [ba07387] refactor: 清理未使用的导入与死变量；修 fit_table_columns 忽略 skip_cols
+- [8ef3ead] perf(upload): 逐格检查与上传改并发；新增界面文案 lint
 
 @AnkoQAQ
 
 ## v1.0.14
 
-- [24403e0] fix(zh): 中文路径与中文文件名的四处故障
-- [f3d8ceb] perf(exam): 结构检查只读图像元数据，末尾页不再渲染缩略图
+- [1c7ce80] fix(zh): 中文路径与中文文件名的四处故障
+- [91a4c91] perf(exam): 结构检查只读图像元数据，末尾页不再渲染缩略图
 
 @AnkoQAQ
 
 ## v1.0.13
 
-- [6b582c0] fix(windows): 深色下关闭窗口材质，系统背板会把整窗刷白
-- [964c5f5] fix(build): 打包整包收集 numpy / cv2 / pymupdf
-- [2521d5e] fix(upload): 来源目录卡片不再等扫描完成才出现
+- [5ab5d35] fix(windows): 深色下关闭窗口材质，系统背板会把整窗刷白
+- [4e6f839] fix(build): 打包整包收集 numpy / cv2 / pymupdf
+- [0514771] fix(upload): 来源目录卡片不再等扫描完成才出现
 
 @AnkoQAQ
 
 ## v1.0.12
 
-- [24153c3] fix(ci): dmg 制作步骤加三次重试并保留 hdiutil 输出
-- [4e5afb5] feat(upload): 去掉工具栏的「存在异常」按钮
+- [13c520c] fix(ci): dmg 制作步骤加三次重试并保留 hdiutil 输出
+- [0294fc4] feat(upload): 去掉工具栏的「存在异常」按钮
 
 @AnkoQAQ
 
 ## v1.0.11
 
-- [927ea55] feat(ui): 备份弹窗动作按钮移到底部按钮区；浅色下关闭毛玻璃
-- [6a657e4] fix(toast): 右下角进度浮条在深色下发亮
-- [0254b19] fix(backup): 云端备份弹窗空态只留下拉提示，表单按配置/站点/密码分组
-- [52d7da8] fix(browser): 标题栏标签上下留白改成等距
-- [9829ed6] fix(upload): 黄底只给漏填与人工标记；漏填可以忽略且不影响上传
-- [335cd45] feat(preview): PDF 预览支持缩放（按钮 / Ctrl+滚轮 / 双击）
-- [fc043ff] fix(tray): macOS 上右键托盘同时弹出两个菜单
-- [439eed9] fix(exam): 逐格检查只看主信息表（第 1、2 页）；13 页档案的 11–13 页不再按空白提示
-- [776f1e9] fix(demo): 演示模式的配置目录固定下来，重启不再丢来源目录；漏填单独挂黄色标签
-- [825f349] fix(preview): 档案详情改回上传页内的子页面；标记异常的行统一铺警示底
-- [bf46e38] fix(preview): 点档案行崩溃；档案详情改用 Fluent 无边框窗口并整页缩放
-- [e16cd4e] fix(browser): 标签条铺满标题栏，标签不再被压窄、＋ 按钮不再消失；设置保存不再清空来源目录
-- [fac4059] fix: 托盘右键菜单走 Fluent 自绘；窗口状态变化后重挂材质；手机端只收不发；备份动作按钮定宽居中
-- [8560b53] fix(tray): 托盘点退出后窗口残留、进程不退
-- [35949c9] feat(upload): 查空格随扫描自动执行并显示进度；异常档案移入「异常档案」子文件夹并铺黄底
-- [032cd79] feat(guide): 新增使用引导弹窗——首次启动与每学年 9 月 1 日后各展示一次
-- [ed5c380] feat(browser): 标题栏标签改用 qfluentwidgets TabBar；网页视图按官方背景失效方案换 FramelessWebEngineView
-- [d52d039] fix(update): 静默更新退出码 5 与托盘残留；构建变体写进代码
-- [b047fe4] feat(archive): 可选 OCR 姓名核对——手写识别只做提示不自动拦截
-- [2a7f36a] feat(archive): 档案 PDF 预览、结构体检与手机同步落盘
+- [932d509] feat(ui): 备份弹窗动作按钮移到底部按钮区；浅色下关闭毛玻璃
+- [01ce679] fix(toast): 右下角进度浮条在深色下发亮
+- [090e803] fix(backup): 云端备份弹窗空态只留下拉提示，表单按配置/站点/密码分组
+- [00ca4fa] fix(browser): 标题栏标签上下留白改成等距
+- [3ddbd29] fix(upload): 黄底只给漏填与人工标记；漏填可以忽略且不影响上传
+- [fa859e0] feat(preview): PDF 预览支持缩放（按钮 / Ctrl+滚轮 / 双击）
+- [8f5b382] fix(tray): macOS 上右键托盘同时弹出两个菜单
+- [7f76de2] fix(exam): 逐格检查只看主信息表（第 1、2 页）；13 页档案的 11–13 页不再按空白提示
+- [86eaa8e] fix(demo): 演示模式的配置目录固定下来，重启不再丢来源目录；漏填单独挂黄色标签
+- [3fd9ff7] fix(preview): 档案详情改回上传页内的子页面；标记异常的行统一铺警示底
+- [b0c8e5a] fix(preview): 点档案行崩溃；档案详情改用 Fluent 无边框窗口并整页缩放
+- [5ff2055] fix(browser): 标签条铺满标题栏，标签不再被压窄、＋ 按钮不再消失；设置保存不再清空来源目录
+- [4ea40be] fix: 托盘右键菜单走 Fluent 自绘；窗口状态变化后重挂材质；手机端只收不发；备份动作按钮定宽居中
+- [a311d02] fix(tray): 托盘点退出后窗口残留、进程不退
+- [446ddb0] feat(upload): 查空格随扫描自动执行并显示进度；异常档案移入「异常档案」子文件夹并铺黄底
+- [2bfa801] feat(guide): 新增使用引导弹窗——首次启动与每学年 9 月 1 日后各展示一次
+- [2eb27fd] feat(browser): 标题栏标签改用 qfluentwidgets TabBar；网页视图按官方背景失效方案换 FramelessWebEngineView
+- [6f94402] fix(update): 静默更新退出码 5 与托盘残留；构建变体写进代码
+- [f123ef4] feat(archive): 可选 OCR 姓名核对——手写识别只做提示不自动拦截
+- [b5ac26a] feat(archive): 档案 PDF 预览、结构体检与手机同步落盘
 
 @AnkoQAQ
 
 ## v1.0.10
 
-- [3325310] feat(backup): 云端备份 v2——4 位密码、多配置档案与所有权
-- [4c49f7e] test(ci): 冒烟检查补加密模块自检——缺 cryptography 现在打包期就红
-- [0639f3c] fix(ci): 打包清单补 cryptography——云端备份的库在函数内才 import
-- [392fe5d] feat(backup): 默认使用 https://smartylc.netlify.app 作为备份站
-- [b21a020] fix(windows): Win10 不再做窗口圆角
+- [7039d79] feat(backup): 云端备份 v2——4 位密码、多配置档案与所有权
+- [13ca210] test(ci): 冒烟检查补加密模块自检——缺 cryptography 现在打包期就红
+- [f05532d] fix(ci): 打包清单补 cryptography——云端备份的库在函数内才 import
+- [68b63a9] feat(backup): 默认使用 https://smartylc.netlify.app 作为备份站
+- [0da8074] fix(windows): Win10 不再做窗口圆角
 
 @AnkoQAQ
 
 ## v1.0.9
 
-- [fd21210] fix(windows): 安装提示的续行不能以 # 开头，否则预处理器当成未知指令
+- [3567c6d] fix(windows): 安装提示的续行不能以 # 开头，否则预处理器当成未知指令
 
 @AnkoQAQ
 
 ## v1.0.8
 
-- [f142daa] feat(backup): 客户端云端备份，服务端地址与提取码都在设置里填
-- [6e01537] fix(ci): 安装编译器按版本号查找，不再写死 Inno Setup 6 目录
+- [9e2e15d] feat(backup): 客户端云端备份，服务端地址与提取码都在设置里填
+- [3976fe9] fix(ci): 安装编译器按版本号查找，不再写死 Inno Setup 6 目录
 
 @AnkoQAQ
 
 ## v1.0.7
 
-- [53a6c4f] fix: 安装脚本注释里嵌了花括号常量，Inno 编译直接失败
+- [3c40db6] fix: 安装脚本注释里嵌了花括号常量，Inno 编译直接失败
 
 @AnkoQAQ
 
 ## v1.0.6
 
-- [a169dfc] fix: 修复 Windows 打开网页闪退——安装目录改 ASCII、WebEngine 资源按实际位置钉死
-- [f0e699d] fix(windows): WebEngine 资源缺失时跳过预热，避免 int3 崩溃
+- [1da9057] fix: 修复 Windows 打开网页闪退——安装目录改 ASCII、WebEngine 资源按实际位置钉死
+- [aaaefd4] fix(windows): WebEngine 资源缺失时跳过预热，避免 int3 崩溃
 
 @AnkoQAQ
 
 ## v1.0.4
 
-- [04a8bfe] fix(windows): 强制覆盖 WebEngine 资源路径；Win10 恢复圆角并避开最大化
+- [1de213b] fix(windows): 强制覆盖 WebEngine 资源路径；Win10 恢复圆角并避开最大化
 
 @AnkoQAQ
 
 ## v1.0.3
 
-- [fd1a832] fix(windows): 打包补 QtWebEngine 子进程与资源；Win10 不再用遮罩切圆角
+- [d9cdf8d] fix(windows): 打包补 QtWebEngine 子进程与资源；Win10 不再用遮罩切圆角
 
 @AnkoQAQ
 
 ## v1.0.2
 
-- [41992ce] fix: 避免公告拉取线程导致原生崩溃并支持导出日志
+- [77e48ce] fix: 避免公告拉取线程导致原生崩溃并支持导出日志
 
 @AnkoQAQ
 
 ## v1.0.1
 
-- [ac8d63b] fix(ci): Windows x86 构建钉 PyMuPDF 1.24.11，避免源码编译卡死
-- [f05c605] feat(org): 欠缴团费与没有档案卡可点进对应名单
+- [8ea35fa] fix(ci): Windows x86 构建钉 PyMuPDF 1.24.11，避免源码编译卡死
+- [57f7f3d] feat(org): 欠缴团费与没有档案卡可点进对应名单
 
 @AnkoQAQ
 
 ## v1.0.0
 
-- [6c9baa5] feat: 运行日志与崩溃报告、Qt 性能优化、死代码清理（版本重置 v1.0.0）
-- [f05c605] feat(org): 欠缴团费与没有档案卡可点进对应名单
-- [ac8d63b] fix(ci): 构建钉 PyMuPDF 1.24.11，避免 win32 源码编译卡死
+- [07df5c5] feat: 运行日志与崩溃报告、Qt 性能优化、死代码清理（版本重置 v1.0.0）
+- [57f7f3d] feat(org): 欠缴团费与没有档案卡可点进对应名单
+- [8ea35fa] fix(ci): 构建钉 PyMuPDF 1.24.11，避免 win32 源码编译卡死
 
 @AnkoQAQ
 

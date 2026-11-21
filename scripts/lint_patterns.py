@@ -4,13 +4,34 @@
 开发者写下的代码模式。每条规则都标注了它来自哪次真实故障——规则不是凭空
 定的，是「同样的错不能再犯一次」的固化。
 
+规则索引（编号 = 注释里的「规则 N」，每条在 tests/test_pattern_lint.py 里
+都有「拦住旧写法」+「当前库干净」两个断言）：
+
+     1 getfqdn 反解卡 30 秒          11 配置损坏返回 {} 会抹掉整份
+     2 直接绑 0.0.0.0 触发反解       12 文件名未 NFC 归一化
+     3 裸 QDialog 弹窗               13 端点缺会话鉴权 / 配对缺 configCode
+     4 osascript 拼串丢通知          14 中转整份拉取撞 6MB 墙
+     5 subprocess text=True 乱码     15 opencv 4.8.x 未钉 numpy<2
+     6 extract_image 整图解码取尺寸  16 冒烟自检漏 import cv2
+     7 Windows 材质残留刷白          17 上传绕开压缩副本 work_path
+     8 app/ui 硬编码 hex 色          18 扫描未跳过工作目录
+     9 打包漏 --collect-all 原生包   19 下载完成自动安装退出
+    10 as_completed 收集未重排       20 检查缓存按路径而非内容摘要
+    21 QThread.wait() 当 sleep      22 无事件循环线程建 QTimer
+    23 配置保存静默吞写盘异常       24 Windows 材质按深浅关掉
+    25 readyRead 前未补读缓冲       26 拖放路径未归一
+
+结构：规则 1–14、16–23 在 check_file() 里按编号注释块排布；规则 15 扫非
+.py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式与网络安全配置
+各有独立检查函数（_kt_problems / _network_problems）。
+
 用法：
     python scripts/lint_patterns.py            # 打印问题并返回非零
     python scripts/lint_patterns.py --quiet    # 只返回码，供测试调用
 
-新增规则的方式：在 RULES 里加一条，并在 tests/test_pattern_lint.py 里
-同时加「能拦住旧写法」和「当前库干净」的断言。只加规则不加测试，lint 会
-变成跑一次就红的摆设。
+新增规则的方式：在 check_file()（或对应的独立检查函数）里加一个编号注释块，
+并在 tests/test_pattern_lint.py 里同时加「能拦住旧写法」和「当前库干净」的
+断言。只加规则不加测试，lint 会变成跑一次就红的摆设。
 """
 
 from __future__ import annotations
@@ -248,6 +269,151 @@ def check_file(path: Path) -> list[str]:
                 f"{rel} [冒烟漏检 cv2] 冒烟自检必须 import cv2 并跑一次原生调用，"
                 "否则 numpy 2.x 与 opencv 4.8.1 的 ABI 冲突要等用户点「查空格」才暴露")
 
+    # 规则 17（2026-11-20 预检查流程改造）：上传必须走工作副本 work_path。
+    # 原件只读、压缩副本落在「工作目录/压缩」，上传与查空格都读副本；
+    # 若退回直接上传 s.path，等于绕过压缩与异常隔离，超限原件会传上去。
+    if path.name == "upload_page.py" and "def _start_upload" in source:
+        start = source.index("def _start_upload")
+        block = source[start:start + 1200]
+        if "work_path" not in block:
+            problems.append(
+                f"{rel} [上传绕开副本] _start_upload 必须筛选并上传 work_path（压缩副本），"
+                "原件只读、异常副本不上传；直接用 s.path 会把超限或异常档案传上去")
+
+    # 规则 18（2026-11-20）：扫描来源目录必须跳过「工作目录」子树。
+    # 副本是派生产物，与原件同名；扫进去会一份算两遍、越扫越多。
+    if path.name == "archive_scan.py" and "def scan_folder" in source:
+        if "WORK_DIR_NAME" not in source:
+            problems.append(
+                f"{rel} [扫描工作目录] 扫描必须跳过工作目录（work_area.WORK_DIR_NAME），"
+                "否则压缩副本被当原件重复计数")
+
+    # 规则 19（2026-11-20）：下载完成不得自动安装退出。
+    # 安装要退出主程序，用户会在没确认时突然被关掉；改为常驻提示 + 重启按钮，
+    # 由用户点「重启」才走 silent_update.start。_on_downloaded 里自己安装就是回退。
+    if path.name == "about_card.py" and "def _on_downloaded" in source:
+        start = source.index("def _on_downloaded")
+        end = source.find("\n    def ", start + 1)
+        block = source[start:end if end != -1 else len(source)]
+        if "silent_update.start(" in block:
+            problems.append(
+                f"{rel} [下载即自动安装] _on_downloaded 不能直接调 silent_update.start，"
+                "下载完要弹常驻提示等用户点「重启」，否则程序会在用户没确认时自动退出")
+
+    # 规则 20（2026-11-20）：检查缓存必须按内容摘要，不能按路径。
+    # 原件会被规范化改名、压缩副本会随参数重做、程序重开会清空内存；
+    # 用 (路径, mtime) 当键，上面任一情况都让几百份档案白跑一遍。
+    if path.name == "upload_page.py" and "def _cell_key" in source:
+        start = source.index("def _cell_key")
+        end = source.find("\n    def ", start + 1)
+        block = source[start:end if end != -1 else len(source)]
+        if "getmtime" in block and "fingerprint" not in block:
+            problems.append(
+                f"{rel} [检查缓存按路径] _cell_key 必须用内容摘要（check_cache.fingerprint），"
+                "用 getmtime 会在改名、重压、重启后全部失效，几百份档案重查一遍")
+
+    # 规则 21（2026-11-21）：QThread.wait() 不能当 sleep 用。
+    # wait() 是"等另一个线程结束"（join），从线程自身 run() 里调用属未定义行为：
+    # 要么立即返回变成忙轮询，要么阻塞整个周期使 stop() 无法唤醒。周期等待用
+    # QWaitCondition（或退一步用 msleep）。只看 QThread 子类的 run 块。
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ClassDef)
+                and any(isinstance(b, ast.Name) and b.id == "QThread" for b in node.bases)):
+            continue
+        for fn in node.body:
+            if not (isinstance(fn, ast.FunctionDef) and fn.name == "run"):
+                continue
+            for call in ast.walk(fn):
+                if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "wait"
+                        and isinstance(call.func.value, ast.Name)
+                        and call.func.value.id == "self" and call.args):
+                    problems.append(
+                        f"{rel}:{call.lineno} [wait 当 sleep] QThread 子类 run() 里 "
+                        "self.wait(毫秒) 是 join 语义、从自身调用未定义；周期等待改用 "
+                        "QWaitCondition + QMutex，stop() 才能立即唤醒")
+
+    # 规则 22（2026-11-21）：无 Qt 事件循环的线程里不能建 QTimer。
+    # LanShare 的 on_received 跑在 ThreadingHTTPServer 请求线程，那里建的
+    # QTimer.singleShot 永不触发，收件界面不更新。跨线程回 GUI 用 Signal emit。
+    # 用 AST 找真实调用，避免规则自身注释/字符串里的同名文本自命中。
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "_on_received"):
+            continue
+        for call in ast.walk(node):
+            if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "singleShot"
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id == "QTimer"):
+                problems.append(
+                    f"{rel}:{call.lineno} [_on_received 用 QTimer] HTTP 请求线程无 Qt 事件循环，"
+                    "QTimer.singleShot 回调永不触发；改用 Signal emit 让 Qt 排回 GUI 线程")
+
+    # 规则 23（2026-11-21）：保存用户设置的写盘失败不能静默吞掉。
+    # 配置写不进去（磁盘满/只读/占用）时界面看似保存成功，重启后全丢且无从排查。
+    # _save_cloud_state 曾 except: pass，与规则 11「配置读失败不返回 {}」同源。
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef)
+                and node.name == "_save_cloud_state"):
+            continue
+        for handler in [n for n in ast.walk(node) if isinstance(n, ast.ExceptHandler)]:
+            if (len(handler.body) == 1 and isinstance(handler.body[0], ast.Pass)):
+                problems.append(
+                    f"{rel}:{handler.lineno} [保存静默失败] _save_cloud_state 的写盘异常不能 "
+                    "except: pass；要写日志并 InfoBar 提示用户，否则设置看似保存、重启全丢")
+
+    # 规则 24（2026-11-21）：Windows 材质不能按深浅模式关掉。
+    # 早期 acrylic 走 ACCENT_ENABLE_ACRYLICBLURBEHIND 时深色会刷白，判断里因此加了
+    # `and not _dark()`；现在改成 DWMWA_SYSTEMBACKDROP_TYPE 与 HOSTBACKDROP，暗色
+    # tint 由 DWM 自己上，这条限制只会把可用的能力关掉（Win11 用户报「模糊没工作」）。
+    if re.search(r"windows_material_available\([^)]*\)\s*and\s+not\s+\w*dark\w*\s*\(",
+                 source, re.I):
+        problems.append(
+            f"{rel} [材质被深浅关掉] windows_material_available(...) and not <dark>："
+            "深色下材质同样该挂，暗色 tint 由 DWM 处理；旧刷白结论只适用于已废弃的 "
+            "ACCENT_ENABLE_ACRYLICBLURBEHIND 通路")
+
+    # 规则 25（2026-11-21）：连 readyRead 之前先看缓冲区里有没有数据。
+    # 对端可能在连上信号前写完并断开，此后再无新数据，readyRead 一次都不发，
+    # 命令就丢了（Windows 命名管道写得更快，单实例通知必现）。
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        connects_ready = any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "connect"
+            and isinstance(call.func.value, ast.Attribute)
+            and call.func.value.attr == "readyRead"
+            for call in ast.walk(node))
+        if not connects_ready:
+            continue
+        checks_buffer = any(
+            isinstance(n, ast.Attribute) and n.attr == "bytesAvailable"
+            for n in ast.walk(node))
+        if not checks_buffer:
+            problems.append(
+                f"{rel}:{node.lineno} [readyRead 未补读] {node.name} 连了 readyRead 却没查 "
+                "bytesAvailable：数据若在连信号之前就到了，信号不会再来，命令直接丢失")
+
+    # 规则 26（2026-11-21）：拖放得到的路径必须归一。
+    # Qt 在 Windows 上统一把 toLocalFile() 给成正斜杠，而 os.path 产出反斜杠；
+    # 不 normpath，同一个目录会被当成两个加进来源列表，档案出现重复行。
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "_drop_payload"):
+            continue
+        uses_local = any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "toLocalFile"
+            for call in ast.walk(node))
+        normalized = any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "normpath"
+            for call in ast.walk(node))
+        if uses_local and not normalized:
+            problems.append(
+                f"{rel}:{node.lineno} [拖放路径未归一] _drop_payload 用了 toLocalFile() 但没 "
+                "os.path.normpath：Windows 上是正斜杠，与内部路径比较会失配、目录被重复添加")
+
     return problems
 
 
@@ -293,8 +459,7 @@ KT_ROOT = ROOT / "mobile" / "app" / "src" / "main"
 
 def _kt_problems(source: str, rel: str) -> list[str]:
     problems: list[str] = []
-    # 规则（2026-11-20 扫码无反应）：setAnalyzer 的回调里现场 new 分析器。
-    # 该回调每帧执行，分析器里的节流与解码器状态全部作废，帧率被打满。
+    # 扫码无反应：分析器在每帧回调里新建，节流与解码状态每帧丢失
     for m in re.finditer(r"setAnalyzer\([^)]*\)\s*\{([\s\S]{0,400}?)\}", source):
         if re.search(r"Analyzer\s*[({]", m.group(1)):
             line = source.count("\n", 0, m.start()) + 1
@@ -302,50 +467,16 @@ def _kt_problems(source: str, rel: str) -> list[str]:
                 f"{rel}:{line} [分析器每帧重建] setAnalyzer 回调里新建 Analyzer，"
                 "节流与解码状态每帧丢失；把分析器提到 remember 里，只 setAnalyzer(executor, analyzer)")
 
-    # 规则（2026-11-21 旋转闪退）：显示中的位图一旦交给 Compose 状态，
-    # 绘制队列可能还在用；此时 recycle() 会让下一帧直接崩在渲染线程。
-    # 临时位图（source/result/bitmaps 等局部对象）回收是合法的，不在此列。
-    for m in re.finditer(r"\b(?:preview|display\w*|shown|visible)\w*\??\.recycle\(\)", source):
+    # 提示框撑爆：把响应体拼进异常，站点返回 HTML 时整页灌进界面
+    for m in re.finditer(r'Exception\([^)]*\$\{?\s*body', source):
         line = source.count("\n", 0, m.start()) + 1
         problems.append(
-            f"{rel}:{line} [显示位图提前回收] 显示中的位图不能 recycle()："
-            "渲染队列仍可能读它，旋转时会闪退；让 Compose 缓存自然释放")
-
-    # 规则（2026-11-21 侧拍照片）：相机 JPEG 带 EXIF 方向，ScanSession 是唯一的
-    # 入库解码点；这里不应用方向，侧拍照片进入裁切时就是歪的。
-    # 已校正图的再次解码（CropEditor）、验证码（LoginScreen）不走这条。
-    if rel.endswith("ScanSession.kt") and re.search(r"BitmapFactory\.decode(File|Stream|ByteArray)", source) \
-            and "ExifInterface" not in source:
-        line = source.count("\n", 0, re.search(r"BitmapFactory\.decode", source).start()) + 1
-        problems.append(
-            f"{rel}:{line} [EXIF 未应用] 相机 JPEG 解码后必须过 ExifInterface 旋转/翻转，"
-            "否则侧拍照片进入裁切时就是歪的")
-
-    # 规则（2026-11-21 旋转后识别框错位）：影响渲染效果的 remember/LaunchedEffect
-    # 若只以页面 id 为 key，旋转后不会重算预览与识别框，框与图错位。
-    if "page.rotation" in source:
-        for m in re.finditer(r"LaunchedEffect\(([^)]*)\)", source):
-            key = m.group(1)
-            if "page.id" in key and "rotation" not in key:
-                line = source.count("\n", 0, m.start()) + 1
-                problems.append(
-                    f"{rel}:{line} [旋转未进 effect key] LaunchedEffect 用了 page.id 但漏了 rotation，"
-                    "点旋转后预览/识别框不重算会错位；key 里补上 page.rotation")
-
-    # 规则（2026-11-22 切页卡顿）：remember 里同步扫目录或读文件。
-    # 页面在 pager 里跨页跳转时才首次组合，IO 正好落在切页那一帧的预算里，
-    # 表现为"点底栏后要顿一下才动"，与处理器无关。
-    for m in re.finditer(r"remember(?:\s*\([^()]*\))?\s*\{([^{}]{0,300})", source):
-        if re.search(r"DocStore\.list\(|\.listFiles\(|\.readText\(|\.readBytes\(", m.group(1)):
-            line = source.count("\n", 0, m.start()) + 1
-            problems.append(
-                f"{rel}:{line} [组合期读盘] remember 里扫目录或读文件，切页那一帧会阻塞主线程；"
-                "挪到 LaunchedEffect + withContext(Dispatchers.IO)")
+            f"{rel}:{line} [响应体进提示] 异常信息里直接拼 body，"
+            "站点返回网页时会把整页塞进界面；按内容类型给一句可读的原因")
     return problems
 
 
 def check_kotlin_patterns() -> list[str]:
-    """手机端代码反模式。每条同样对应一次真实缺陷。"""
     problems: list[str] = []
     if not KT_ROOT.exists():
         return problems
@@ -355,54 +486,8 @@ def check_kotlin_patterns() -> list[str]:
     return problems
 
 
-def _update_install_problems(source: str, rel: str) -> list[str]:
-    """更新流程里下载成功不得自动拉起安装。
-
-    桌面端规则 19 的 Kotlin 镜像：下载完只停在 Ready，安装必须由用户点。
-    否则用户以为在「检查更新」，手机已经弹出安装器——尤其在静默检查后。
-    """
-    problems: list[str] = []
-    for m in re.finditer(r"fun\s+download\s*\(", source):
-        # 粗粒度函数体切片：从 fun 的 '{' 配到同层 '}'，够识别自动安装调用
-        open_at = source.find("{", m.end())
-        if open_at < 0:
-            continue
-        depth = 0
-        end_at = open_at
-        for i in range(open_at, len(source)):
-            if source[i] == "{":
-                depth += 1
-            elif source[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    end_at = i
-                    break
-        body = source[open_at:end_at]
-        if re.search(r"startActivity\s*\(|installIntent\s*\(|ACTION_MANAGE_UNKNOWN_APP_SOURCES", body):
-            line = source.count("\n", 0, m.start()) + 1
-            problems.append(
-                f"{rel}:{line} [下载后自动安装] download() 里拉起安装器或权限页："
-                "下载完只能停在 Ready，安装必须由用户点；把跳转放进 installReady()")
-    return problems
-
-
-def check_update_no_auto_install() -> list[str]:
-    manager = KT_ROOT / "update" / "UpdateManager.kt"
-    if not manager.exists():
-        return []
-    return _update_install_problems(manager.read_text(encoding="utf-8"), _rel(manager))
-
-
-def check_android_network_config() -> list[str]:
-    """局域网配对走明文 HTTP，系统默认拒绝非回环明文。"""
-    xml = KT_ROOT / "res" / "xml" / "network_security_config.xml"
-    if not xml.exists():
-        return []
-    return _network_problems(xml.read_text(encoding="utf-8"), _rel(xml))
-
-
 def _network_problems(body: str, rel: str) -> list[str]:
-    # 只认 base-config：domain-config 只能列具体域名/IP，覆盖不了任意局域网地址
+    # 只认 base-config：domain-config 覆盖不了任意局域网地址
     if not re.search(r'<base-config[^>]*cleartextTrafficPermitted="true"', body):
         return [
             f"{rel} [局域网明文被拦] 电脑配对请求 http://局域网IP，"
@@ -410,40 +495,11 @@ def _network_problems(body: str, rel: str) -> list[str]:
     return []
 
 
-def _roster_key_problems(repo_src: str, parser_src: str) -> list[str]:
-    written = set(re.findall(r'\.put\("([A-Za-z]+)"', repo_src))
-    block = re.search(r"private val aliases[\s\S]*?\n\s*\)", parser_src)
-    # 只看 listOf(...) 里的值：map 左侧的键名是内部字段名，不代表解析器认这个键
-    known: set[str] = set()
-    if block:
-        for m in re.finditer(r"to listOf\(([^)]*)\)", block.group(0)):
-            known |= set(re.findall(r'"([A-Za-z]+)"', m.group(1)))
-    missing = sorted(written - known)
-    if not missing:
+def check_android_network_config() -> list[str]:
+    xml = KT_ROOT / "res" / "xml" / "network_security_config.xml"
+    if not xml.exists():
         return []
-    return [
-        "mobile/app/src/main/java/com/smallylc/smartyouth/data/Repo.kt "
-        f"[缓存键无人识别] 写入的 {', '.join(missing)} 不在 MemberParser 别名表里，"
-        "回读时这些字段会变成空值，界面把正常团员判成异常"
-    ]
-
-
-def check_roster_cache_keys() -> list[str]:
-    """名单缓存写进去的键，解析器必须认得。
-
-    规则（2026-11-20 真机注入测试）：Repo.saveCache 写 `reportStatus`，
-    MemberParser 的别名表只有 `auditStatus`/`reportDataStatus`，断网或注入的名单
-    回读时报到状态全部为空，界面把所有人标成「未报到」。写入键与解析别名必须同源，
-    否则缓存看起来有数据、判定全部失真。
-    """
-    repo = KT_ROOT / "data" / "Repo.kt"
-    parser = KT_ROOT / "site" / "MemberParser.kt"
-    if not repo.exists() or not parser.exists():
-        return []
-    return _roster_key_problems(
-        repo.read_text(encoding="utf-8"),
-        parser.read_text(encoding="utf-8"),
-    )
+    return _network_problems(xml.read_text(encoding="utf-8"), _rel(xml))
 
 
 def run(quiet: bool = False) -> list[str]:
@@ -453,8 +509,6 @@ def run(quiet: bool = False) -> list[str]:
     problems.extend(check_deploy_configs())
     problems.extend(check_kotlin_patterns())
     problems.extend(check_android_network_config())
-    problems.extend(check_roster_cache_keys())
-    problems.extend(check_update_no_auto_install())
     if not quiet:
         for line in problems:
             print(line)

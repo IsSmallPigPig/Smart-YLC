@@ -10,6 +10,7 @@ import time
 from PyQt5.QtCore import QEvent, QPoint, QThread, Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import QApplication, QWidget
+from app.ui.main_window_tray_mixin import MainWindowTrayMixin
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import (
     MSFluentWindow,
@@ -87,7 +88,7 @@ def _pump():
                                | QEventLoop.ProcessEventsFlag.ExcludeSocketNotifiers)
 
 
-class MainWindow(MSFluentWindow):
+class MainWindow(MainWindowTrayMixin, MSFluentWindow):
     _translucent_window = True
 
     def __init__(self):
@@ -402,6 +403,77 @@ class MainWindow(MSFluentWindow):
         bar.show()
         return bar
 
+    # ---------- 更新就绪（等待用户确认重启） ----------
+
+    def show_update_ready(self, installer: str, version: str = ""):
+        """下载完成后的常驻提示：新版本已就绪，重启生效。
+
+        不自动安装、不自动退出——由用户点「重启」确认。消息条 duration<0
+        表示不自动消失，只有用户主动叉掉才收（关掉不影响已下载的更新包，
+        下次启动仍会提示）。
+        """
+        from PyQt5.QtCore import Qt
+        from qfluentwidgets import (
+            InfoBar,
+            InfoBarIcon,
+            InfoBarPosition,
+            TransparentPushButton,
+        )
+
+        old = getattr(self, "_update_bar", None)
+        if old is not None and old is not self:
+            try:
+                old.close()
+            except RuntimeError:
+                pass
+        bar = InfoBar(
+            icon=InfoBarIcon.INFORMATION,
+            title="",
+            content="新版本已就绪，重启生效",
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=-1,        # 常驻：除非用户主动关闭
+            parent=self,
+        )
+        btn = TransparentPushButton("重启", parent=bar)
+        btn.clicked.connect(
+            lambda: (bar.close(), self._restart_for_update(installer, version)))
+        bar.addWidget(btn)
+        bar.show()
+        self._update_bar = bar
+        return bar
+
+    def _restart_for_update(self, installer: str, version: str = ""):
+        """用户点「重启」：拉起静默安装并退出，装好后自动回到新版本。"""
+        from qfluentwidgets import InfoBar
+
+        from app.services import silent_update
+
+        try:
+            silent_update.save_pending_installer(installer, version)
+            if version:
+                silent_update.mark_pending(version)
+            silent_update.start(installer)
+        except Exception as e:  # noqa: BLE001 - 安装器缺失/被占用都要给出下一步
+            InfoBar.error("重启失败", f"{e}。可到「系统配置 - 关于项目」重试",
+                          duration=8000, parent=self)
+            return
+        self._quit_app()
+        # 兜底：后台同步/上传线程在跑时进程可能不退出，安装器会撞「文件被占用」
+        # 以退出码 5 中止。给一段硬退窗口，保证安装能接管。
+        QTimer.singleShot(2500, lambda: os._exit(0))
+
+    def notify_update_ready_if_pending(self) -> bool:
+        """启动时若上次已下载好更新包，重新给出常驻重启提示。"""
+        from app.services import silent_update
+
+        item = silent_update.pending_installer()
+        if not item:
+            return False
+        self.show_update_ready(item["path"], item.get("version", ""))
+        return True
+
     # ---------- 通知处理入口 ----------
 
     def handle_notice_action(self, action: str):
@@ -423,128 +495,13 @@ class MainWindow(MSFluentWindow):
 
     # ---------- 托盘驻留 ----------
 
-    def _setup_tray(self):
-        from PyQt5.QtWidgets import QSystemTrayIcon
 
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            self.tray = None
-            return
-        from qfluentwidgets import Action, FluentIcon as FIF, RoundMenu
 
-        from app.ui.brand import app_icon
 
-        self.tray = QSystemTrayIcon(app_icon(), self)
-        self.tray.setToolTip("智慧团委")
-        # 与后台模式（app/tray.py）一致：Fluent 圆角菜单，不用系统原生的方形灰菜单。
-        # QSystemTrayIcon 不接管菜单所有权，必须自己留住引用，否则菜单被回收、
-        # 右键点了没反应。
-        menu = RoundMenu(parent=None)
-        act_show = Action(FIF.HOME, "显示主界面")
-        act_show.triggered.connect(self._restore_from_tray)
-        act_sync = Action(FIF.SYNC, "立即同步")
-        act_sync.triggered.connect(self._sync_now)
-        act_quit = Action(FIF.POWER_BUTTON, "退出")
-        act_quit.triggered.connect(self._quit_app)
-        menu.addAction(act_show)
-        menu.addAction(act_sync)
-        menu.addSeparator()
-        menu.addAction(act_quit)
-        self.tray_menu = menu
-        from app.tray import bind_tray_menu
 
-        # 是否需要自己弹（见 bind_tray_menu）。macOS 上系统已经会弹，再自己弹
-        # 一次就会同时出现两个菜单。
-        self._tray_self_popup = bind_tray_menu(self.tray, menu)
-        self.tray.activated.connect(self._on_tray_activated)
-        self.tray.show()
 
-    def _on_tray_activated(self, reason):
-        from PyQt5.QtWidgets import QSystemTrayIcon
 
-        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
-                      QSystemTrayIcon.ActivationReason.DoubleClick):
-            self._restore_from_tray()
-        elif (reason == QSystemTrayIcon.ActivationReason.Context
-              and getattr(self, "_tray_self_popup", False)):
-            # 只有没挂 contextMenu 的平台才自己弹（见 bind_tray_menu）
-            from PyQt5.QtGui import QCursor
 
-            self.tray_menu.exec(QCursor.pos())
-
-    def _restore_from_tray(self):
-        self.showNormal()
-        self.raise_()
-        self.activateWindow()
-
-    def _alert(self, title: str, body: str = "", action: str = "", tone: str = ""):
-        """后台提醒：点一下回到主界面，并切到该处理的那一页。
-
-        只走系统原生通道：macOS 系统通知（打包版），Windows 托盘气泡。
-        原生通道不可用时不再弹应用内浮窗，第一次提醒失败时说清怎么开启。"""
-        from app.ui import bg_toast
-
-        delivered = bg_toast.alert(
-            title, body, tone=tone, tray=getattr(self, "tray", None),
-            on_click=lambda: self._open_alert(action),
-        )
-        if not delivered:
-            self._hint_notification_channel()
-
-    def _hint_notification_channel(self):
-        """提醒没能送达时提示一次：没有原生通道就没有任何后台提醒。"""
-        import sys
-
-        if sys.platform != "darwin" or getattr(self, "_notify_hint_shown", False):
-            return
-        from app.services import macos_notify
-
-        state = macos_notify.permission_state()
-        if state == "ok":
-            return
-        self._notify_hint_shown = True
-        from qfluentwidgets import (
-            InfoBar,
-            InfoBarIcon,
-            InfoBarPosition,
-            TransparentPushButton,
-        )
-
-        if state == "denied":
-            content = (f"后台提醒不会弹出：在「系统设置 → 通知」里打开"
-                       f"「{macos_notify.app_name()}」")
-        else:
-            content = ("后台提醒不会弹出：打包成 .app 运行才能使用系统通知"
-                       f"（当前挂在「{macos_notify.app_name()}」名下）")
-        bar = InfoBar(
-            icon=InfoBarIcon.WARNING, title="系统通知不可用",
-            content=content,
-            orient=Qt.Horizontal, isClosable=True,
-            position=InfoBarPosition.TOP_RIGHT, duration=12000, parent=self,
-        )
-        btn = TransparentPushButton(text="去开启", parent=bar)
-        btn.clicked.connect(lambda: (macos_notify.open_settings(), bar.close()))
-        bar.addWidget(btn)
-        bar.show()
-
-    def _open_alert(self, action: str):
-        self._restore_from_tray()
-        if action:
-            QTimer.singleShot(0, lambda: self.handle_notice_action(action))
-
-    def _sync_now(self):
-        self._last_sync_ts = time.monotonic()
-        self.refresh_all(silent=True, fast=True)
-
-    def _quit_app(self):
-        """真退出：先收窗口与网页会话，再退事件循环（见 app.ui.quit）。
-
-        只调 QApplication.quit() 的话，工作线程与 WebEngine 会把进程拖住——
-        表现是托盘没了、窗口还在。"""
-        if getattr(self, "tray", None) is not None:
-            self.tray.hide()
-        from app.ui.quit import quit_app
-
-        quit_app(self)
 
     def refresh_all(self, silent: bool = True, fast: bool = False) -> bool:
         """同步系统数据：成员缓存、站内信、组织状况统计，每轮都取数。
@@ -1089,12 +1046,12 @@ class MainWindow(MSFluentWindow):
 
             self._translucent = material != "none" and _dark()
         elif sys.platform == "win32":
-            # Windows 深色下系统背板会把整窗刷成白色（Win11 22H2 的
-            # DWMSBT_TRANSIENTWINDOW 拿不到暗色 tint），页面直接不可读。
-            # 与 macOS 浅色对称：深色铺不透明底，浅色才挂材质。
-            from qfluentwidgets import isDarkTheme as _dark
-
-            self._translucent = windows_material_available(material) and not _dark()
+            # 深浅都挂材质。早期「深色刷白」是 ACCENT_ENABLE_ACRYLICBLURBEHIND
+            # 那条旧通路的毛病；现在 acrylic 走 DWMWA_SYSTEMBACKDROP_TYPE、
+            # mica 走系统的 WCA_USEDARKMODECOLORS，暗色 tint 由 DWM 自己上。
+            # 旧结论套在新实现上，等于把一个本来能用的能力关掉了
+            # （2026-11-21 Win11 24H2 实测：深色窗口拿到的是 #202020 兜底色）。
+            self._translucent = windows_material_available(material)
         else:
             self._translucent = False
         self._apply_window_background()
@@ -1118,8 +1075,8 @@ class MainWindow(MSFluentWindow):
                     self._translucent = False
                     self._apply_window_background()
             else:
-                # 深色下不挂材质（会白屏），但浅色时挂上的系统背板还在，
-                # 不清掉照样把整窗刷白
+                # 切回「关闭」或这台机器挂不上材质：把还能生效的背板撤干净，
+                # 否则旧材质会在下次启动时透出来
                 from app.services.materials import remove_windows_effect
 
                 remove_windows_effect(self)

@@ -96,7 +96,7 @@ def test_upload_keeps_one_account_sequential(qapp_session, tmp_path, monkeypatch
 
 def test_upload_oversized_batch_reports_every_file(qapp_session, tmp_path, monkeypatch):
     """超过单批上限时每份都要给出原因，不能只报第一条。"""
-    monkeypatch.setattr(up, "MAX_BATCH", 2)
+    monkeypatch.setattr(up.UploadWorker, "batch_limit", 2)
     jobs = [
         {"path": _pdf(tmp_path, f"张{i}+1380000000{i}+入团志愿书.pdf"), "account": "a1"}
         for i in range(1, 4)
