@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -25,9 +26,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smallylc.smartyouth.BuildConfig
+import com.smallylc.smartyouth.data.CloudProfiles
 import com.smallylc.smartyouth.data.ScanPrefs
 import com.smallylc.smartyouth.ui.component.CardGap
 import com.smallylc.smartyouth.ui.component.MutedText
+import com.smallylc.smartyouth.ui.component.updateRowClick
+import com.smallylc.smartyouth.ui.component.updateSummary
+import com.smallylc.smartyouth.update.UpdateManager
 import com.smallylc.smartyouth.ui.theme.LocalEnableBlur
 import com.smallylc.smartyouth.ui.util.BlurredBar
 import com.smallylc.smartyouth.ui.util.rememberBlurBackdrop
@@ -58,6 +63,7 @@ fun SettingsScreen(
     accountCount: Int,
     bottomPadding: Dp,
     onAccounts: () -> Unit,
+    onCloudSync: () -> Unit,
     onLogout: () -> Unit,
     onOpenTheme: () -> Unit,
     onOpenAbout: () -> Unit,
@@ -67,6 +73,8 @@ fun SettingsScreen(
     val backdrop = rememberBlurBackdrop(LocalEnableBlur.current)
     val barColor = if (backdrop != null) Color.Transparent else colorScheme.surface
     var autoUpload by remember { mutableStateOf(ScanPrefs.autoUpload) }
+    var autoUpdateCheck by remember { mutableStateOf(UpdateManager.autoCheck) }
+    val updateState by UpdateManager.state.collectAsStateWithLifecycle()
     var filterIndex by remember {
         mutableStateOf(
             when (ScanPrefs.defaultFilter) {
@@ -127,6 +135,11 @@ fun SettingsScreen(
                         title = "账号管理",
                         summary = if (accountCount > 0) "共 $accountCount 个账号，点开切换" else "添加或从云端同步账号",
                         onClick = onAccounts,
+                    )
+                    ArrowPreference(
+                        title = "云端配置",
+                        summary = CloudProfiles.active?.let { "${it.name}  ${it.code}" } ?: "拉取配置后可切换账号组",
+                        onClick = onCloudSync,
                     )
                     if (loggedIn) {
                         ArrowPreference(
@@ -195,6 +208,20 @@ fun SettingsScreen(
                             )
                         },
                         onClick = onOpenAbout,
+                    )
+                    ArrowPreference(
+                        title = "检查更新",
+                        summary = updateSummary(updateState),
+                        onClick = updateRowClick(updateState),
+                    )
+                    SwitchPreference(
+                        title = "启动时检查更新",
+                        summary = "静默比对 GitHub 上的手机版发布",
+                        checked = autoUpdateCheck,
+                        onCheckedChange = {
+                            autoUpdateCheck = it
+                            UpdateManager.autoCheck = it
+                        },
                     )
                 }
             }

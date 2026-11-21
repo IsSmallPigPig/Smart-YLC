@@ -24,7 +24,7 @@ object CloudSync {
     const val DEFAULT_SERVER = "https://smartylc.netlify.app"
 
     sealed interface Result {
-        data class Ok(val names: List<String>, val profileCount: Int) : Result
+        data class Ok(val names: List<String>, val profileName: String) : Result
         data class Fail(val message: String) : Result
     }
 
@@ -50,27 +50,48 @@ object CloudSync {
             val config = runCatching { JSONObject(String(plain, Charsets.UTF_8)) }.getOrNull()
                 ?: return Result.Fail("备份内容不是配置文件")
             val array = config.optJSONArray("accounts") ?: JSONArray()
-            val names = mutableListOf<String>()
+            val accounts = mutableListOf<Account>()
             for (i in 0 until array.length()) {
                 val item = array.optJSONObject(i) ?: continue
                 val name = item.optString("userName").trim()
                 if (name.isBlank()) continue
-                Repo.accounts.upsert(
+                accounts.add(
                     Account(
                         userName = name,
                         password = item.optString("password"),
                         remark = item.optString("remark"),
                     )
                 )
-                names.add(name)
             }
-            if (names.isEmpty()) return Result.Fail("这份备份里没有支部账号")
-            return Result.Ok(names, config.optJSONArray("cloudProfiles")?.length() ?: 0)
+            if (accounts.isEmpty()) return Result.Fail("这份备份里没有支部账号")
+
+            // 一份提取码 = 一套配置；备份里的 cloudProfiles 是电脑侧档案，
+            // 手机端只登记当前这一套，账号归到它名下，不同配置的账号互不串。
+            val profiles = config.optJSONArray("cloudProfiles")
+            val ownName = (0 until (profiles?.length() ?: 0))
+                .mapNotNull { profiles?.optJSONObject(it) }
+                .firstOrNull { normalizeCode(it.optString("code")) == code }
+                ?.optString("name")?.trim()
+                .takeIf { !it.isNullOrBlank() } ?: "配置 $code"
+            val profile = CloudProfiles.save(
+                CloudProfile(
+                    id = profileId(base, code),
+                    name = ownName,
+                    server = base,
+                    code = code,
+                    password = password,
+                )
+            )
+            accounts.forEach { Repo.accounts.upsert(it.copy(profileId = profile.id)) }
+            return Result.Ok(accounts.map { it.userName }, profile.name)
         }
     }
 
     fun normalizeCode(raw: String): String =
         raw.trim().uppercase().filter { it.isLetterOrDigit() }.take(6)
+
+    /** 与桌面端 _profile_id 一致：同一服务地址的同一提取码是同一套配置。 */
+    private fun profileId(server: String, code: String): String = "$server:$code"
 
     private fun normalizeServer(raw: String): String {
         var value = raw.trim().ifBlank { DEFAULT_SERVER }

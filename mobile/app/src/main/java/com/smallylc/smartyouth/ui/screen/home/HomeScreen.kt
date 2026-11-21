@@ -79,7 +79,7 @@ fun HomeScreen(
     error: String?,
     siteDown: Boolean,
     bottomPadding: Dp,
-    onLogin: () -> Unit,
+    onCloudSync: () -> Unit,
     onScan: () -> Unit,
     onSync: () -> Unit,
     onOpenRoster: (filter: String?) -> Unit,
@@ -135,7 +135,7 @@ fun HomeScreen(
                     error = error,
                     lastSync = lastSync,
                     overview = overview,
-                    onLogin = onLogin,
+                    onCloudSync = onCloudSync,
                 )
             }
 
@@ -288,7 +288,7 @@ private fun StatusChip(
     error: String?,
     lastSync: Long,
     overview: Overview,
-    onLogin: () -> Unit,
+    onCloudSync: () -> Unit,
 ) {
     val text: String
     val tone: Color
@@ -306,7 +306,7 @@ private fun StatusChip(
             tone = ToneRed
         }
         !loggedIn -> {
-            text = "登录后可同步名单与消息"
+            text = "账号配置可从云端拉取"
             tone = colorScheme.primary
         }
         lastSync > 0 -> {
@@ -337,10 +337,10 @@ private fun StatusChip(
             )
             if (!loggedIn && !siteDown) {
                 Button(
-                    onClick = onLogin,
+                    onClick = onCloudSync,
                     colors = ButtonDefaults.buttonColorsPrimary(),
                 ) {
-                    Text("登录")
+                    Text("拉取配置")
                 }
             } else if (loggedIn) {
                 Text(

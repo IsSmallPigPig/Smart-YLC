@@ -35,6 +35,7 @@ import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
 import com.smallylc.smartyouth.data.Repo
 import com.smallylc.smartyouth.scan.Naming
+import com.smallylc.smartyouth.ui.component.UpdateDialogHost
 import com.smallylc.smartyouth.ui.component.bottombar.BottomBar
 import com.smallylc.smartyouth.ui.component.bottombar.MainPagerState
 import com.smallylc.smartyouth.ui.component.bottombar.NavigationRailMiuix
@@ -59,6 +60,7 @@ import com.smallylc.smartyouth.ui.screen.theme.ThemeScreen
 import com.smallylc.smartyouth.ui.theme.LocalColorMode
 import com.smallylc.smartyouth.ui.theme.LocalEnableBlur
 import com.smallylc.smartyouth.ui.theme.SmartYouthTheme
+import com.smallylc.smartyouth.update.UpdateManager
 import com.smallylc.smartyouth.ui.viewmodel.MainActivityViewModel
 import com.smallylc.smartyouth.ui.viewmodel.MainPagerConfig
 import kotlinx.coroutines.launch
@@ -123,7 +125,10 @@ class MainActivity : ComponentActivity() {
                 androidx.compose.ui.unit.Density(systemDensity.density * uiState.pageScale, systemDensity.fontScale)
             }
 
-            LaunchedEffect(Unit) { Repo.restore() }
+            LaunchedEffect(Unit) {
+                Repo.restore()
+                UpdateManager.autoCheckNow()
+            }
 
             CompositionLocalProvider(
                 LocalNavigator provides navigator,
@@ -178,7 +183,7 @@ class MainActivity : ComponentActivity() {
                                 AccountsScreen(
                                     onBack = { navigator.pop() },
                                     onNeedLogin = { name ->
-                                        if (name.isNotBlank()) Repo.accounts.activeUserName = name
+                                        if (name.isNotBlank()) Repo.accounts.setActive(name)
                                         navigator.push(Route.Login)
                                     },
                                 )
@@ -241,6 +246,7 @@ fun MainScreen(
     LaunchedEffect(currentPage) { mainPagerState.syncPage() }
 
     MainScreenBackHandler(mainPagerState, navigator)
+    UpdateDialogHost()
 
     CompositionLocalProvider(LocalMainPagerState provides mainPagerState) {
         val pager = @Composable { bottom: androidx.compose.ui.unit.Dp ->
@@ -268,7 +274,7 @@ fun MainScreen(
                         error = sync.error,
                         siteDown = session.siteDown,
                         bottomPadding = bottom,
-                        onLogin = onOpenLogin,
+                        onCloudSync = { navigator.push(Route.CloudSync) },
                         onScan = onOpenScan,
                         onSync = { scope.launch { Repo.refreshAll() } },
                         onOpenRoster = { filter ->
@@ -318,6 +324,7 @@ fun MainScreen(
                         accountCount = Repo.accounts.accounts.size,
                         bottomPadding = bottom,
                         onAccounts = { navigator.push(Route.Accounts) },
+                        onCloudSync = { navigator.push(Route.CloudSync) },
                         onLogout = { Repo.logout() },
                         onOpenTheme = onOpenTheme,
                         onOpenAbout = onOpenAbout,

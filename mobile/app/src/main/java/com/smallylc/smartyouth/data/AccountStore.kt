@@ -14,6 +14,8 @@ data class Account(
     val userName: String,
     var password: String,
     var remark: String = "",
+    /** 所属云端配置；没有配置的老账号归到 legacy。 */
+    var profileId: String = CloudProfile.LEGACY_ID,
 )
 
 /**
@@ -26,7 +28,8 @@ class AccountStore(context: Context) {
 
     private val prefs = context.getSharedPreferences("accounts", Context.MODE_PRIVATE)
 
-    var accounts: List<Account>
+    /** 本机全部账号，含各配置；只有迁移/诊断才用。 */
+    var allAccounts: List<Account>
         get() = runCatching {
             val raw = prefs.getString(KEY_ACCOUNTS, null) ?: return emptyList()
             val arr = JSONArray(raw)
@@ -36,6 +39,7 @@ class AccountStore(context: Context) {
                     userName = o.optString("userName"),
                     password = o.optString("password"),
                     remark = o.optString("remark"),
+                    profileId = o.optString("profileId").ifBlank { CloudProfile.LEGACY_ID },
                 )
             }.filter { it.userName.isNotBlank() }
         }.getOrDefault(emptyList())
@@ -47,33 +51,60 @@ class AccountStore(context: Context) {
                         .put("userName", a.userName)
                         .put("password", a.password)
                         .put("remark", a.remark)
+                        .put("profileId", a.profileId)
                 )
             }
             putString(KEY_ACCOUNTS, arr.toString())
         }
 
-    var activeUserName: String
-        get() = prefs.getString(KEY_ACTIVE, "").orEmpty()
-        set(value) = prefs.edit { putString(KEY_ACTIVE, value) }
+    /** 当前配置下的账号；没有配置档案时用 legacy，老账号照常可见。 */
+    val accounts: List<Account>
+        get() {
+            val scope = CloudProfiles.activeId.let {
+                if (it.isBlank()) CloudProfile.LEGACY_ID else it
+            }
+            return allAccounts.filter { it.profileId == scope }
+        }
+
+    val activeUserName: String
+        get() {
+            val key = "$KEY_ACTIVE:${scope()}"
+            return prefs.getString(key, "").orEmpty()
+        }
 
     val active: Account?
         get() = accounts.firstOrNull { it.userName == activeUserName }
 
     fun upsert(account: Account) {
-        val list = accounts.toMutableList()
-        val index = list.indexOfFirst { it.userName == account.userName }
-        if (index >= 0) list[index] = account else list.add(account)
-        accounts = list
-        activeUserName = account.userName
+        val scoped = account.copy(profileId = scope())
+        val list = allAccounts.toMutableList()
+        val index = list.indexOfFirst { it.userName == scoped.userName && it.profileId == scoped.profileId }
+        if (index >= 0) list[index] = scoped else list.add(scoped)
+        allAccounts = list
+        setActive(scoped.userName)
+    }
+
+    fun setActive(userName: String) {
+        prefs.edit { putString("$KEY_ACTIVE:${scope()}", userName) }
     }
 
     fun remove(userName: String) {
-        accounts = accounts.filterNot { it.userName == userName }
+        allAccounts = allAccounts.filterNot { it.userName == userName && it.profileId == scope() }
         prefs.edit { remove(cookieKey(userName)) }
         if (activeUserName == userName) {
-            activeUserName = accounts.firstOrNull()?.userName.orEmpty()
+            setActive(accounts.firstOrNull()?.userName.orEmpty())
         }
     }
+
+    /** 删除云端配置时连它名下的账号与会话一起清掉，不留孤儿数据。 */
+    fun removeProfile(profileId: String) {
+        allAccounts.filter { it.profileId == profileId }.forEach {
+            prefs.edit { remove(cookieKey(it.userName)) }
+        }
+        allAccounts = allAccounts.filterNot { it.profileId == profileId }
+    }
+
+    private fun scope(): String = CloudProfiles.activeId.ifBlank { CloudProfile.LEGACY_ID }
 
     fun cookieHeader(userName: String): String = prefs.getString(cookieKey(userName), "").orEmpty()
 

@@ -49,6 +49,7 @@ import com.smallylc.smartyouth.ui.theme.LocalEnableBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Share
+import top.yukonga.miuix.kmp.icon.extended.Show
 import top.yukonga.miuix.kmp.icon.extended.UploadCloud
 import com.smallylc.smartyouth.ui.util.BlurredBar
 import com.smallylc.smartyouth.ui.util.rememberBlurBackdrop
@@ -167,6 +168,13 @@ fun ScansScreen(
                                 MutedText(
                                     "${formatSize(doc.size)}  ${formatDate(doc.savedAt)}",
                                     Modifier.padding(top = 3.dp),
+                                )
+                            }
+                            IconButton(onClick = { DocStore.open(doc) }) {
+                                Icon(
+                                    MiuixIcons.Show,
+                                    contentDescription = "查看档案",
+                                    tint = colorScheme.onSurfaceVariantActions,
                                 )
                             }
                             IconButton(onClick = { DocStore.share(doc) }) {

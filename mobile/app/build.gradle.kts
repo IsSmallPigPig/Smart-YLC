@@ -125,6 +125,8 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.opencv)
     implementation(libs.zxing.core)
+
+    testImplementation(libs.junit)
 }
 
 kotlin {

@@ -1,6 +1,8 @@
 package com.smallylc.smartyouth.ui.screen.cloud
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -21,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -29,7 +32,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.smallylc.smartyouth.data.CloudProfiles
 import com.smallylc.smartyouth.data.CloudSync
+import com.smallylc.smartyouth.data.Repo
 import com.smallylc.smartyouth.ui.component.CardGap
 import com.smallylc.smartyouth.ui.component.MutedText
 import com.smallylc.smartyouth.ui.component.ToneGreen
@@ -47,11 +52,13 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
@@ -74,6 +81,13 @@ fun CloudSyncScreen(onBack: () -> Unit, onManage: () -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
     var messageOk by remember { mutableStateOf(false) }
     var synced by remember { mutableStateOf<List<String>>(emptyList()) }
+    var profiles by remember { mutableStateOf(CloudProfiles.profiles) }
+    var activeId by remember { mutableStateOf(CloudProfiles.activeId) }
+
+    fun refreshProfiles() {
+        profiles = CloudProfiles.profiles
+        activeId = CloudProfiles.activeId
+    }
 
     Scaffold(
         topBar = {
@@ -105,6 +119,53 @@ fun CloudSyncScreen(onBack: () -> Unit, onManage: () -> Unit) {
             overscrollEffect = null,
         ) {
             item { Spacer(Modifier.height(8.dp)) }
+
+            if (profiles.isNotEmpty()) {
+                item { SmallTitle("已保存的配置") }
+                items(profiles, key = { it.id }) { profile ->
+                    Card(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .clickable {
+                                CloudProfiles.activeId = profile.id
+                                Repo.logout()
+                                refreshProfiles()
+                            },
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = profile.name,
+                                    fontSize = 15.sp,
+                                    color = colorScheme.onSurface,
+                                )
+                                MutedText("提取码 ${profile.code}", Modifier.padding(top = 3.dp))
+                            }
+                            if (profile.id == activeId) {
+                                Text("使用中", fontSize = 12.sp, color = ToneGreen)
+                            }
+                            IconButton(onClick = {
+                                Repo.accounts.removeProfile(profile.id)
+                                CloudProfiles.remove(profile.id)
+                                refreshProfiles()
+                            }) {
+                                Icon(
+                                    MiuixIcons.Delete,
+                                    contentDescription = "删除配置",
+                                    tint = colorScheme.onBackground,
+                                )
+                            }
+                        }
+                    }
+                }
+                item { CardGap(16) }
+            }
+
+            item { SmallTitle("添加配置") }
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
@@ -154,7 +215,8 @@ fun CloudSyncScreen(onBack: () -> Unit, onManage: () -> Unit) {
                                     is CloudSync.Result.Ok -> {
                                         synced = result.names
                                         messageOk = true
-                                        message = "已同步 ${result.names.size} 个账号"
+                                        message = "${result.profileName}：${result.names.size} 个账号"
+                                        refreshProfiles()
                                     }
                                     is CloudSync.Result.Fail -> {
                                         messageOk = false

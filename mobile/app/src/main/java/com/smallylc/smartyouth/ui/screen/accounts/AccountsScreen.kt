@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.smallylc.smartyouth.data.Account
+import com.smallylc.smartyouth.data.CloudProfiles
 import com.smallylc.smartyouth.data.LoginOutcome
 import com.smallylc.smartyouth.data.Repo
 import com.smallylc.smartyouth.ui.component.CardGap
@@ -151,6 +152,15 @@ fun AccountsScreen(
             overscrollEffect = null,
         ) {
             item { Spacer(Modifier.height(8.dp)) }
+
+            CloudProfiles.active?.let { profile ->
+                item {
+                    MutedText(
+                        "当前配置：${profile.name}",
+                        Modifier.padding(start = 4.dp),
+                    )
+                }
+            }
 
             message?.let { text ->
                 item {
