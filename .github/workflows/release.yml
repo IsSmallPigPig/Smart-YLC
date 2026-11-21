@@ -424,12 +424,22 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - uses: android-actions/setup-android@v3
-
-      - name: 安装 SDK 组件
-        # 版本对齐 mobile/build.gradle.kts 的 compileSdk / buildToolsVersion；
-        # 只装这两个就够，AGP 自带其余按需依赖解析
-        run: sdkmanager "platforms;android-37" "build-tools;37.0.0" "platform-tools"
+      - name: 准备 Android SDK
+        # ubuntu runner 自带 SDK，只补本项目的编译版本。不引第三方 action：
+        # setup-android 会随上游发版失效（最近一次就是它自己挂在这步），少一层依赖。
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SM" ]; then
+            echo "::error::$SDK 下没有 sdkmanager，runner 镜像结构变了"
+            ls "$SDK" || true
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          yes | "$SM" --licenses > /dev/null || true
+          # 版本对齐 mobile/build.gradle.kts 的 compileSdk / buildToolsVersion
+          "$SM" "platforms;android-37" "build-tools;37.0.0" "platform-tools"
 
       - name: 恢复调试签名
         # 手机上已经装着旧版，只认当初那份 key。换一份签名，新包会提示「应用未安装」，
