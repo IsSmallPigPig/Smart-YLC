@@ -81,6 +81,10 @@ class SingleInstance(QObject):
             return
         sock.readyRead.connect(lambda s=sock: self._read(s))
         sock.disconnected.connect(sock.deleteLater)
+        # 对端可能在连上 readyRead 之前就把数据写完并断开，此后再不会有新数据，
+        # 信号永远不发——命令就丢了。Windows 命名管道写完立刻可用，更容易踩到。
+        if sock.bytesAvailable():
+            self._read(sock)
 
     def _read(self, sock: QLocalSocket):
         command = bytes(sock.readAll()).decode("utf-8", "replace").strip()

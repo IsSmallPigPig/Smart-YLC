@@ -85,6 +85,26 @@ def win10_acrylic_available() -> bool:
     return win11_build() >= WINDOWS_ACRYLIC_BUILD
 
 
+def system_transparency_enabled() -> bool:
+    """系统「透明效果」总开关；关闭时 DWM 收下 backdrop 属性但什么都不画。
+
+    「关闭透明效果」与「性能选项选最佳性能」都会把它置 0。此时窗口会拿到
+    一片不透明的系统色，用户看到的是「选了材质没反应」，界面必须说明原因。
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return bool(winreg.QueryValueEx(key, "EnableTransparency")[0])
+    except Exception:
+        # 读不到就按「开着」处理：这是提示用的探测，不该拦住材质本身
+        return True
+
+
 def windows_material_available(material: str) -> bool:
     """这台机器上这套材质能不能挂出效果；UI 用它决定窗口要不要让出底色。
 
@@ -113,11 +133,11 @@ def material_hint(material: str) -> str:
         return "当前系统没有可用的窗口透明接口"
     if material == "none":
         return "关闭后铺纯色底"
-    if not _is_dark():
-        return "深色下不启用：系统背板会把整窗刷白，改铺纯色底"
+    if not system_transparency_enabled():
+        return "系统「透明效果」已关闭，去 设置 → 个性化 → 颜色 打开后才有效果"
     if material == "mica":
         if win11_mica_available():
-            return "Win11 系统背景，取桌面壁纸的色调"
+            return "Win11 系统背景，取桌面壁纸的色调；要实时模糊改选 Acrylic"
         if win10_acrylic_available():
             return "Mica 需 Windows 11，这台机器按 Acrylic 呈现"
         return f"需要 Windows 10 1803+（build {WINDOWS_ACRYLIC_BUILD}）"

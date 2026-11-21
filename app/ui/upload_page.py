@@ -287,11 +287,18 @@ class UploadPage(FluentPage):
         档案在列表里出现两次，重复团员的提示就没法看了。"""
         current = list(self._dirs) or load_workspace_dirs()
         added, skipped = [], 0
+        # 配置里的旧值与拖放来的新值可能一个正斜杠一个反斜杠（Windows 大小写也
+        # 不敏感），按原串比较会把同一个目录算成两个，档案在列表里重复出现。
+        def same_dir(p: str) -> str:
+            return os.path.normcase(os.path.normpath(os.path.abspath(p)))
+
         for raw in paths:
             path = os.path.abspath(str(raw or "").strip())
             if not path or not os.path.isdir(path):
                 continue
-            covered = any(path == d or path.startswith(d.rstrip(os.sep) + os.sep)
+            key = same_dir(path)
+            covered = any(key == same_dir(d)
+                          or key.startswith(same_dir(d).rstrip(os.sep) + os.sep)
                           for d in current + added)
             if covered:
                 skipped += 1
@@ -342,6 +349,9 @@ class UploadPage(FluentPage):
             path = url.toLocalFile()
             if not path:
                 continue
+            # Qt 在 Windows 上统一给正斜杠，和 os.path 产出的反斜杠是不同字符串；
+            # 不归一，同一个目录会被当成两个加进来源列表。
+            path = os.path.normpath(path)
             if os.path.isdir(path):
                 dirs.append(path)
             elif path.lower().endswith(".pdf") and os.path.isfile(path):

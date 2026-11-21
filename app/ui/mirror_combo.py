@@ -68,6 +68,13 @@ class MirrorComboBox(ComboBox):
         """当前选择：auto / 站 key / custom。"""
         return str(self.currentData() or updater.AUTO)
 
+    def closed_text(self) -> str:
+        """收起状态该显示的完整文案，未经窗口宽度省略。
+
+        控件上的 text() 是按 126px 省略过的，跨平台字宽不同，拿它做断言或
+        比较都会飘；要判「显示的是什么站」用这个。"""
+        return self._closed
+
     def _index_of(self, mode: str) -> int:
         for i in range(self.count()):
             if self.itemData(i) == mode:

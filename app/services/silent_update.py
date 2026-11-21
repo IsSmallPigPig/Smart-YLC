@@ -172,9 +172,9 @@ def _start_windows(target: Path) -> bool:
 
 def _schedule_windows_relaunch(delay: int = 12) -> None:
     """装完后把新版本重新打开，让「重启」真正回到应用。"""
+    if not _packaged():
+        return      # 源码版的解释器也叫 python.exe，按扩展名判断会连开发机一起重开
     exe = Path(sys.executable)
-    if not exe.name.lower().endswith(".exe"):
-        return      # 源码版（python.exe）不自动重开
     command = f'timeout /t {delay} /nobreak >nul & start "" "{exe}"'
     flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
              | getattr(subprocess, "CREATE_NO_WINDOW", 0)

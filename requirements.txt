@@ -21,6 +21,8 @@ cryptography==41.0.7
 opencv-python-headless==4.8.1.78
 # 4.8.1 按 numpy 1.x 的 C ABI 编译；配 numpy 2.x 会在 import cv2 时抛
 # `_ARRAY_API not found`（查空格整批失效，2026-11-20 Windows 故障）。钉在 1.x。
+# 1.x 的预编译轮子只到 Python 3.12：3.13 上 pip 会源码编译 numpy，没有 C 编译器
+# 就装不上。在 Windows 上跑测试请用 3.11（与打包版本一致）。
 numpy<2
 # 局域网直传：在电脑上显示二维码给手机扫，省掉手输 IP 与口令。
 # 纯 Python 实现，无编译依赖

@@ -1046,12 +1046,12 @@ class MainWindow(MainWindowTrayMixin, MSFluentWindow):
 
             self._translucent = material != "none" and _dark()
         elif sys.platform == "win32":
-            # Windows 深色下系统背板会把整窗刷成白色（Win11 22H2 的
-            # DWMSBT_TRANSIENTWINDOW 拿不到暗色 tint），页面直接不可读。
-            # 与 macOS 浅色对称：深色铺不透明底，浅色才挂材质。
-            from qfluentwidgets import isDarkTheme as _dark
-
-            self._translucent = windows_material_available(material) and not _dark()
+            # 深浅都挂材质。早期「深色刷白」是 ACCENT_ENABLE_ACRYLICBLURBEHIND
+            # 那条旧通路的毛病；现在 acrylic 走 DWMWA_SYSTEMBACKDROP_TYPE、
+            # mica 走系统的 WCA_USEDARKMODECOLORS，暗色 tint 由 DWM 自己上。
+            # 旧结论套在新实现上，等于把一个本来能用的能力关掉了
+            # （2026-11-21 Win11 24H2 实测：深色窗口拿到的是 #202020 兜底色）。
+            self._translucent = windows_material_available(material)
         else:
             self._translucent = False
         self._apply_window_background()
@@ -1075,8 +1075,8 @@ class MainWindow(MainWindowTrayMixin, MSFluentWindow):
                     self._translucent = False
                     self._apply_window_background()
             else:
-                # 深色下不挂材质（会白屏），但浅色时挂上的系统背板还在，
-                # 不清掉照样把整窗刷白
+                # 切回「关闭」或这台机器挂不上材质：把还能生效的背板撤干净，
+                # 否则旧材质会在下次启动时透出来
                 from app.services.materials import remove_windows_effect
 
                 remove_windows_effect(self)
