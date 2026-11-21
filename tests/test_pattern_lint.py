@@ -325,3 +325,67 @@ def _save_cloud_state(self, patch):
         InfoBar.error("设置没保存", str(e), parent=self)
 '''
     assert check(good) == []
+
+
+# —— Windows 实测报告（2026-11-21）：材质、单实例、拖放三类反模式 ——
+
+def test_dark_mode_material_gate_rejected():
+    """能拦住旧写法：Windows 材质被深浅模式条件关掉。"""
+    bad = '''
+def setup(material):
+    from qfluentwidgets import isDarkTheme as _dark
+    return windows_material_available(material) and not _dark()
+'''
+    assert any("材质被深浅关掉" in p for p in check(bad)), check(bad)
+
+
+def test_material_without_dark_gate_is_allowed():
+    """当前库干净：深色照样挂材质。"""
+    good = '''
+def setup(material):
+    ok = windows_material_available(material)
+    remove_windows_effect(window)
+    return ok
+'''
+    assert check(good) == []
+
+
+def test_ready_read_without_buffer_check_rejected():
+    """能拦住旧写法：连了 readyRead 却不查缓冲区，先到的命令会丢。"""
+    bad = '''
+def _on_connection(self):
+    sock = self._server.nextPendingConnection()
+    sock.readyRead.connect(self._read)
+'''
+    assert any("readyRead 未补读" in p for p in check(bad)), check(bad)
+
+
+def test_ready_read_with_buffer_check_is_allowed():
+    """当前库干净：连信号后立刻补读一次。"""
+    good = '''
+def _on_connection(self):
+    sock = self._server.nextPendingConnection()
+    sock.readyRead.connect(self._read)
+    if sock.bytesAvailable():
+        self._read(sock)
+'''
+    assert check(good) == []
+
+
+def test_drop_payload_without_normpath_rejected():
+    """能拦住旧写法：拖放路径直接取用，Windows 上是正斜杠。"""
+    bad = '''
+def _drop_payload(mime):
+    return [url.toLocalFile() for url in mime.urls()]
+'''
+    assert any("拖放路径未归一" in p for p in check(bad)), check(bad)
+
+
+def test_drop_payload_with_normpath_is_allowed():
+    """当前库干净：取到路径先 normpath。"""
+    good = '''
+import os
+def _drop_payload(mime):
+    return [os.path.normpath(url.toLocalFile()) for url in mime.urls()]
+'''
+    assert check(good) == []

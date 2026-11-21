@@ -18,7 +18,8 @@
      9 打包漏 --collect-all 原生包   19 下载完成自动安装退出
     10 as_completed 收集未重排       20 检查缓存按路径而非内容摘要
     21 QThread.wait() 当 sleep      22 无事件循环线程建 QTimer
-    23 配置保存静默吞写盘异常
+    23 配置保存静默吞写盘异常       24 Windows 材质按深浅关掉
+    25 readyRead 前未补读缓冲       26 拖放路径未归一
 
 结构：规则 1–14、16–23 在 check_file() 里按编号注释块排布；规则 15 扫非
 .py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式与网络安全配置
@@ -360,6 +361,58 @@ def check_file(path: Path) -> list[str]:
                 problems.append(
                     f"{rel}:{handler.lineno} [保存静默失败] _save_cloud_state 的写盘异常不能 "
                     "except: pass；要写日志并 InfoBar 提示用户，否则设置看似保存、重启全丢")
+
+    # 规则 24（2026-11-21）：Windows 材质不能按深浅模式关掉。
+    # 早期 acrylic 走 ACCENT_ENABLE_ACRYLICBLURBEHIND 时深色会刷白，判断里因此加了
+    # `and not _dark()`；现在改成 DWMWA_SYSTEMBACKDROP_TYPE 与 HOSTBACKDROP，暗色
+    # tint 由 DWM 自己上，这条限制只会把可用的能力关掉（Win11 用户报「模糊没工作」）。
+    if re.search(r"windows_material_available\([^)]*\)\s*and\s+not\s+\w*dark\w*\s*\(",
+                 source, re.I):
+        problems.append(
+            f"{rel} [材质被深浅关掉] windows_material_available(...) and not <dark>："
+            "深色下材质同样该挂，暗色 tint 由 DWM 处理；旧刷白结论只适用于已废弃的 "
+            "ACCENT_ENABLE_ACRYLICBLURBEHIND 通路")
+
+    # 规则 25（2026-11-21）：连 readyRead 之前先看缓冲区里有没有数据。
+    # 对端可能在连上信号前写完并断开，此后再无新数据，readyRead 一次都不发，
+    # 命令就丢了（Windows 命名管道写得更快，单实例通知必现）。
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        connects_ready = any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "connect"
+            and isinstance(call.func.value, ast.Attribute)
+            and call.func.value.attr == "readyRead"
+            for call in ast.walk(node))
+        if not connects_ready:
+            continue
+        checks_buffer = any(
+            isinstance(n, ast.Attribute) and n.attr == "bytesAvailable"
+            for n in ast.walk(node))
+        if not checks_buffer:
+            problems.append(
+                f"{rel}:{node.lineno} [readyRead 未补读] {node.name} 连了 readyRead 却没查 "
+                "bytesAvailable：数据若在连信号之前就到了，信号不会再来，命令直接丢失")
+
+    # 规则 26（2026-11-21）：拖放得到的路径必须归一。
+    # Qt 在 Windows 上统一把 toLocalFile() 给成正斜杠，而 os.path 产出反斜杠；
+    # 不 normpath，同一个目录会被当成两个加进来源列表，档案出现重复行。
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "_drop_payload"):
+            continue
+        uses_local = any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "toLocalFile"
+            for call in ast.walk(node))
+        normalized = any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "normpath"
+            for call in ast.walk(node))
+        if uses_local and not normalized:
+            problems.append(
+                f"{rel}:{node.lineno} [拖放路径未归一] _drop_payload 用了 toLocalFile() 但没 "
+                "os.path.normpath：Windows 上是正斜杠，与内部路径比较会失配、目录被重复添加")
 
     return problems
 

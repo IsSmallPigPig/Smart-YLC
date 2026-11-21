@@ -528,8 +528,12 @@ def test_browser_window_shell_builds(app, isolated_store):
     assert win.tab_row.height() == TAB_HEIGHT + TAB_TOP
     assert win.titleBar.height() == TITLE_BAR_HEIGHT
     assert win.titleBar.height() > win.tab_row.height()
-    plus = win.tab_bar.addButton.mapTo(win, win.tab_bar.addButton.rect().center()).y()
-    assert plus == TAB_TOP + TAB_HEIGHT // 2
+    # 加号在标签行内垂直居中。这里断相对位置而不是窗口坐标：未 show 的窗口上
+    # mapTo(win, ...) 依赖布局时机，Windows 上算出来的值会比实际少一截。
+    assert win.tab_bar.height() == TAB_HEIGHT
+    plus = win.tab_bar.addButton.mapTo(
+        win.tab_bar, win.tab_bar.addButton.rect().center()).y()
+    assert plus == TAB_HEIGHT // 2
     assert not win.back_btn.isEnabled()
     assert win.empty.isVisible()  # 没有标签时只有欢迎页
     # 继承来的空 stackedWidget 会停在窗口左上角画一块不透明底，必须连同原生
@@ -819,18 +823,20 @@ def test_mirror_combo_lists_sites_and_defaults_to_auto(app, isolated_store):
     assert combo.itemText(combo.count() - 1) == CUSTOM_TEXT
     # 默认自动选择，收起状态也只显示「自动选择」（延迟只在列表里）
     assert combo.mode() == updater.AUTO
-    assert combo.text() == AUTO_TEXT
+    assert combo.closed_text() == AUTO_TEXT
 
     index = combo._index_of("gh.zwy.one")
     combo.setCurrentIndex(index)
     assert combo.mode() == "gh.zwy.one"
     assert update_check.mirror_mode() == "gh.zwy.one"
-    assert combo.text() == "gh.zwy.one"
+    # 收起状态文案受控件宽度限制会被省略，跨平台字宽不同；断完整站名本身
+    assert combo.closed_text() == "gh.zwy.one"
+    assert "gh.zwy.one" in combo.toolTip()
 
     # 测速结果回填成「站名 (ms)」，收起状态的文案不带延迟
     combo._on_measured("gh.zwy.one", 845)
     assert combo.itemText(index) == "gh.zwy.one (845 ms)"
-    assert combo.text() == "gh.zwy.one"
+    assert combo.closed_text() == "gh.zwy.one"
     combo._on_unavailable("wget.la", "timed out")
     assert combo.itemText(combo._index_of("wget.la")) == "wget.la (超时)"
     combo.deleteLater()
@@ -1062,7 +1068,12 @@ def test_settings_rows_keep_card_height(app, isolated_store):
     app.processEvents()
     rows = [r for r in page.findChildren(SettingRow) if r.isVisible()]
     assert rows
-    assert all(r.height() >= 58 for r in rows), [r.height() for r in rows]
+    # 行高 = 文字块 + 上下各 12 的留白。绝对像素随字体行高变化，断留白本身；
+    # 再确认留白真的加在文字之外（行高必须高于文字块），而不是把字压扁。
+    for r in rows:
+        margins = r.layout().contentsMargins()
+        assert (margins.top(), margins.bottom()) == (12, 12), r.height()
+        assert r.height() > r._text_lay.sizeHint().height(), r.height()
     assert all(r._text_lay.spacing() == 2 for r in rows)
 
     # 卡片头部「外观设置」与其小字说明共用一组布局，间距同样是 2px。
@@ -1272,6 +1283,20 @@ def test_upload_drop_payload_takes_folders_and_pdf_parents(app, isolated_store, 
     assert dirs == [str(folder)]
     assert parents == [str(folder)]      # PDF 归到它所在的文件夹
     assert UploadPage._drop_payload(QMimeData()) == ([], [])
+
+
+def test_add_dirs_ignores_same_folder_written_differently(app, isolated_store, tmp_path):
+    """同一个文件夹换个写法不该被当成两个目录，否则档案会在列表里出现两次。"""
+    from app.ui.upload_page import UploadPage
+
+    folder = tmp_path / "高一1班"
+    folder.mkdir()
+    upload = UploadPage(FakeWindow())
+
+    assert upload.add_dirs([str(folder)]) == 1
+    assert upload.add_dirs([str(folder) + os.sep + "."]) == 0
+    assert upload.add_dirs([str(folder) + os.sep]) == 0
+    assert len(upload._dirs) == 1
 
 
 def test_upload_folder_card_is_plain_card(app, isolated_store, tmp_path):

@@ -668,18 +668,67 @@ def test_helper_command_reenters_same_entrypoint(monkeypatch):
 
 
 def test_start_launches_detached_helper(tmp_path, monkeypatch):
+    """非 Windows：把带隐藏参数的助手拉起来就返回，助手负责安装。"""
     from app.services import silent_update
 
     pkg = tmp_path / "setup.exe"
     pkg.write_bytes(b"x")
-    spawned = {}
+    calls = []
+    monkeypatch.setattr(silent_update, "sys", _fake_sys("darwin"))
     monkeypatch.setattr(silent_update.subprocess, "Popen",
-                        lambda cmd, **kwargs: spawned.update(cmd=cmd, kwargs=kwargs))
+                        lambda cmd, **kwargs: calls.append((cmd, kwargs)))
     assert silent_update.start(str(pkg)) is True
-    assert silent_update.FLAG in spawned["cmd"]
-    assert str(pkg) in spawned["cmd"]
-    assert spawned["kwargs"]["stdout"] is subprocess.DEVNULL
-    assert "start_new_session" in spawned["kwargs"] or "creationflags" in spawned["kwargs"]
+    cmd, kwargs = calls[0]
+    assert silent_update.FLAG in cmd
+    assert str(pkg) in cmd
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert "start_new_session" in kwargs
+
+
+def test_start_on_windows_launches_installer_first(tmp_path, monkeypatch):
+    """Windows：先起安装器（第一次 Popen），重开另挂延迟任务，别混在一起断言。"""
+    from app.services import silent_update
+
+    pkg = tmp_path / "setup.exe"
+    pkg.write_bytes(b"x")
+    calls = []
+    monkeypatch.setattr(silent_update, "sys", _fake_sys("win32", executable=str(pkg)))
+    monkeypatch.setattr(silent_update.subprocess, "Popen",
+                        lambda cmd, **kwargs: calls.append((cmd, kwargs)))
+    monkeypatch.setattr(silent_update, "_schedule_windows_relaunch", lambda *a, **k: None)
+
+    assert silent_update.start(str(pkg)) is True
+    cmd, kwargs = calls[0]
+    assert cmd[0] == str(pkg)
+    assert "/VERYSILENT" in cmd and "/NORESTART" in cmd
+    assert kwargs["stdout"] is subprocess.DEVNULL
+
+
+def test_relaunch_skips_source_build(monkeypatch):
+    """源码版的解释器也是带 .exe 的进程，不能因此把开发机也重开一遍。"""
+    from app.services import silent_update
+
+    calls = []
+    monkeypatch.setattr(silent_update, "sys",
+                        _fake_sys("win32", executable="/usr/bin/python3"))
+    monkeypatch.setattr(silent_update.subprocess, "Popen",
+                        lambda cmd, **kwargs: calls.append(cmd))
+    silent_update._schedule_windows_relaunch()
+    assert calls == []
+
+
+def test_relaunch_starts_packaged_app(monkeypatch):
+    from app.services import silent_update
+
+    calls = []
+    monkeypatch.setattr(silent_update, "sys", _fake_sys(
+        "win32", executable="/opt/智慧团委.exe", frozen=True))
+    monkeypatch.setattr(silent_update.subprocess, "Popen",
+                        lambda cmd, **kwargs: calls.append(cmd))
+    silent_update._schedule_windows_relaunch(delay=3)
+    assert calls, "打包版装完应该自动重开"
+    assert "智慧团委.exe" in calls[0][-1]
+    assert "timeout /t 3" in calls[0][-1]
 
 
 def test_install_and_notify_restart_hint(monkeypatch):

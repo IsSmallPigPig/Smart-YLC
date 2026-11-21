@@ -97,12 +97,11 @@ def test_exam_does_not_touch_file(tmp_path):
     assert pathlib.Path(path).read_bytes() == before
 
 
-def test_preview_view_builds(qapp_session):
+def test_preview_view_builds(qapp_session, tmp_path):
     """预览页能构造：面包屑、无 banner、异常按钮、翻页控件齐全。"""
     from app.ui.archive_preview import ArchivePreviewView
 
-    path = _make_pdf(qapp_session and pathlib.Path("/tmp") or pathlib.Path("/tmp"),
-                     ["第1页", "第2页"])
+    path = _make_pdf(tmp_path, ["第1页", "第2页"])
     host = __import__("PyQt5.QtWidgets", fromlist=["QWidget"]).QWidget()
     host.resize(900, 700)
     view = ArchivePreviewView(host, path, "张三+13800000000+入团志愿书.pdf",
