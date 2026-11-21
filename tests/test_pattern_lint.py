@@ -297,3 +297,26 @@ def test_download_leaves_install_to_user_is_clean():
         fun installReady(uri: Uri) { app.startActivity(GitHubUpdate.installIntent(uri)) }
     """
     assert lint_patterns._update_install_problems(source, "UpdateManager.kt") == []
+
+
+def test_remember_scanning_directory_is_flagged():
+    """切页卡顿：页面首次组合时同步扫目录，顿在切页那一帧。"""
+    source = """
+        @Composable
+        fun ScansScreen() {
+            var docs by remember { mutableStateOf(DocStore.list()) }
+        }
+    """
+    problems = lint_patterns._kt_problems(source, "ScansScreen.kt")
+    assert any("组合期读盘" in p for p in problems), problems
+
+
+def test_remember_then_load_in_effect_is_clean():
+    source = """
+        @Composable
+        fun ScansScreen() {
+            var docs by remember { mutableStateOf<List<SavedDoc>>(emptyList()) }
+            LaunchedEffect(Unit) { docs = withContext(Dispatchers.IO) { DocStore.list() } }
+        }
+    """
+    assert lint_patterns._kt_problems(source, "ScansScreen.kt") == []

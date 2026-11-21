@@ -255,7 +255,9 @@ fun MainScreen(
                     .pagerGestureOverride(pagerState = mainPagerState.pagerState, mode = pagerMode)
                     .then(if (wideScreen) Modifier.widthIn(max = 720.dp) else Modifier),
                 state = mainPagerState.pagerState,
-                beyondViewportPageCount = 1,
+                // 底栏能直接跨页跳（首页 ↔ 我的）。只预热相邻一页时，跨页的目标页要现组合，
+                // 顿在点击那一帧；五个页面都不重，全量预热换切页不掉帧。
+                beyondViewportPageCount = MainPagerConfig.PAGE_COUNT,
                 overscrollEffect = null,
                 userScrollEnabled = false,
                 pageNestedScrollConnection = PagerGestureNestedScrollConnection,
@@ -321,7 +323,6 @@ fun MainScreen(
                         syncing = sync.syncing,
                         siteDown = session.siteDown,
                         memberCount = members.size,
-                        accountCount = Repo.accounts.accounts.size,
                         bottomPadding = bottom,
                         onAccounts = { navigator.push(Route.Accounts) },
                         onCloudSync = { navigator.push(Route.CloudSync) },

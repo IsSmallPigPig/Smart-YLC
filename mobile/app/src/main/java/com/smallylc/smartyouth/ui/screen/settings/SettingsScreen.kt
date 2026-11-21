@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -26,8 +28,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smallylc.smartyouth.BuildConfig
+import com.smallylc.smartyouth.data.CloudProfile
 import com.smallylc.smartyouth.data.CloudProfiles
+import com.smallylc.smartyouth.data.Repo
 import com.smallylc.smartyouth.data.ScanPrefs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.smallylc.smartyouth.ui.component.CardGap
 import com.smallylc.smartyouth.ui.component.MutedText
 import com.smallylc.smartyouth.ui.component.updateRowClick
@@ -60,7 +66,6 @@ fun SettingsScreen(
     siteDown: Boolean,
     syncing: Boolean,
     memberCount: Int,
-    accountCount: Int,
     bottomPadding: Dp,
     onAccounts: () -> Unit,
     onCloudSync: () -> Unit,
@@ -69,6 +74,17 @@ fun SettingsScreen(
     onOpenAbout: () -> Unit,
     onSync: () -> Unit,
 ) {
+    // 账号数和当前配置都存在 SharedPreferences 的 JSON 里，组合期解析会拖住切页那一帧，改到 IO 上读。
+    var accountCount by remember { mutableIntStateOf(0) }
+    var activeProfile by remember { mutableStateOf<CloudProfile?>(null) }
+    val profileId = CloudProfiles.activeId
+    LaunchedEffect(profileId) {
+        val (count, profile) = withContext(Dispatchers.IO) {
+            Repo.accounts.accounts.size to CloudProfiles.active
+        }
+        accountCount = count
+        activeProfile = profile
+    }
     val scrollBehavior = MiuixScrollBehavior()
     val backdrop = rememberBlurBackdrop(LocalEnableBlur.current)
     val barColor = if (backdrop != null) Color.Transparent else colorScheme.surface
@@ -138,7 +154,7 @@ fun SettingsScreen(
                     )
                     ArrowPreference(
                         title = "云端配置",
-                        summary = CloudProfiles.active?.let { "${it.name}  ${it.code}" } ?: "拉取配置后可切换账号组",
+                        summary = activeProfile?.let { "${it.name}  ${it.code}" } ?: "拉取配置后可切换账号组",
                         onClick = onCloudSync,
                     )
                     if (loggedIn) {

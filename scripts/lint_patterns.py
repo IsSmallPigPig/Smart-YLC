@@ -331,6 +331,16 @@ def _kt_problems(source: str, rel: str) -> list[str]:
                 problems.append(
                     f"{rel}:{line} [旋转未进 effect key] LaunchedEffect 用了 page.id 但漏了 rotation，"
                     "点旋转后预览/识别框不重算会错位；key 里补上 page.rotation")
+
+    # 规则（2026-11-22 切页卡顿）：remember 里同步扫目录或读文件。
+    # 页面在 pager 里跨页跳转时才首次组合，IO 正好落在切页那一帧的预算里，
+    # 表现为"点底栏后要顿一下才动"，与处理器无关。
+    for m in re.finditer(r"remember(?:\s*\([^()]*\))?\s*\{([^{}]{0,300})", source):
+        if re.search(r"DocStore\.list\(|\.listFiles\(|\.readText\(|\.readBytes\(", m.group(1)):
+            line = source.count("\n", 0, m.start()) + 1
+            problems.append(
+                f"{rel}:{line} [组合期读盘] remember 里扫目录或读文件，切页那一帧会阻塞主线程；"
+                "挪到 LaunchedEffect + withContext(Dispatchers.IO)")
     return problems
 
 

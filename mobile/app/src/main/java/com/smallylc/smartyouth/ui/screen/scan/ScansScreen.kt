@@ -8,8 +8,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberCoroutineScope
 import com.smallylc.smartyouth.scan.PdfPages
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -77,7 +79,10 @@ fun ScansScreen(
     onNewScan: () -> Unit,
     onPair: () -> Unit,
 ) {
-    var docs by remember { mutableStateOf(DocStore.list()) }
+    val scope = rememberCoroutineScope()
+    var docs by remember { mutableStateOf<List<DocStore.SavedDoc>>(emptyList()) }
+    // 扫目录要给每个文件做 stat，放在组合期会拖住切页那一帧，改到 IO 上。
+    LaunchedEffect(Unit) { docs = withContext(Dispatchers.IO) { DocStore.list() } }
     var pendingDelete by remember { mutableStateOf<DocStore.SavedDoc?>(null) }
     var previewing by remember { mutableStateOf<DocStore.SavedDoc?>(null) }
     val scrollBehavior = MiuixScrollBehavior()
@@ -221,9 +226,13 @@ fun ScansScreen(
                     TextButton(
                         text = "删除",
                         onClick = {
-                            DocStore.delete(doc)
-                            docs = DocStore.list()
                             pendingDelete = null
+                            scope.launch {
+                                docs = withContext(Dispatchers.IO) {
+                                    DocStore.delete(doc)
+                                    DocStore.list()
+                                }
+                            }
                         },
                         modifier = Modifier.weight(1f),
                         colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.textButtonColors(color = ToneRed),
