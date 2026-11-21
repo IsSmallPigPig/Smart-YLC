@@ -15,6 +15,8 @@
 
 缓存落在配置目录旁的 check_cache.json，与 config.json 分开：
   它是可重建的派生数据，坏了删掉即可，不该连带影响账号、名单等真实配置。
+  磁盘文件只在进程启动时读一次，之后以内存镜像为准；每次改动仍即时刻盘，
+  避免缓存是可重建数据却引入崩溃丢结论的复杂度。
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ import time
 from app.constants import CONFIG_FILE
 
 CACHE_FILE = os.path.join(os.path.dirname(CONFIG_FILE), "check_cache.json")
-# 单个采样区大小。768KB 总采样对应 1~2ms/份
+# 单个采样区大小。768KB 总采样约 0.4ms/份
 SAMPLE = 256 * 1024
 # 条目上限。一份档案一条，几千个来源目录足够用；超了按最近使用淘汰
 MAX_ENTRIES = 4000
@@ -39,6 +41,10 @@ _lock = threading.Lock()
 # 会话内的一级缓存：(真实路径, 大小, mtime) → 摘要。
 # 同一轮扫描里页数与空格检查都要用摘要，避免重复读盘。
 _memo: dict[tuple[str, int, int], str] = {}
+# 磁盘内容的内存镜像：None 表示尚未加载。缓存文件只在首次访问时读一次，
+# 之后读写都走内存；每次改动仍即时刻盘。没有它，几百份档案的扫描会反复
+# json.load/json.dump 整份文件，命中越多越慢（文件随条目数增长）。
+_files: dict | None = None
 
 
 def _sample(path: str, size: int) -> bytes:
@@ -93,7 +99,12 @@ def _load() -> dict:
     return files if isinstance(files, dict) else {}
 
 
-def _save(files: dict) -> None:
+def _save(files: dict) -> dict:
+    """把缓存写到磁盘，返回实际保留的条目（超限时已淘汰）。
+
+    返回它是为了让内存镜像与磁盘保持一致——否则被淘汰的条目还留在内存里，
+    刷新时会读到一条磁盘上早已没有的结论。
+    """
     if len(files) > MAX_ENTRIES:
         # 按最近写入时间淘汰：老档案删了就删了，重查一次而已。
         # 用纳秒：一轮扫描里几百份在同一秒内写完，秒级时间戳排序不稳定，
@@ -115,35 +126,47 @@ def _save(files: dict) -> None:
     finally:
         if tmp and os.path.exists(tmp):
             os.unlink(tmp)
+    return files
+
+
+def _current() -> dict:
+    """内存镜像，首次访问时从磁盘加载。调用方须持有 _lock。"""
+    global _files
+    if _files is None:
+        _files = _load()
+    return _files
 
 
 def _update(digest: str, **fields) -> None:
     if not digest:
         return
     with _lock:
-        files = _load()
+        files = _current()
         entry = files.get(digest) or {}
         entry.update(fields)
         entry["at"] = time.time_ns()
         files[digest] = entry
-        _save(files)
+        kept = _save(files)
+        if len(kept) != len(files):        # 淘汰发生：内存镜像跟着收缩
+            files.clear()
+            files.update(kept)
 
 
 def _read(digest: str, name: str) -> int | None:
     if not digest:
         return None
     with _lock:
-        entry = _load().get(digest) or {}
+        entry = _current().get(digest) or {}
     value = entry.get(name)
     return value if isinstance(value, int) and value >= 0 else None
 
 
 # ---------- 两个用途 ----------
 
-def remember_pages(path_or_digest: str, pages: int | None) -> None:
+def remember_pages(digest: str, pages: int | None) -> None:
     """记住页数。读不出页数（None）不缓存——那是失败，不是结论。"""
     if pages is not None:
-        _update(path_or_digest, pages=int(pages))
+        _update(digest, pages=int(pages))
 
 
 def pages_of(digest: str) -> int | None:
@@ -162,8 +185,10 @@ def blanks_of(digest: str) -> int | None:
 
 def clear() -> None:
     """清空缓存（测试与设置页「重新检查全部」用）。"""
+    global _files
     with _lock:
         _memo.clear()
+        _files = None
         try:
             os.remove(CACHE_FILE)
         except OSError:

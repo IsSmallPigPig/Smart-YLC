@@ -25,6 +25,12 @@ def _write(path, data: bytes):
     return str(path)
 
 
+def _simulate_restart(cache):
+    """清空会话内存镜像与摘要记忆，模拟程序重启后只剩磁盘文件。"""
+    cache._files = None
+    cache._memo.clear()
+
+
 def test_fingerprint_ignores_name_and_location(cache, tmp_path):
     """同一份内容换个文件名、换个目录，摘要必须相同。"""
     body = b"%PDF-1.4" + b"x" * 5000
@@ -62,7 +68,7 @@ def test_pages_survive_restart(cache, tmp_path):
     assert cache.pages_of(digest) is None
 
     cache.remember_pages(digest, 13)
-    cache._memo.clear()               # 模拟重启：内存一级缓存没了
+    _simulate_restart(cache)          # 模拟重启：内存镜像与摘要记忆都没了
     assert cache.pages_of(digest) == 13
 
 
@@ -78,7 +84,7 @@ def test_blanks_survive_restart(cache, tmp_path):
     pdf = _write(tmp_path / "空格.pdf", b"%PDF-1.4 blanks")
     digest = cache.fingerprint(pdf)
     cache.remember_blanks(digest, 3)
-    cache._memo.clear()
+    _simulate_restart(cache)
     assert cache.blanks_of(digest) == 3
 
 
@@ -98,6 +104,29 @@ def test_pages_and_blanks_coexist(cache, tmp_path):
     cache.remember_blanks(digest, 0)
     assert cache.pages_of(digest) == 13
     assert cache.blanks_of(digest) == 0
+
+
+def test_disk_loaded_once_across_many_reads(cache, tmp_path, monkeypatch):
+    """扫描几百份档案时磁盘只加载一次，不能每次读缓存都 json.load 整份文件。
+
+    内存镜像是扫描性能的关键：没有它，命中越多越慢（文件随条目数增长）。
+    """
+    pdf = _write(tmp_path / "一份.pdf", b"%PDF-1.4 pages")
+    digest = cache.fingerprint(pdf)
+    cache.remember_pages(digest, 13)
+
+    calls = []
+    real_load = cache._load
+
+    def counted():
+        calls.append(1)
+        return real_load()
+
+    cache._files = None                 # 模拟首次访问
+    monkeypatch.setattr(cache, "_load", counted)
+    for _ in range(200):
+        assert cache.pages_of(digest) == 13
+    assert len(calls) == 1, f"磁盘被读了 {len(calls)} 次，应为 1 次"
 
 
 def test_corrupt_cache_file_is_ignored(cache, tmp_path):

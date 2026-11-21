@@ -434,6 +434,7 @@ class UploadPage(FluentPage):
         # 按内容摘要缓存（key 由 _cell_key 给出）：同一份档案无论改名、重压、
         # 还是重启程序后重新扫描，都不会重复扫几百页
         self._cell_cache: dict[str, int] = {}
+        self._cell_queued: set[str] = set()   # 本轮已入队的摘要，避免同内容副本重复检查
         self._cell_worker = None
         self._cell_total = 0
         self._cell_done = 0
@@ -987,16 +988,11 @@ class UploadPage(FluentPage):
 
     # ---------- 逐格检查（扫描后自动跑） ----------
 
-    def _cell_key(self, path: str) -> str:
-        """缓存键：文件内容摘要。
-
-        用内容而不是路径 + 修改时间：原件会被规范化改名、压缩副本会随参数重做、
-        程序重开会清空内存——按路径缓存等于每次刷新都重查几百页。
-        摘要取大小加首中尾采样，单份 1~2ms；查空格本身要 300~800ms。
-        """
+    def _cell_key(self, path: str) -> str | None:
+        """缓存键：内容摘要；读不出文件返回 None（不进持久化缓存）。"""
         from app.services import check_cache
 
-        return check_cache.fingerprint(path) or f"missing:{path}"
+        return check_cache.fingerprint(path) or None
 
     def _start_cell_check(self):
         """逐格查表格空格：扫描完自动在后台跑，结果写进每行说明。
@@ -1009,6 +1005,7 @@ class UploadPage(FluentPage):
         # 空格从压缩副本上查（与上传同一份文件）；结果仍按原件路径回填给界面。
         # 异常副本、未生成副本的档案不查——它们不参与上传。
         targets: list[tuple[str, str]] = []   # (原件路径, 副本路径)
+        self._cell_queued.clear()
         cached_hits = 0
         for s in self.statuses:
             original = str(s.path)
@@ -1018,14 +1015,19 @@ class UploadPage(FluentPage):
             if work_area.is_abnormal_copy(copy):
                 continue
             key = self._cell_key(copy)
-            if key not in self._cell_cache:
+            if key is not None:
+                if key in self._cell_cache:
+                    continue                  # 本会话已出结果
                 known = check_cache.blanks_of(key)
                 if known is not None:
                     self._cell_cache[key] = known
                     self._cell_counts[original] = known
                     cached_hits += 1
                     continue
-                targets.append((original, copy))
+                if key in self._cell_queued:
+                    continue                  # 内容相同的副本本轮已排队，不重复检查
+                self._cell_queued.add(key)
+            targets.append((original, copy))
         if cached_hits:
             # 命中缓存的也要重建卡片，否则行说明还是空的
             self._rebuild_branches()
@@ -1078,11 +1080,12 @@ class UploadPage(FluentPage):
             self._cell_counts[path] = count
             copy = (getattr(self, "_cell_targets", {}) or {}).get(path, path)
             key = self._cell_key(copy)
-            self._cell_cache[key] = count
-            # 落盘：下次启动或重新扫描时这份就不必再查
-            from app.services import check_cache
+            if key is not None:
+                self._cell_cache[key] = count
+                # 落盘：下次启动或重新扫描时这份就不必再查
+                from app.services import check_cache
 
-            check_cache.remember_blanks(key, count)
+                check_cache.remember_blanks(key, count)
         else:
             self._cell_skipped += 1
             self._cell_skip_reason = reason or self._cell_skip_reason
