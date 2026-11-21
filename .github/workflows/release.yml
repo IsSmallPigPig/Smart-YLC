@@ -446,8 +446,13 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           yes | "$SM" --licenses > /dev/null || true
-          # 版本对齐 mobile/build.gradle.kts 的 compileSdk / buildToolsVersion
-          "$SM" "platforms;android-37" "build-tools;37.0.0" "platform-tools"
+          # 版本对齐 mobile/build.gradle.kts 的 compileSdk 37.0 / buildToolsVersion 37.0.0。
+          # AGP 9 起平台包名带小版本号（android-37.0，不是 android-37）。
+          PKGS=("platforms;android-37.0" "build-tools;37.0.0" "platform-tools")
+          if ! "$SM" "${PKGS[@]}"; then
+            echo "稳定源里还没有 37.0，改从 canary 装"
+            "$SM" --channel=3 "${PKGS[@]}"
+          fi
 
       - name: 恢复调试签名
         # 手机上已经装着旧版，只认当初那份 key。换一份签名，新包会提示「应用未安装」，
