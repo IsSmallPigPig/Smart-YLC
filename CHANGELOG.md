@@ -7,6 +7,16 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.1.2
+
+- [63c850d] fix: 修复手机同步线程模型与多处静默失败
+- [42fcf87] perf(upload): 检查缓存加内存镜像，消除扫描期 O(N²) 磁盘读写
+- [a5e65c8] perf(upload): 按内容摘要缓存检查结果，查过的档案不再重跑
+- [66fb2aa] feat(lan): UDP 自动发现应答，手机无需扫码即可找到这台电脑
+- [e0d0f18] feat(mobile-v2): 首页状态卡融入品牌标志光效
+
+@IsSmallPigPig
+
 ## v1.1.1
 
 - [aa85411] fix(copy): 设置页说明改为直白做法；关于页署名改用昵称
