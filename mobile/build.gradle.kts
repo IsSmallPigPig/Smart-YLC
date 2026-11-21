@@ -11,5 +11,5 @@ extra["androidCompileSdkVersionMinor"] = 0
 extra["androidBuildToolsVersion"] = "37.0.0"
 extra["androidSourceCompatibility"] = JavaVersion.VERSION_21
 extra["androidTargetCompatibility"] = JavaVersion.VERSION_21
-extra["appVersionCode"] = 1
-extra["appVersionName"] = "2.0.0"
+extra["appVersionCode"] = 2
+extra["appVersionName"] = "2.1.0"
