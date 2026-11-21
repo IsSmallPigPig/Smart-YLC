@@ -7,6 +7,12 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.1.4
+
+- [a62b302] fix: 修复 Win11 实测暴露的材质、单实例、路径与线程收尾问题
+
+@IsSmallPigPig
+
 ## v1.1.3
 
 - [d4f1d72] refactor: mixin 拆分超长 UI 文件与复杂度热点，codeview 达 100 分
