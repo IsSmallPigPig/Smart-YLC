@@ -425,16 +425,24 @@ jobs:
           java-version: "21"
 
       - name: 准备 Android SDK
-        # ubuntu runner 自带 SDK，只补本项目的编译版本。不引第三方 action：
-        # setup-android 会随上游发版失效（最近一次就是它自己挂在这步），少一层依赖。
+        # runner 自带的 SDK 位置和 cmdline-tools 目录名都随镜像版本变，
+        # 按候选位置找 sdkmanager，不写死路径；也不引第三方 action 多一层失效点。
         run: |
-          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SM" ]; then
-            echo "::error::$SDK 下没有 sdkmanager，runner 镜像结构变了"
-            ls "$SDK" || true
+          SM=""
+          for cand in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}" \
+                      /usr/local/lib/android/sdk "$HOME/Android/Sdk"; do
+            [ -n "$cand" ] && [ -d "$cand" ] || continue
+            SM=$(find "$cand" -maxdepth 4 -name sdkmanager -type f 2>/dev/null | head -1)
+            if [ -n "$SM" ]; then SDK="$cand"; break; fi
+          done
+          if [ -z "$SM" ]; then
+            echo "::error::找不到 sdkmanager"
+            ls -d /usr/local/lib/android* /opt/android* 2>/dev/null || true
+            find / -maxdepth 6 -name sdkmanager -type f 2>/dev/null | head -5
             exit 1
           fi
+          echo "SDK=$SDK"
+          echo "sdkmanager=$SM"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           yes | "$SM" --licenses > /dev/null || true
