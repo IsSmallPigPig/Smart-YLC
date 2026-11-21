@@ -1,0 +1,43 @@
+name: AndroidProbe
+on:
+  push:
+    paths: [".github/workflows/android-probe.yml"]
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: 准备 Android SDK
+        run: |
+          SM=""
+          for cand in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}" /usr/local/lib/android/sdk "$HOME/Android/Sdk"; do
+            [ -n "$cand" ] && [ -d "$cand" ] || continue
+            SM=$(find "$cand" -maxdepth 4 -name sdkmanager -type f 2>/dev/null | head -1)
+            if [ -n "$SM" ]; then SDK="$cand"; break; fi
+          done
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          yes | "$SM" --licenses > /dev/null || true
+          PKGS=("platforms;android-37.0" "build-tools;37.0.0" "platform-tools")
+          if ! "$SM" "${PKGS[@]}"; then "$SM" --channel=3 "${PKGS[@]}"; fi
+      - name: 恢复调试签名
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          mkdir -p "$HOME/.android"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+          echo "SMARTYOUTH_KEYSTORE=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
+          "$JAVA_HOME/bin/keytool" -list -v -keystore "$HOME/.android/debug.keystore" \
+            -storepass android 2>/dev/null | grep -i "SHA256:" || { echo "::error::密钥不可读"; exit 1; }
+      - name: 编译并核对签名
+        run: |
+          sudo mkdir -p /Volumes/AnkoQAQ/kotlin-dev/build/smart-youth
+          sudo chown -R "$USER":"$(id -g)" /Volumes/AnkoQAQ
+          cd mobile
+          ./gradlew :app:assembleDebug --no-daemon
+          APK=/Volumes/AnkoQAQ/kotlin-dev/build/smart-youth/_app/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$APK" | grep -i "sha-256 digest"
