@@ -20,6 +20,21 @@ val appVersionName = rootProject.extra["appVersionName"] as String
 android {
     namespace = "com.smallylc.smartyouth"
 
+    signingConfigs {
+        // 已经装了旧版的手机只认当初那把 key。CI 的 AGP 不一定去 ~/.android 找
+        // debug.keystore（会自己生成一把新的），所以这里显式指定：设了环境变量就用它，
+        // 没设就退回 AGP 的默认调试签名（本机开发即此路径）。
+        getByName("debug") {
+            val ksPath = System.getenv("SMARTYOUTH_KEYSTORE")
+            if (!ksPath.isNullOrBlank()) {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("SMARTYOUTH_KEYSTORE_PASSWORD") ?: "android"
+                keyAlias = System.getenv("SMARTYOUTH_KEY_ALIAS") ?: "androiddebugkey"
+                keyPassword = System.getenv("SMARTYOUTH_KEY_PASSWORD") ?: "android"
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true

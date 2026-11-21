@@ -466,6 +466,14 @@ jobs:
           fi
           mkdir -p "$HOME/.android"
           printf '%s' "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+          # build.gradle.kts 里的 debug signingConfig 读这个变量。只把文件放到
+          # ~/.android 不够：CI 的 AGP 会另生成一把 key，签出来的包装不上旧版。
+          echo "SMARTYOUTH_KEYSTORE=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
+          # 先确认文件能用，免得密钥坏了 AGP 静默换 key、到用户手机上才发现装不上
+          "$JAVA_HOME/bin/keytool" -list -v -keystore "$HOME/.android/debug.keystore" \
+            -storepass android 2>/dev/null | grep -i "SHA256:" || {
+              echo "::error::密钥无法读取，检查 ANDROID_DEBUG_KEYSTORE_B64"
+              exit 1; }
 
       - name: 编译 APK
         run: |
