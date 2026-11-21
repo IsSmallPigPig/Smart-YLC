@@ -93,7 +93,9 @@ object GitHubUpdate {
     suspend fun check(): CheckResult = withContext(Dispatchers.IO) {
         try {
             val request = okhttp3.Request.Builder()
-                .url("$RELEASES_API?per_page=20")
+                // 桌面版和手机版共用同一个 releases 列表，取宽一点，
+                // 免得以后攒够桌面版本把 mobile-v* 挤出窗口后静默显示「已是最新」。
+                .url("$RELEASES_API?per_page=100")
                 .header("Accept", "application/vnd.github+json")
                 .build()
             client.newCall(request).execute().use { response ->
