@@ -40,6 +40,11 @@ from app.domain.transfer import fetch_transfer_applies, is_graduated
 from app.services import store
 from app.services.api import SiteClient
 from app.ui.charts import SegmentedDonut
+from app.ui.org_page_widgets import (
+    STATUS_LABEL, KIND_COLOR, TRANSFER_COLOR, _UNPAID, _EXTRAS, _RING_TONE,
+    _money, _Dot, _MiniBar, TapCard, OrgWorker, TintedCard, MemberCard,
+)
+from app.ui.org_page_persist_mixin import OrgPagePersistMixin
 from app.ui import palette as P
 from app.ui.widgets import PillLabel
 from app.domain.check_templates import default_identity_template, default_report_template
@@ -49,201 +54,9 @@ from app.ui.page import (BusyOverlay, CallbackWorker, FluentPage, PageBanner,
 # 面包屑与组织管理页同一套实现：节点按主题取色、按内容取宽，直接复用
 from app.ui.org_manage_page import CrumbBar
 
-STATUS_LABEL = {
-    "ok": "正常",
-    "failed": "密码错误",
-    "captcha": "需验证码",
-    "passwordChange": "需改密",
-    "needMemberName": "需姓名校验",
-    "network": "网络错误",
-    "empty": "未配置",
-}
-
-KIND_COLOR = P.KIND
-TRANSFER_COLOR = P.TRANSFER
-# by_kind 里的旁路键：承载「应补缴金额」，不参与分类计数
-_UNPAID = "__unpaid__"
-_EXTRAS = "__extras__"
-# 概览卡里小标签的语气键：黄=信息错误、红=欠缴、灰=没有报道
-_RING_TONE = {"identity": "ring-identity", "fees": "ring-fees",
-              "report": "ring-report", "archive": "ring-archive"}
 
 
-
-def _money(value: float) -> str:
-    """金额显示：整数不带小数，有角分才保留两位。"""
-    value = round(float(value or 0), 2)
-    return f"{value:,.0f}" if value == int(value) else f"{value:,.2f}"
-
-
-class _Dot(QWidget):
-    """图例小圆点：颜色在 paintEvent 按主题取，切主题只重绘一次。"""
-
-    def __init__(self, color: str, parent=None):
-        super().__init__(parent)
-        self._color = QColor(color)
-        self.setFixedSize(10, 10)
-
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(self._color)
-        p.drawEllipse(0, 0, self.width(), self.height())
-
-
-class _MiniBar(QWidget):
-    """6px 细进度条：只画一条轨道 + 一段填充，没有文字与交互。"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._ratio = 0.0
-        self.setFixedHeight(6)
-
-    def set_ratio(self, ratio: float):
-        self._ratio = max(0.0, min(1.0, ratio))
-        self.update()
-
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        h = self.height()
-        r = h / 2
-        p.setBrush(QColor(255, 255, 255, 26) if isDarkTheme() else QColor(0, 0, 0, 15))
-        p.drawRoundedRect(QRectF(0, 0, self.width(), h), r, r)
-        if self._ratio > 0:
-            w = max(self.width() * self._ratio, h)
-            p.setBrush(P.fg("brand"))
-            p.drawRoundedRect(QRectF(0, 0, w, h), r, r)
-
-
-class TapCard(CardWidget):
-    """可点卡片：整块响应左键，用来把「异常团员」做成入口。"""
-
-    clicked = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mouseReleaseEvent(e)
-
-
-class OrgWorker(QThread):
-    """并发逐账号：会话探测 → 失效才登录 → 拉取团员 → 三项检查 + 异常团员名单 + 转接统计。只读查询。
-
-    单账号失败（密码错误/网络异常）只影响它自己一行，不阻塞其他账号。"""
-
-    account_done = Signal(str, str, int, int, int, dict, str, str, object, object)
-    # user, branch, total, uploaded, abnormal, by_kind, status, message, TransferSummary|None, error_rows
-    all_done = Signal()
-
-    MAX_WORKERS = 4  # 团员列表是重接口，并发数低于测活
-
-    def __init__(self, accounts: list[dict]):
-        super().__init__()
-        self.accounts = accounts
-        self._stop = False
-
-    def stop(self):
-        self._stop = True
-
-    def _check_one(self, acc: dict):
-        from app.services import login_gate
-
-        user, pwd = acc.get("userName", ""), acc.get("password", "")
-        branch = acc.get("remark") or user
-        if not user or not pwd:
-            return user, branch, 0, 0, 0, {}, "empty", "账号或密码为空", None, []
-        try:
-            client = SiteClient(user, pwd)
-            kind, msg = login_gate.ensure_logged_in(client)
-            if kind != "ok":
-                return user, branch, 0, 0, 0, {}, kind, msg, None, []
-            members, _ = client.get_all_members()
-            id_tpl, rep_tpl = default_identity_template(), default_report_template()
-            results = (
-                build_identity_results(members, id_tpl)
-                + build_report_results(members, rep_tpl)
-                + build_fee_results(members)
-            )
-            s = summarize_members(members, results)
-            rows = build_error_rows(results, branch)
-            # 转接申请统计（作为转出方，按支部过滤）
-            oid = members[0].oid if members else ""
-            transfer = fetch_transfer_applies(client, oid)
-            transfer.total = s.total
-            if is_graduated(acc):
-                user = f"{user}（毕业应转出）"
-            kinds = dict(s.by_kind)
-            # 金额随 by_kind 一起带出去：不改信号签名，调用方按 _UNPAID 取值
-            kinds[_UNPAID] = unpaid_amount(results)
-            kinds[_EXTRAS] = {
-                "dupMobile": duplicate_mobiles(members),
-                "ecardMissing": ecard_missing(members),
-                "unpaidMonths": unpaid_months_total(members),
-                "oldestUnpaid": oldest_unpaid(members),
-            }
-            return user, branch, s.total, s.uploaded, s.abnormal, kinds, "ok", "", transfer, rows
-        except Exception as e:
-            return user, branch, 0, 0, 0, {}, "network", str(e), None, []
-
-    def run(self):
-        workers = min(self.MAX_WORKERS, max(1, len(self.accounts)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(self._check_one, dict(a)) for a in self.accounts]
-            for fut in as_completed(futures):
-                if self._stop:
-                    break
-                try:
-                    self.account_done.emit(*fut.result())
-                except Exception as e:
-                    self.account_done.emit("", "", 0, 0, 0, {}, "network", f"统计线程异常：{e}", None, [])
-        self.all_done.emit()
-
-
-class TintedCard(CardWidget):
-    """通用提示卡：整块 warning 黄底，账号级失败等没有跳转目标的错误用。"""
-
-    def __init__(self, role: str = "warning", parent=None):
-        super().__init__(parent)
-        self.role = role
-
-    def paintEvent(self, e):
-        super().paintEvent(e)
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        paint_tinted_card(self, p, self.role, radius=8)
-        p.end()
-
-
-class MemberCard(CardWidget):
-    """异常团员卡片：warning 黄底 + 点一下跳到组织管理里所在支部。"""
-
-    clicked = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def paintEvent(self, e):
-        super().paintEvent(e)
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        paint_tinted_card(self, p, "warning", radius=8)
-        p.end()
-
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mouseReleaseEvent(e)
-
-
-class OrgPage(FluentPage):
+class OrgPage(OrgPagePersistMixin, FluentPage):
     detail_changed = Signal(bool)   # 概览 ↔ 异常名单，主窗口返回键据此可用
 
     def __init__(self, window, parent=None):
@@ -1171,82 +984,9 @@ class OrgPage(FluentPage):
 
     GRAD_SUFFIX = "（毕业应转出）"
 
-    @staticmethod
-    def _transfer_dict(t) -> dict:
-        return {"applied": t.applied, "total": t.total, "succeeded": t.succeeded,
-                "pending": t.pending, "returned": t.returned, "names": list(t.names)}
 
-    def _aggregate(self, cache: dict) -> dict:
-        """整份 orgStatsCache 的汇总口径在 domain 层，UI 只做转调。"""
-        return aggregate_org_stats(cache)
 
-    def _persist_account(self, user, branch, total, uploaded, by_kind, transfer, rows,
-                         unpaid: float = 0.0, extras: dict | None = None):
-        """本支部统计成功 → 写入配置 orgStatsCache；重启后从缓存恢复，不被清除。
 
-        transfer 为 None（离线重算）时保留上次在线结果；已删除账号的旧条目
-        随本次写盘一并清理，避免僵尸支部常驻。"""
-
-        valid = {a.get("userName", "") for a in self.window_ref.settings_page.accounts}
-        key = user.replace(self.GRAD_SUFFIX, "")
-
-        def _write(cfg: dict):
-            cache = cfg.setdefault("orgStatsCache", {})
-            # valid 为空只可能是账号还没载入；这时清理会把整份统计抹掉
-            if valid:
-                for k in [k for k in cache if k not in valid]:
-                    del cache[k]
-            existing = cache.get(key) or {}
-            cache[key] = {
-                "branch": branch,
-                "total": total,
-                "uploaded": uploaded,
-                "by_kind": {k: by_kind.get(k, 0) for k in ("identity", "report", "archive", "fees")},
-                "transfer": self._transfer_dict(transfer) if transfer else existing.get("transfer"),
-                "error_rows": [vars(r) for r in rows],
-                # 金额单独存，别混进 by_kind 的四个分类里。
-                # 在线路径从旁路键取，离线路径由调用方显式传入。
-                "unpaidAmount": round(float(unpaid or by_kind.get(_UNPAID, 0) or 0), 2),
-                "extras": dict(extras or {}),
-                "updatedAt": datetime.now().isoformat(timespec="seconds"),
-            }
-
-        store.update(_write)
-
-    def _restore_persisted(self):
-        """启动时从 orgStatsCache 恢复上次的组织状况（在线统计成功/离线重算
-        都会更新缓存，重启不清除；正在统计时不覆盖）。"""
-        if self.worker is not None and self.worker.isRunning():
-            return
-
-        cache = store.load().get("orgStatsCache") or {}
-        if not cache:
-            # 有成员缓存却没有统计缓存（首次启动、导入配置、换机恢复备份）：
-            # 页面会一直停在 0，直到 30 秒后的成员同步才重算。这里直接离线算一次，
-            # 不联网、不打扰，打开就有数。
-            if (store.load().get("memberCache") or {}):
-                self.refresh_offline()
-            return
-        agg = self._aggregate(cache)
-        self._total, self._uploaded = agg["total"], agg["uploaded"]
-        self._by_kind = agg["by_kind"]
-        self._error_rows = agg["rows"]
-        self._transfer_applied = agg["applied"]
-        self._set_ratio(agg["total"], agg["uploaded"])
-        self._update_bars()
-        self._clear_cards()
-        for r in agg["rows"]:
-            self._append_card(r.name, r.mobile, [k for k in KIND_COLOR if KIND_LABEL[k] in r.kinds],
-                              r.problems, r.branch)
-        self.error_title.setText(f"异常团员 {len(agg['rows'])}")
-        if self._detail_open:
-            self._apply_detail_filter()  # 统计刷新时保持当前类别筛选
-        # 缓存里是 ISO 时间串，直接显示会带 T 和秒；截图/阅读都不好看
-        updated = agg["updated"]
-        stamp = f"，更新于 {updated.replace('T', ' ')[:16]}" if updated else ""
-        self.transfer_note.setText(
-            f"转接申请 {agg['applied']} 人，成功 {agg['succeeded']}，"
-            f"审核中 {agg['pending']}，退回 {agg['returned']}{stamp}")
 
     def _clear_cards(self):
         while self.error_lay.count() > 1:  # 保留标题

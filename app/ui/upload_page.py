@@ -56,6 +56,7 @@ from app.ui.widgets import PillLabel, ProgressToast, StatusList
 from app.ui.upload_widgets import _DropZone, _DropOverlay, _FolderCard
 from app.ui.upload_workers import (
     COMPRESS_TARGET, MAX_BATCH, RESULT_TONE, ScanWorker, UploadWorker,
+    _worker_count,
 )
 
 

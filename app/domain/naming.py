@@ -67,37 +67,13 @@ def _normalize_width(s: str) -> str:
     return s.replace(FULLWIDTH_PLUS, "+").replace(FULLWIDTH_MINUS, "-")
 
 
-def analyze_file_name(original_name: str, allow_alternate_separator: bool = False) -> NameAnalysis:
-    codes: list[str] = []
-    problems: list[str] = []
-    reasons: list[str] = []
+def _parse_separators(cleaned: str, allow_alternate: bool,
+                      codes: list[str], problems: list[str], reasons: list[str]):
+    """解析三段式分隔符并就地追加分隔符相关诊断。
 
-    # 先归一化再判：NFC 让 macOS/iPhone 存下的分解式字符与名单对得上，
-    # 去掉不可见字符，全角数字转半角
-    raw = unicodedata.normalize("NFC", _INVISIBLE_RE.sub("", original_name))
-    raw = raw.translate(_FULLWIDTH_DIGITS)
-    has_pdf_ext = bool(PDF_EXT_RE.search(raw))
-    base = PDF_EXT_RE.sub("", raw) if has_pdf_ext else raw
-    normalized = _normalize_width(base)
-    cleaned = SPACE_RE.sub("", normalized)
-
-    # 并列的诊断规则：命中就往三个列表各追加一项，顺序即报告里的顺序。
-    # 表驱动只为压缩重复 append，判定表达式与文案逐字保留。
-    static_checks = (
-        (not has_pdf_ext, "EXT_NOT_PDF", "不是 .pdf 文件", "站点 PC 端只接受 PDF"),
-        (base != normalized, "FULLWIDTH_SEPARATOR", "使用了全角 ＋ / －",
-         "全角符号会导致系统按文件名匹配团员失败"),
-        (bool(ILLEGAL_CHARS_RE.search(cleaned)), "ILLEGAL_CHAR",
-         '含非法字符 \\ / : * ? " < > |', "文件名非法字符无法上传"),
-        (bool(SPACE_RE.search(base)), "HAS_SPACE", "含空格",
-         "空格会破坏「姓名+手机号+入团志愿书」解析"),
-    )
-    for hit, code, problem, reason in static_checks:
-        if hit:
-            codes.append(code)
-            problems.append(problem)
-            reasons.append(reason)
-
+    返回 (parts, used_plus, used_minus)：parts 为 None 表示没解析出三段。
+    从 analyze_file_name 提取，三态解析的优先级与诊断口径原样保留。
+    """
     plus_parts = cleaned.split("+")
     minus_parts = cleaned.split("-")
     used_plus = len(plus_parts) == 3
@@ -115,12 +91,21 @@ def analyze_file_name(original_name: str, allow_alternate_separator: bool = Fals
     if not parts and used_minus:
         parts = minus_parts
 
+    _note_separator_issues(mixed, used_minus, used_plus, allow_alternate,
+                           codes, problems, reasons)
+    return parts, used_plus, used_minus
+
+
+def _note_separator_issues(mixed: bool, used_minus: bool, used_plus: bool,
+                           allow_alternate: bool, codes: list[str],
+                           problems: list[str], reasons: list[str]) -> None:
+    """分隔符混用/非标准的诊断，就地追加。"""
     if mixed:
         codes.append("MIXED_SEPARATOR")
         problems.append("分隔符混用")
         reasons.append("两个分隔符必须一致，统一用半角 +")
     if used_minus and not used_plus:
-        if allow_alternate_separator:
+        if allow_alternate:
             problems.append("使用半角 -（站点可上传）")
             reasons.append("上传说明规定用 +，建议统一")
         else:
@@ -128,33 +113,91 @@ def analyze_file_name(original_name: str, allow_alternate_separator: bool = Fals
             problems.append("分隔符不是半角 +")
             reasons.append("按本站上传说明，应使用 姓名+手机号码+入团志愿书.pdf")
 
-    parsed: tuple[str, str] | None = None
+
+def _check_parts(parts: list[str] | None, codes: list[str],
+                 problems: list[str], reasons: list[str]) -> tuple[str, str] | None:
+    """三段式解析后的诊断与 parsed 判定，就地追加诊断并返回可解析的 (姓名, 手机号)。
+
+    parsed 的口径与 NAME_INVALID 不同（不复查非法字符），是既有行为，原样保留。
+    """
     if not parts:
         codes.append("STRUCTURE_MISMATCH")
         problems.append("不是「姓名+手机号码+入团志愿书」三段式")
         reasons.append("无法解析团员姓名与手机号")
-    else:
-        name, mobile, suffix = parts
-        part_checks = (
-            (suffix != NAME_SUFFIX, "SUFFIX_MISMATCH", "后缀不是「入团志愿书」",
-             f"应为 {NAME_SUFFIX}，实际为「{suffix or '空'}」"),
-            (not MOBILE_RE.fullmatch(mobile), "MOBILE_INVALID", "手机号不是 11 位有效号码",
-             f"应为 1[3-9] 开头的 11 位数字，实际为「{mobile or '空'}」"),
-            (not name or bool(ILLEGAL_CHARS_RE.search(name)) or bool(DIGIT_RE.search(name)),
-             "NAME_INVALID", "姓名段为空或含非法内容", "姓名段应为中文姓名，不含数字与符号"),
-        )
-        for hit, code, problem, reason in part_checks:
-            if hit:
-                codes.append(code)
-                problems.append(problem)
-                reasons.append(reason)
-        # parsed 的口径与 NAME_INVALID 不同（这里不复查非法字符），是既有行为，保持原样
-        if suffix == NAME_SUFFIX and MOBILE_RE.fullmatch(mobile) and name and not DIGIT_RE.search(name):
-            parsed = (name, mobile)
+        return None
+    name, mobile, suffix = parts
+    part_checks = (
+        (suffix != NAME_SUFFIX, "SUFFIX_MISMATCH", "后缀不是「入团志愿书」",
+         f"应为 {NAME_SUFFIX}，实际为「{suffix or '空'}」"),
+        (not MOBILE_RE.fullmatch(mobile), "MOBILE_INVALID", "手机号不是 11 位有效号码",
+         f"应为 1[3-9] 开头的 11 位数字，实际为「{mobile or '空'}」"),
+        (not name or bool(ILLEGAL_CHARS_RE.search(name)) or bool(DIGIT_RE.search(name)),
+         "NAME_INVALID", "姓名段为空或含非法内容", "姓名段应为中文姓名，不含数字与符号"),
+    )
+    for hit, code, problem, reason in part_checks:
+        if hit:
+            codes.append(code)
+            problems.append(problem)
+            reasons.append(reason)
+    return _parsed_if_valid(name, mobile, suffix)
+
+
+def _parsed_if_valid(name: str, mobile: str, suffix: str) -> tuple[str, str] | None:
+    """parsed 的口径与 NAME_INVALID 不同：这里不复查非法字符（既有行为）。"""
+    if suffix == NAME_SUFFIX and MOBILE_RE.fullmatch(mobile) and name and not DIGIT_RE.search(name):
+        return (name, mobile)
+    return None
+
+
+def _collect_static_checks(raw: str, has_pdf_ext: bool, base: str,
+                           normalized: str, cleaned: str,
+                           codes: list[str], problems: list[str], reasons: list[str]) -> None:
+    """归一化后的 4 条并列诊断，就地追加；判定与文案原样保留。"""
+    checks = (
+        (not has_pdf_ext, "EXT_NOT_PDF", "不是 .pdf 文件", "站点 PC 端只接受 PDF"),
+        (base != normalized, "FULLWIDTH_SEPARATOR", "使用了全角 ＋ / －",
+         "全角符号会导致系统按文件名匹配团员失败"),
+        (bool(ILLEGAL_CHARS_RE.search(cleaned)), "ILLEGAL_CHAR",
+         '含非法字符 \\ / : * ? " < > |', "文件名非法字符无法上传"),
+        (bool(SPACE_RE.search(base)), "HAS_SPACE", "含空格",
+         "空格会破坏「姓名+手机号+入团志愿书」解析"),
+    )
+    for hit, code, problem, reason in checks:
+        if hit:
+            codes.append(code)
+            problems.append(problem)
+            reasons.append(reason)
+
+
+def _severity(codes: list[str], used_minus: bool, used_plus: bool) -> str:
+    if codes:
+        return "issue"
+    return "warn" if (used_minus and not used_plus) else "ok"
+
+
+def analyze_file_name(original_name: str, allow_alternate_separator: bool = False) -> NameAnalysis:
+    codes: list[str] = []
+    problems: list[str] = []
+    reasons: list[str] = []
+
+    # 先归一化再判：NFC 让 macOS/iPhone 存下的分解式字符与名单对得上，
+    # 去掉不可见字符，全角数字转半角
+    raw = unicodedata.normalize("NFC", _INVISIBLE_RE.sub("", original_name))
+    raw = raw.translate(_FULLWIDTH_DIGITS)
+    has_pdf_ext = bool(PDF_EXT_RE.search(raw))
+    base = PDF_EXT_RE.sub("", raw) if has_pdf_ext else raw
+    normalized = _normalize_width(base)
+    cleaned = SPACE_RE.sub("", normalized)
+
+    _collect_static_checks(raw, has_pdf_ext, base, normalized, cleaned,
+                           codes, problems, reasons)
+
+    parts, used_plus, used_minus = _parse_separators(
+        cleaned, allow_alternate_separator, codes, problems, reasons)
+    parsed = _check_parts(parts, codes, problems, reasons)
 
     suggested = f"{parsed[0]}+{parsed[1]}+{NAME_SUFFIX}.pdf" if parsed else f"{cleaned or '未命名'}.pdf"
-    hard_issue = len(codes) > 0
-    severity = "issue" if hard_issue else ("warn" if (used_minus and not used_plus) else "ok")
+    severity = _severity(codes, used_minus, used_plus)
     if severity == "ok":
         codes.append("OK")
 
