@@ -185,6 +185,16 @@ class AboutCard(CollapsibleCard):
         else:
             self._check()
 
+    def shutdown(self):
+        """退出前等联网线程收尾：PyQt5 析构运行中的 QThread 会 abort。
+
+        下载没有可中断的 stop()，最多等 2 秒；超时后进程本来就要退出，
+        但至少不会在窗口销毁时被 GC 当场析构。由设置页的 shutdown 调用。
+        """
+        for worker in (self._check_worker, self._download_worker):
+            if worker is not None and worker.isRunning():
+                worker.wait(2000)
+
     def _check(self):
         if self._check_worker is not None and self._check_worker.isRunning():
             return
@@ -192,7 +202,7 @@ class AboutCard(CollapsibleCard):
         self.check_btn.setEnabled(False)
         self.check_btn.setText("正在检查")
         self._open_toast("检查更新").set_indeterminate("正在检查更新…")
-        worker = update_check.CheckWorker()
+        worker = update_check.CheckWorker(parent=self)
         self._check_worker = worker
         worker.found.connect(self._on_checked)
         worker.failed.connect(self._on_check_failed)
@@ -241,7 +251,7 @@ class AboutCard(CollapsibleCard):
         waiting = "正在测速挑选镜像站…" if (
             mode == updater.AUTO and not updater.probe_fresh()) else "正在下载更新包 0%"
         self._open_toast("下载更新").set_progress(0, 100, waiting)
-        worker = update_check.DownloadWorker(self._info, mode)
+        worker = update_check.DownloadWorker(self._info, mode, parent=self)
         self._download_worker = worker
         worker.progress.connect(self._on_download_progress)
         worker.fallback.connect(self._on_proxy_fallback)

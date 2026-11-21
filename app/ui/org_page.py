@@ -1049,7 +1049,13 @@ class OrgPage(FluentPage):
                           and self._apply_offline(data))
         self._offline_workers = getattr(self, "_offline_workers", [])
         self._offline_workers.append(worker)
+        # 30 秒一轮，不清理的话列表会一直涨，Python 引用还挡着 deleteLater。
+        worker.finished.connect(lambda: self._drop_offline_worker(worker))
         worker.start()
+
+    def _drop_offline_worker(self, worker):
+        if worker in getattr(self, "_offline_workers", []):
+            self._offline_workers.remove(worker)
 
     def _offline_snapshot(self):
         """后台线程：本轮有缓存的支部重算一遍，再按整份 orgStatsCache 汇总。

@@ -526,7 +526,8 @@ class SettingsPage(FluentPage):
 
         from app.ui.about_card import AboutCard
 
-        lay.addWidget(AboutCard(self))
+        self._about_card = AboutCard(self)
+        lay.addWidget(self._about_card)
 
         self._watcher = None
         self._ws_dirs: list[str] = []   # 来源目录列表（上传页可以加多个）
@@ -675,6 +676,13 @@ class SettingsPage(FluentPage):
         try:
             return max(0, int(t))
         except ValueError:
+            # 非法输入不能静默按默认值跑：界面还显示着错值，用户以为按它检查。
+            from qfluentwidgets import InfoBar
+
+            self.expected_pages_edit.setText(str(DEFAULT_EXPECTED_PAGES))
+            InfoBar.warning("预期页数填错了",
+                            f"只接受整数，已改回 {DEFAULT_EXPECTED_PAGES} 页。",
+                            duration=5000, parent=self)
             return DEFAULT_EXPECTED_PAGES
 
     def _save_config(self):
@@ -1270,8 +1278,15 @@ class SettingsPage(FluentPage):
         """对话框的档案/站点改动落到配置里（合并写，不整份覆盖）。"""
         try:
             store.update(lambda cfg: cfg.update(patch))
-        except Exception:
-            pass
+        except Exception as e:                 # noqa: BLE001 - 任何写盘失败都要让用户看见
+            # 写不进去必须让用户看见：否则设置看似保存了，重启后全丢。
+            from qfluentwidgets import InfoBar
+
+            from app.services import app_log
+
+            app_log.error("云端备份设置写盘失败：%s", e)
+            InfoBar.error("设置没保存", f"配置写入失败：{e}。请检查磁盘空间与文件权限。",
+                          duration=10000, parent=self)
 
     def _confirm_cloud_restore(self, cfg: dict):
         from app.ui import dialogs
@@ -1742,6 +1757,9 @@ class SettingsPage(FluentPage):
                 if worker is self._worker:
                     worker.stop()
                 worker.wait(2000)
+        about = getattr(self, "_about_card", None)
+        if about is not None:
+            about.shutdown()
 
     def _close_health_progress(self, finished: bool = False):
         toast, self._health_progress = getattr(self, "_health_progress", None), None

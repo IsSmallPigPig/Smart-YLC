@@ -39,6 +39,14 @@ def test_is_abnormal_path_matches_any_level(tmp_path):
     assert not is_abnormal_path(str(tmp_path / "异常档案说明.pdf"))
 
 
+def test_is_abnormal_path_recognizes_legacy_folder(tmp_path):
+    """升级前原件被移进「异常档案」，不能当正常档案误传。"""
+    legacy = tmp_path / "高一1班" / "异常档案" / "张三.pdf"
+    assert is_abnormal_path(str(legacy))
+    # 文件名里带这三个字仍不算（分段精确匹配）
+    assert not is_abnormal_path(str(tmp_path / "高一1班" / "异常档案.pdf"))
+
+
 def test_abnormal_target_is_sibling_folder(tmp_path):
     path = _pdf(tmp_path / "高一1班")
     assert abnormal_target(path) == os.path.join(

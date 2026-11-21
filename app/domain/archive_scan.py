@@ -20,7 +20,8 @@ from app.domain.naming import analyze_file_name
 SKIP_DIRS = {"__MACOSX", ".git", ".idea", ".vscode", "node_modules"}
 
 ABNORMAL_DIR_NAME = work_area.ABNORMAL_DIR_NAME
-"""兼容旧配置的目录名。新的异常区在工作目录/异常下，见 work_area。"""
+LEGACY_ABNORMAL_DIR_NAME = "异常档案"
+"""升级前原件被移进的旧目录名；新异常区在工作目录/异常下，见 work_area。"""
 
 
 def is_abnormal_path(path: str) -> bool:
@@ -29,7 +30,9 @@ def is_abnormal_path(path: str) -> bool:
     原件现在永不移动，异常标记改搬工作副本；保留旧判定是为了让升级前
     已经移进「异常档案」的档案仍被识别为异常，不会误传。"""
     parts = os.path.normpath(path).split(os.sep)
-    return work_area.is_abnormal_copy(path) or ABNORMAL_DIR_NAME in parts
+    return (work_area.is_abnormal_copy(path)
+            or ABNORMAL_DIR_NAME in parts
+            or LEGACY_ABNORMAL_DIR_NAME in parts)
 
 
 @dataclass

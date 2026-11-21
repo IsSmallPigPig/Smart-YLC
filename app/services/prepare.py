@@ -93,18 +93,27 @@ def prepare_all(statuses: list[FileStatus], roots: dict[str, str],
         root = roots.get(status.path, "")
         return status, prepare_one(status, root, target=target, force=force)
 
+    from app.services import app_log
+
     done = 0
+    failed: list[str] = []
     workers = min(3, max(1, (os.cpu_count() or 4) - 1))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(one, s) for s in jobs]
-        for future in as_completed(futures):
+        future_paths = {pool.submit(one, s): s.path for s in jobs}
+        for future in as_completed(future_paths):
             done += 1
             if progress:
                 progress(done, len(jobs))
             try:
                 future.result()
-            except Exception:      # noqa: BLE001 - 单份失败留空 work_path，后续当异常处理
-                pass
+            except Exception as exc:   # noqa: BLE001 - 单份失败留空 work_path，后续当异常处理
+                # 磁盘满/文件被占用时不能静默：否则用户只看到档案没处理，无从排查。
+                path = future_paths[future]
+                app_log.error("准备压缩副本失败 %s：%s: %s", path,
+                              type(exc).__name__, exc)
+                failed.append(path)
+    if failed:
+        app_log.warning("本轮有 %d 份档案没能准备副本，详见错误日志", len(failed))
     return statuses
 
 

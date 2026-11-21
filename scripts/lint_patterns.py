@@ -4,13 +4,33 @@
 开发者写下的代码模式。每条规则都标注了它来自哪次真实故障——规则不是凭空
 定的，是「同样的错不能再犯一次」的固化。
 
+规则索引（编号 = 注释里的「规则 N」，每条在 tests/test_pattern_lint.py 里
+都有「拦住旧写法」+「当前库干净」两个断言）：
+
+     1 getfqdn 反解卡 30 秒          11 配置损坏返回 {} 会抹掉整份
+     2 直接绑 0.0.0.0 触发反解       12 文件名未 NFC 归一化
+     3 裸 QDialog 弹窗               13 端点缺会话鉴权 / 配对缺 configCode
+     4 osascript 拼串丢通知          14 中转整份拉取撞 6MB 墙
+     5 subprocess text=True 乱码     15 opencv 4.8.x 未钉 numpy<2
+     6 extract_image 整图解码取尺寸  16 冒烟自检漏 import cv2
+     7 Windows 材质残留刷白          17 上传绕开压缩副本 work_path
+     8 app/ui 硬编码 hex 色          18 扫描未跳过工作目录
+     9 打包漏 --collect-all 原生包   19 下载完成自动安装退出
+    10 as_completed 收集未重排       20 检查缓存按路径而非内容摘要
+    21 QThread.wait() 当 sleep      22 无事件循环线程建 QTimer
+    23 配置保存静默吞写盘异常
+
+结构：规则 1–14、16–23 在 check_file() 里按编号注释块排布；规则 15 扫非
+.py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式与网络安全配置
+各有独立检查函数（_kt_problems / _network_problems）。
+
 用法：
     python scripts/lint_patterns.py            # 打印问题并返回非零
     python scripts/lint_patterns.py --quiet    # 只返回码，供测试调用
 
-新增规则的方式：在 RULES 里加一条，并在 tests/test_pattern_lint.py 里
-同时加「能拦住旧写法」和「当前库干净」的断言。只加规则不加测试，lint 会
-变成跑一次就红的摆设。
+新增规则的方式：在 check_file()（或对应的独立检查函数）里加一个编号注释块，
+并在 tests/test_pattern_lint.py 里同时加「能拦住旧写法」和「当前库干净」的
+断言。只加规则不加测试，lint 会变成跑一次就红的摆设。
 """
 
 from __future__ import annotations
@@ -290,6 +310,56 @@ def check_file(path: Path) -> list[str]:
             problems.append(
                 f"{rel} [检查缓存按路径] _cell_key 必须用内容摘要（check_cache.fingerprint），"
                 "用 getmtime 会在改名、重压、重启后全部失效，几百份档案重查一遍")
+
+    # 规则 21（2026-11-21）：QThread.wait() 不能当 sleep 用。
+    # wait() 是"等另一个线程结束"（join），从线程自身 run() 里调用属未定义行为：
+    # 要么立即返回变成忙轮询，要么阻塞整个周期使 stop() 无法唤醒。周期等待用
+    # QWaitCondition（或退一步用 msleep）。只看 QThread 子类的 run 块。
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ClassDef)
+                and any(isinstance(b, ast.Name) and b.id == "QThread" for b in node.bases)):
+            continue
+        for fn in node.body:
+            if not (isinstance(fn, ast.FunctionDef) and fn.name == "run"):
+                continue
+            for call in ast.walk(fn):
+                if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "wait"
+                        and isinstance(call.func.value, ast.Name)
+                        and call.func.value.id == "self" and call.args):
+                    problems.append(
+                        f"{rel}:{call.lineno} [wait 当 sleep] QThread 子类 run() 里 "
+                        "self.wait(毫秒) 是 join 语义、从自身调用未定义；周期等待改用 "
+                        "QWaitCondition + QMutex，stop() 才能立即唤醒")
+
+    # 规则 22（2026-11-21）：无 Qt 事件循环的线程里不能建 QTimer。
+    # LanShare 的 on_received 跑在 ThreadingHTTPServer 请求线程，那里建的
+    # QTimer.singleShot 永不触发，收件界面不更新。跨线程回 GUI 用 Signal emit。
+    # 用 AST 找真实调用，避免规则自身注释/字符串里的同名文本自命中。
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "_on_received"):
+            continue
+        for call in ast.walk(node):
+            if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "singleShot"
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id == "QTimer"):
+                problems.append(
+                    f"{rel}:{call.lineno} [_on_received 用 QTimer] HTTP 请求线程无 Qt 事件循环，"
+                    "QTimer.singleShot 回调永不触发；改用 Signal emit 让 Qt 排回 GUI 线程")
+
+    # 规则 23（2026-11-21）：保存用户设置的写盘失败不能静默吞掉。
+    # 配置写不进去（磁盘满/只读/占用）时界面看似保存成功，重启后全丢且无从排查。
+    # _save_cloud_state 曾 except: pass，与规则 11「配置读失败不返回 {}」同源。
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef)
+                and node.name == "_save_cloud_state"):
+            continue
+        for handler in [n for n in ast.walk(node) if isinstance(n, ast.ExceptHandler)]:
+            if (len(handler.body) == 1 and isinstance(handler.body[0], ast.Pass)):
+                problems.append(
+                    f"{rel}:{handler.lineno} [保存静默失败] _save_cloud_state 的写盘异常不能 "
+                    "except: pass；要写日志并 InfoBar 提示用户，否则设置看似保存、重启全丢")
 
     return problems
 

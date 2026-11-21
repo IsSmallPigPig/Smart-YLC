@@ -105,3 +105,21 @@ def test_abnormal_originals_maps_back_to_sources(tmp_path):
     found = prepare.abnormal_originals({a: root, b: root})
     assert os.path.normpath(a) in found
     assert os.path.normpath(b) not in found
+
+
+def test_prepare_all_logs_failed_file(tmp_path, monkeypatch):
+    """单份压缩失败要写日志（含路径），不能静默吞掉让档案莫名消失。"""
+    from app.services import app_log, prepare
+
+    original = _pdf(tmp_path / "高一1班")
+    status = _status(original, str(tmp_path))
+    status.account = "test-account"          # 让 usable 为真，进入并发压缩
+    errors = []
+    monkeypatch.setattr(prepare, "prepare_one",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(app_log, "error", lambda msg, *a: errors.append(msg % a if a else msg))
+
+    prepare.prepare_all([status], {original: str(tmp_path)})
+
+    assert any("disk full" in e for e in errors), errors
+    assert any(original in e for e in errors), errors

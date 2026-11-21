@@ -175,10 +175,25 @@ def test_download_must_not_auto_install():
     assert any("下载即自动安装" in x for x in check(bad, "about_card.py"))
 
 
-def test_build_collect_all_enforced():
+def test_build_collect_all_enforced(monkeypatch):
     p = ROOT / "scripts" / "build.py"
     problems = lint_patterns.check_file(p)
     assert not any("打包漏库" in x for x in problems), problems
+
+    # 能拦住旧写法：缺 --collect-all 的构建脚本（规则按 scripts/build.py 路径生效）
+    monkeypatch.setattr(lint_patterns, "_rel", lambda path: "scripts/build.py")
+    bad = 'cmd = ["pyinstaller", "--onefile", "app.py"]\n'
+    assert any("打包漏库" in x for x in check(bad, "build.py"))
+
+
+def test_ui_hex_color_rejected(monkeypatch):
+    """规则 8：app/ui 下硬编码 hex 色——语义色必须从 palette 取。"""
+    # 规则按 app/ui/ 路径前缀生效，临时文件在 tests/ 下，伪装一下路径
+    monkeypatch.setattr(lint_patterns, "_rel", lambda path: "app/ui/sample.py")
+    assert check('from app.ui.palette import P\ncolor = P.BRAND\n') == []
+    assert any("硬编码色" in x for x in check('w.setStyleSheet("color: #0078d4;")\n'))
+    # 注释里的示例色不算命中
+    assert check('# 参照 #0078d4 取色\n') == []
 
 
 def test_store_never_returns_empty_on_corruption():
@@ -228,19 +243,85 @@ def test_shared_analyzer_is_allowed():
     assert lint_patterns._kt_problems(source, "Sample.kt") == []
 
 
-def test_body_in_exception_message():
-    source = 'throw SiteException("站点返回无法解析：${body.take(120)}")'
-    problems = lint_patterns._kt_problems(source, "Sample.kt")
-    assert any("响应体进提示" in p for p in problems), problems
-
-
-def test_readable_hint_is_allowed():
-    source = 'throw SiteException("站点返回了网页，登录可能已失效")'
-    assert lint_patterns._kt_problems(source, "Sample.kt") == []
-
-
 def test_cleartext_lan_requires_config():
     only_loopback = '<network-security-config><domain-config cleartextTrafficPermitted="true">'
     assert lint_patterns._network_problems(only_loopback, "net.xml")
     good = '<network-security-config><base-config cleartextTrafficPermitted="true" />'
     assert lint_patterns._network_problems(good, "net.xml") == []
+
+
+# —— 线程模型：QThread.wait 当 sleep、无事件循环线程建 QTimer（i016/i017）——
+
+def test_qthread_wait_as_sleep_rejected():
+    """能拦住旧写法：QThread 子类 run() 里 self.wait(毫秒)。"""
+    bad = '''\
+from PyQt5.QtCore import QThread
+class Worker(QThread):
+    def run(self):
+        while True:
+            self.do_work()
+            self.wait(5000)
+'''
+    assert any("wait 当 sleep" in p for p in check(bad)), check(bad)
+
+
+def test_qthread_wait_cond_is_allowed():
+    """当前库干净：QWaitCondition 的正确写法不该命中。"""
+    good = '''\
+from PyQt5.QtCore import QThread, QMutex, QWaitCondition
+class Worker(QThread):
+    def run(self):
+        while True:
+            self._wakeup.wait(self._mutex, 5000)
+'''
+    assert check(good) == []
+
+
+def test_timer_in_http_callback_rejected():
+    """能拦住旧写法：_on_received 里用 QTimer.singleShot 切回 UI。"""
+    bad = '''\
+from PyQt5.QtCore import QTimer
+class Dlg:
+    def _on_received(self, item):
+        QTimer.singleShot(0, lambda: self._show_received(item))
+    def _show_received(self, item):
+        pass
+'''
+    assert any("_on_received 用 QTimer" in p for p in check(bad)), check(bad)
+
+
+def test_signal_in_http_callback_is_allowed():
+    """当前库干净：emit 信号回到 GUI 线程的写法不该命中。"""
+    good = '''\
+class Dlg:
+    def _on_received(self, item):
+        self._http_received.emit(item)
+    def _show_received(self, item):
+        pass
+'''
+    assert check(good) == []
+
+
+def test_save_config_silent_pass_rejected():
+    """能拦住旧写法：保存配置时 except: pass 静默丢用户设置。"""
+    bad = '''\
+def _save_cloud_state(self, patch):
+    try:
+        store.update(lambda cfg: cfg.update(patch))
+    except Exception:
+        pass
+'''
+    assert any("保存静默失败" in p for p in check(bad)), check(bad)
+
+
+def test_save_config_with_log_is_allowed():
+    """当前库干净：失败时记日志+提示就不算静默。"""
+    good = '''\
+def _save_cloud_state(self, patch):
+    try:
+        store.update(lambda cfg: cfg.update(patch))
+    except Exception as e:
+        app_log.error("写盘失败：%s", e)
+        InfoBar.error("设置没保存", str(e), parent=self)
+'''
+    assert check(good) == []

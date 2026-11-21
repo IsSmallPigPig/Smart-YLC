@@ -11,7 +11,15 @@ from __future__ import annotations
 
 import io
 
-from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal as Signal
+from PyQt5.QtCore import (
+    QMutex,
+    QMutexLocker,
+    QWaitCondition,
+    Qt,
+    QThread,
+    QTimer,
+    pyqtSignal as Signal,
+)
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -36,7 +44,8 @@ class _RelayWorker(QThread):
     """后台轮询中转站，把手机传来的档案拉回本地。
 
     联网长跑不能塞进 CallbackWorker（它的 parent 析构会等线程结束，界面会卡）。
-    这里带 stop()/wait()，dialog 关闭时先停再退，周期用可中断的 wait 而非 sleep。
+    这里带 stop()/wait()，dialog 关闭时先停再退。周期等待用 QWaitCondition：
+    QThread.wait() 是"等别的线程结束"，从自身调用属未定义行为，不能当 sleep 用。
     """
 
     got = Signal(object)      # receive_all 的汇总 dict
@@ -46,16 +55,29 @@ class _RelayWorker(QThread):
         super().__init__(parent)
         self._config = config
         self._interval = interval_ms
+        self._mutex = QMutex()
+        self._wakeup = QWaitCondition()
         self._stop = False
 
     def stop(self):
-        self._stop = True
+        # 置位并唤醒：run() 可能正睡在 _wakeup.wait 上，不等满一个周期就退。
+        with QMutexLocker(self._mutex):
+            self._stop = True
+            self._wakeup.wakeAll()
+
+    def _sleep_or_wake(self) -> bool:
+        """等到下个周期；被 stop() 唤醒返回 False。调用前不持锁。"""
+        with QMutexLocker(self._mutex):
+            if self._stop:
+                return False
+            self._wakeup.wait(self._mutex, self._interval)
+            return not self._stop
 
     def run(self):
         from app.services import relay_receive as relay
 
         cfg = self._config
-        while not self._stop:
+        while True:
             try:
                 # 不传 already：receive_all 内部 receive_pdf 会按 sha256 判重，
                 # 重复文件返回 duplicate 状态，不会重复落盘
@@ -67,8 +89,8 @@ class _RelayWorker(QThread):
                     self.got.emit(summary)
             except Exception as exc:                 # noqa: BLE001 - 每轮失败不杀线程
                 self.failed.emit(str(exc))
-            # 可中断等待：stop() 后立刻醒，不用等满一个周期
-            self.wait(self._interval)
+            if not self._sleep_or_wake():
+                break
 
 
 class PhoneSyncDialog(FluentPanelDialog):
@@ -79,11 +101,15 @@ class PhoneSyncDialog(FluentPanelDialog):
     约定——show() 非模态打开，绝不用 exec() 的嵌套事件循环。
     """
 
-    file_received = Signal(str)     # 落盘路径
+    file_received = Signal(str)      # 落盘路径
+    _http_received = Signal(object)  # HTTP 线程 → GUI 线程的收件投递
 
     def __init__(self, parent=None, auto_start: bool = True):
         super().__init__(parent)
         self.widget.setMinimumWidth(480)
+        # LanShare 的回调跑在 ThreadingHTTPServer 的请求线程（无 Qt 事件循环），
+        # 那里建的 QTimer 永不触发；信号 emit 由 Qt 自动 queued 回 GUI 线程。
+        self._http_received.connect(self._show_received)
         from app.services.cloud_backup import local_config_codes
 
         self.share = LanShare(on_received=self._on_received,
@@ -242,8 +268,8 @@ class PhoneSyncDialog(FluentPanelDialog):
     # ---- 收件回调 ----
 
     def _on_received(self, item: Received):
-        # 回调在 HTTP 线程里，回到界面线程再更新
-        QTimer.singleShot(0, lambda: self._show_received(item))
+        # 回调在 HTTP 线程里；emit 让 Qt 把它排到 GUI 线程再更新界面。
+        self._http_received.emit(item)
 
     def _show_received(self, item: Received):
         mark = "已收到" if item.status in ("ok", "duplicate", "need_rename") else "未接收"
