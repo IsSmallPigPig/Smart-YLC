@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,10 +33,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.smallylc.smartyouth.app
 import com.smallylc.smartyouth.data.Repo
+import com.smallylc.smartyouth.data.PairStore
 import com.smallylc.smartyouth.scan.DocStore
 import com.smallylc.smartyouth.scan.Naming
 import com.smallylc.smartyouth.scan.ScanPage
 import com.smallylc.smartyouth.scan.ScanSession
+import com.smallylc.smartyouth.site.PcLink
 import com.smallylc.smartyouth.site.Member
 import com.smallylc.smartyouth.ui.component.CardGap
 import com.smallylc.smartyouth.ui.component.MutedText
@@ -88,7 +91,10 @@ internal fun SaveStep(
     var uploading by remember { mutableStateOf(false) }
     var uploadProgress by remember { mutableStateOf(0f) }
     var uploadResult by remember { mutableStateOf<String?>(null) }
+    var pcBusy by remember { mutableStateOf(false) }
+    var pcResult by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val bound by PairStore.binding.collectAsState()
     val scrollBehavior = MiuixScrollBehavior()
     val backdrop = rememberBlurBackdrop(LocalEnableBlur.current)
     val barColor = if (backdrop != null) androidx.compose.ui.graphics.Color.Transparent else colorScheme.surface
@@ -223,13 +229,24 @@ internal fun SaveStep(
                                     temp.copyTo(target, overwrite = true)
                                     temp.delete()
                                 }
-                                saved = DocStore.SavedDoc(
+                                val doc = DocStore.SavedDoc(
                                     file = target,
                                     name = target.name.removeSuffix(".pdf"),
                                     size = target.length(),
                                     savedAt = System.currentTimeMillis(),
                                 )
+                                saved = doc
                                 saving = false
+                                // 已绑定电脑就默认直接传过去；失败只写在结果里，
+                                // 文件已经安全落在扫描件里，用户还能手动重传。
+                                if (bound?.usable == true) {
+                                    pcBusy = true
+                                    pcResult = when (val sent = PcLink.upload(doc.file)) {
+                                        is PcLink.Upload.Done -> "已传到电脑：${sent.text}"
+                                        is PcLink.Upload.Failed -> sent.message
+                                    }
+                                    pcBusy = false
+                                }
                             }
                         },
                         enabled = check.ok && !saving && pages.isNotEmpty(),
@@ -269,6 +286,45 @@ internal fun SaveStep(
                     }
                 }
 
+                if (pcBusy || pcResult != null || bound != null) {
+                    item {
+                        CardGap(8)
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text(
+                                    text = when {
+                                        pcBusy -> "正在传到电脑…"
+                                        pcResult == null -> "已连接电脑，档案会自动传过去"
+                                        else -> pcResult!!
+                                    },
+                                    fontSize = 14.sp,
+                                    color = when {
+                                        pcResult?.startsWith("已传到电脑") == true -> ToneGreen
+                                        pcResult != null && !pcBusy -> ToneRed
+                                        else -> colorScheme.onSurface
+                                    },
+                                )
+                                if (!pcBusy && bound?.usable == true) {
+                                    TextButton(
+                                        text = "重传电脑",
+                                        onClick = {
+                                            pcBusy = true
+                                            scope.launch {
+                                                pcResult = when (val sent = PcLink.upload(doc.file)) {
+                                                    is PcLink.Upload.Done -> "已传到电脑：${sent.text}"
+                                                    is PcLink.Upload.Failed -> sent.message
+                                                }
+                                                pcBusy = false
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (uploadResult != null) {
                     item {
                         CardGap(8)
@@ -303,8 +359,12 @@ internal fun SaveStep(
                 item {
                     CardGap()
                     Card(Modifier.fillMaxWidth()) {
+                        MutedText(
+                            "手动传到智慧团建网站",
+                            Modifier.padding(start = 16.dp, top = 12.dp),
+                        )
                         TextButton(
-                            text = "上传档案",
+                            text = "传到团建",
                             onClick = {
                                 uploading = true
                                 uploadResult = null

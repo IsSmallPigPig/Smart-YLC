@@ -11,7 +11,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults.flingBehavior
 import androidx.compose.foundation.pager.rememberPagerState
@@ -34,6 +33,7 @@ import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
 import com.smallylc.smartyouth.data.Repo
+import com.smallylc.smartyouth.data.PairStore
 import com.smallylc.smartyouth.scan.Naming
 import com.smallylc.smartyouth.ui.component.UpdateDialogHost
 import com.smallylc.smartyouth.ui.component.bottombar.BottomBar
@@ -127,6 +127,7 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(Unit) {
                 Repo.restore()
+                PairStore.restore()
                 UpdateManager.autoCheckNow()
             }
 
@@ -252,8 +253,8 @@ fun MainScreen(
         val pager = @Composable { bottom: androidx.compose.ui.unit.Dp ->
             HorizontalPager(
                 modifier = Modifier
-                    .pagerGestureOverride(pagerState = mainPagerState.pagerState, mode = pagerMode)
-                    .then(if (wideScreen) Modifier.widthIn(max = 720.dp) else Modifier),
+                    .fillMaxWidth()
+                    .pagerGestureOverride(pagerState = mainPagerState.pagerState, mode = pagerMode),
                 state = mainPagerState.pagerState,
                 // 底栏能直接跨页跳（首页 ↔ 我的）。只预热相邻一页时，跨页的目标页要现组合，
                 // 顿在点击那一帧；五个页面都不重，全量预热换切页不掉帧。

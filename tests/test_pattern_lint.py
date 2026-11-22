@@ -560,3 +560,45 @@ def schedule():
     Popen(["cmd", "/c", command], stdin=subprocess.DEVNULL)
 '''
     assert check(good) == []
+
+
+def test_pair_must_notify_and_record_device():
+    """配对成功必须在界面提示并记下设备，不能只发 token。"""
+    p = ROOT / "app" / "services" / "lan_share.py"
+    assert not any("配对无提示" in x for x in lint_patterns.check_file(p))
+
+    bad = ('def pair(self, pin):\n'
+           '    return PairSession(token="x"), "ok"\n')
+    assert any("配对无提示" in x for x in check(bad, "lan_share.py"))
+
+
+def test_mobile_pair_must_keep_session_and_save_binding():
+    """手机配对后必须落盘绑定且不能结束会话，否则退出页面就断连。"""
+    p = (ROOT / "mobile" / "app" / "src" / "main" / "java" /
+         "com" / "smallylc" / "smartyouth" / "ui" / "screen" / "pair" / "PairScreen.kt")
+    source = p.read_text(encoding="utf-8")
+    assert lint_patterns._kt_problems(source, "PairScreen.kt") == []
+
+    bad = ('fun connect(client: PairClient) {\n'
+           '    val session = "token"\n'
+           '    client.done(session)\n'
+           '}\n')
+    problems = lint_patterns._kt_problems(bad, "PairScreen.kt")
+    assert any("配对未保存" in x for x in problems)
+    assert any("配对后结束会话" in x for x in problems)
+
+
+def test_landscape_pager_must_fill_width():
+    """横屏主内容不能被 widthIn(max=...) 限宽，否则卡片两侧留白。"""
+    p = ROOT / "mobile" / "app" / "src" / "main" / "java" / "com" / "smallylc" / "smartyouth" / "ui" / "MainActivity.kt"
+    source = p.read_text(encoding="utf-8")
+    assert not any("横屏内容限宽" in x
+                   for x in lint_patterns._kt_problems(source, "MainActivity.kt"))
+
+    bad = ('val pager = @Composable {\n'
+           '    HorizontalPager(\n'
+           '        modifier = Modifier.widthIn(max = 720.dp),\n'
+           '    )\n'
+           '}\n')
+    assert any("横屏内容限宽" in x
+               for x in lint_patterns._kt_problems(bad, "MainActivity.kt"))

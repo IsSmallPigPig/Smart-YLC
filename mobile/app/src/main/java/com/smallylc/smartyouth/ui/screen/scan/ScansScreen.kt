@@ -7,9 +7,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
+import com.smallylc.smartyouth.data.PairStore
 import com.smallylc.smartyouth.scan.PdfPages
+import com.smallylc.smartyouth.site.PairBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -81,6 +84,7 @@ fun ScansScreen(
 ) {
     val scope = rememberCoroutineScope()
     var docs by remember { mutableStateOf<List<DocStore.SavedDoc>>(emptyList()) }
+    val bound by PairStore.binding.collectAsState()
     // 扫目录要给每个文件做 stat，放在组合期会拖住切页那一帧，改到 IO 上。
     LaunchedEffect(Unit) { docs = withContext(Dispatchers.IO) { DocStore.list() } }
     var pendingDelete by remember { mutableStateOf<DocStore.SavedDoc?>(null) }
@@ -123,6 +127,23 @@ fun ScansScreen(
             overscrollEffect = null,
         ) {
             item { Spacer(Modifier.height(8.dp)) }
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            text = PairBinding.summary(bound),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (bound?.token?.isNotBlank() == true) ToneGreen else colorScheme.onSurface,
+                        )
+                        MutedText(
+                            "新拍的档案会直接传到电脑，也可以在这里手动上传",
+                            Modifier.padding(top = 6.dp),
+                        )
+                    }
+                }
+                CardGap(12)
+            }
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {

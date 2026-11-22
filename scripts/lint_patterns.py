@@ -20,7 +20,8 @@
     21 QThread.wait() 当 sleep      22 无事件循环线程建 QTimer
     23 配置保存静默吞写盘异常       24 Windows 材质按深浅关掉
     25 readyRead 前未补读缓冲       26 拖放路径未归一
-    27 timeout 配 stdin=DEVNULL 立即退出
+    27 timeout 配 stdin=DEVNULL 立即退出    28 配对成功未提示未记设备
+    29 手机端配对后结束会话或未保存绑定    30 横屏主内容被固定宽度限制
 
 结构：规则 1–14、16–23、27 在 check_file() 里按编号注释块排布；规则 15 扫非
 .py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式、更新流程与网络
@@ -427,6 +428,21 @@ def check_file(path: Path) -> list[str]:
             f"{rel}:{line} [timeout 延迟失效] stdin=DEVNULL 时 timeout.exe 立即退出，"
             "延迟为 0；装完立刻重开会锁住正在替换的 exe。改用 ping -n <秒+1> 127.0.0.1")
 
+    # 规则 28（2026-11-22 手机配对无感知）：配对成功必须同时提醒用户并记下设备。
+    # 旧实现 pair() 只发 token，电脑端界面毫无变化，用户不知道手机已经连上，
+    # 也看不到哪些设备配过；失败时也无法给提示。
+    if rel.endswith("lan_share.py"):
+        pair_nodes = [n for n in ast.walk(tree)
+                      if isinstance(n, ast.FunctionDef) and n.name == "pair"]
+        for node in pair_nodes:
+            calls_paired = any(
+                isinstance(c, ast.Call) and _dotted_name(c.func).endswith("on_paired")
+                for c in ast.walk(node))
+            if not calls_paired:
+                problems.append(
+                    f"{rel}:{node.lineno} [配对无提示] pair() 成功后必须调用 on_paired 回调，"
+                    "让界面提示并记下已绑定设备；只发 token 用户看不到手机已连接")
+
     return problems
 
 
@@ -595,6 +611,26 @@ def _kt_problems(source: str, rel: str) -> list[str]:
             problems.append(
                 f"{rel}:{line} [组合期读盘] remember 里扫目录或读文件，切页那一帧会阻塞主线程；"
                 "挪到 LaunchedEffect + withContext(Dispatchers.IO)")
+
+    # 规则 29（2026-11-22 退出配对页就断连）：配对成功后必须保存绑定，且不能结束会话。
+    # 旧实现传完就 client.done(session)，token 立刻作废；手机退出页面后新拍的档案
+    # 再传就是 401，用户只能重新扫码，还看不到任何提示。
+    if rel.endswith("PairScreen.kt"):
+        if "PairStore.save(" not in source:
+            problems.append(
+                f"{rel} [配对未保存] 配对成功后必须 PairStore.save() 落盘绑定，"
+                "退出页面后还要靠它继续传新档案")
+        if re.search(r"\.done\s*\(", source):
+            problems.append(
+                f"{rel} [配对后结束会话] 传完调 done() 会作废 token，退出配对页后新档案传不了；"
+                "会话交给电脑端接收服务管理")
+
+    # 规则 30（2026-11-22 横屏卡片不铺满）：主内容不能被固定最大宽度限住。
+    # 旧实现横屏用 widthIn(max = 720.dp)，卡片两侧留大片空白，用户以为没适配。
+    if rel.endswith("MainActivity.kt") and re.search(r"widthIn\s*\(\s*max\s*=", source):
+        problems.append(
+            f"{rel} [横屏内容限宽] 主内容用了 widthIn(max=...)，横屏卡片不会铺满屏幕；"
+            "让 pager fillMaxWidth()，由侧边导航占用剩余空间")
     return problems
 
 

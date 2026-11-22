@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,6 +52,9 @@ import androidx.core.content.ContextCompat
 import com.smallylc.smartyouth.scan.DocStore
 import com.smallylc.smartyouth.scan.QrAnalyzer
 import com.smallylc.smartyouth.data.CloudSync
+import com.smallylc.smartyouth.data.PairStore
+import com.smallylc.smartyouth.site.PairBinding
+import com.smallylc.smartyouth.site.PcLink
 import com.smallylc.smartyouth.site.DiscoveredPeer
 import com.smallylc.smartyouth.site.LanDiscovery
 import com.smallylc.smartyouth.site.PairClient
@@ -105,14 +109,13 @@ fun PairScreen(
     var configCode by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
     var messageOk by remember { mutableStateOf(false) }
-    var paired by remember { mutableStateOf<PairClient?>(null) }
-    var token by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var total by remember { mutableIntStateOf(0) }
     var doneCount by remember { mutableIntStateOf(0) }
     val results = remember { mutableStateListOf<Pair<String, Boolean>>() }
     var peers by remember { mutableStateOf<List<DiscoveredPeer>>(emptyList()) }
     var discovering by remember { mutableStateOf(false) }
+    val binding by PairStore.binding.collectAsState()
 
     // 停在扫码页就持续找：电脑可能刚点「开始接收」，也可能比手机晚几秒才上线
     LaunchedEffect(step) {
@@ -176,12 +179,22 @@ fun PairScreen(
 
                 is PairClient.Result.Ok -> {
                     val session = outcome.value
+                    // 绑定落盘在传文件之前：后面任何一步失败，连接信息也还在，
+                    // 用户不用重新扫码就能重试；退出页面后新拍的档案也能直接传。
+                    PairStore.save(
+                        PairBinding(
+                            base = client.base,
+                            pin = client.pin,
+                            token = session,
+                            device = deviceName,
+                            configCode = client.configCode,
+                            pairedAt = System.currentTimeMillis(),
+                        )
+                    )
                     val known = client.manifest(session)
                     val local = DocStore.list()
                     val todo = local.filter { PairClient.sha256(it.file) !in known }
                     withContext(Dispatchers.Main) {
-                        paired = client
-                        token = session
                         total = todo.size
                         doneCount = 0
                         results.clear()
@@ -203,9 +216,14 @@ fun PairScreen(
                             )
                         }
                     }
-                    client.done(session)
+                    // 不能调 done()：它会作废 token，下一张新拍的档案就传不过去了。
+                    // 会话留给电脑端接收服务管理，关掉弹窗自然失效。
                     withContext(Dispatchers.Main) {
-                        message = if (todo.isEmpty()) "电脑上已经是最新的" else "传完了，共 ${todo.size} 份"
+                        message = if (todo.isEmpty()) {
+                            "电脑上已经是最新的，连接会保持"
+                        } else {
+                            "传完了，共 ${todo.size} 份，连接会保持"
+                        }
                         messageOk = true
                     }
                 }
@@ -243,6 +261,33 @@ fun PairScreen(
         ) {
             when (step) {
                 PairStep.Scan -> {
+                    binding?.let { bound ->
+                        item {
+                            Card(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Column(Modifier.padding(14.dp)) {
+                                    Text(
+                                        text = PairBinding.summary(bound),
+                                        fontSize = 15.sp,
+                                        color = if (bound.token.isBlank()) ToneRed else ToneGreen,
+                                    )
+                                    MutedText(
+                                        "新拍的档案会直接传到这台电脑",
+                                        Modifier.padding(top = 6.dp),
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                        horizontalArrangement = Arrangement.End,
+                                    ) {
+                                        top.yukonga.miuix.kmp.basic.TextButton(
+                                            text = "断开连接",
+                                            onClick = { scope.launch { PcLink.disconnect() } },
+                                            colors = ButtonDefaults.textButtonColors(color = ToneRed),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     item {
                         Card(Modifier.fillMaxWidth().padding(12.dp)) {
                             Column(Modifier.padding(14.dp)) {
