@@ -237,3 +237,35 @@ class UploadWorker(QThread):
                         summary[key] += counts[key]
         self.all_done.emit(summary["ok"], summary["skipped"], total,
                            summary["audit_ok"], summary["audit_manual"])
+
+
+class CellCheckWorker(QThread):
+    """逐格检查后台线程：PyMuPDF 渲染 + OpenCV 形态学都放 GIL，用线程池吃满余核。
+
+    实测 47 份 4.61s→3.29s（1.4x）。从 upload_page 内联类外移，行为不变。
+    """
+    one = Signal(str, int, str)   # 原件路径, 空格数（-1=没查成）, 跳过原因
+    finished_all = Signal()
+
+    def __init__(self, targets, check_cells, worker_count, parent=None):
+        super().__init__(parent)
+        self._targets = targets
+        self._check_cells = check_cells
+        self._worker_count = worker_count
+
+    def run(self):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=self._worker_count(4)) as pool:
+            futures = {pool.submit(self._check_cells, copy): original
+                       for original, copy in self._targets}
+            for future in as_completed(futures):
+                original = futures[future]
+                try:
+                    result = future.result()
+                    count = -1 if result.skipped else len(result.blanks)
+                    reason = result.skipped
+                except Exception as exc:   # noqa: BLE001 - 单份失败不拖垮整批
+                    count, reason = -1, str(exc)
+                self.one.emit(original, count, reason)
+        self.finished_all.emit()

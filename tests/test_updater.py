@@ -728,7 +728,8 @@ def test_relaunch_starts_packaged_app(monkeypatch):
     silent_update._schedule_windows_relaunch(delay=3)
     assert calls, "打包版装完应该自动重开"
     assert "智慧团委.exe" in calls[0][-1]
-    assert "timeout /t 3" in calls[0][-1]
+    assert "ping -n 4 127.0.0.1" in calls[0][-1]
+    assert "timeout /t" not in calls[0][-1]
 
 
 def test_install_and_notify_restart_hint(monkeypatch):

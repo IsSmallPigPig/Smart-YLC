@@ -20,10 +20,13 @@
     21 QThread.wait() 当 sleep      22 无事件循环线程建 QTimer
     23 配置保存静默吞写盘异常       24 Windows 材质按深浅关掉
     25 readyRead 前未补读缓冲       26 拖放路径未归一
+    27 timeout 配 stdin=DEVNULL 立即退出
 
-结构：规则 1–14、16–23 在 check_file() 里按编号注释块排布；规则 15 扫非
-.py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式与网络安全配置
-各有独立检查函数（_kt_problems / _network_problems）。
+结构：规则 1–14、16–23、27 在 check_file() 里按编号注释块排布；规则 15 扫非
+.py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式、更新流程与网络
+安全配置各有独立检查函数（_kt_problems / _update_install_problems / _network_problems）。
+_kt_problems 里另有位图回收、EXIF、旋转 key、组合期读盘四条 Kotlin 规则，
+均属"故障溯源"型规则，注释标注了它们各自来自哪次真机问题。
 
 用法：
     python scripts/lint_patterns.py            # 打印问题并返回非零
@@ -414,6 +417,16 @@ def check_file(path: Path) -> list[str]:
                 f"{rel}:{node.lineno} [拖放路径未归一] _drop_payload 用了 toLocalFile() 但没 "
                 "os.path.normpath：Windows 上是正斜杠，与内部路径比较会失配、目录被重复添加")
 
+    # 规则 27（2026-11-22 自动重开竞态）：timeout.exe 在 stdin 被重定向到
+    # DEVNULL 时立即报错退出，延迟形同虚设——新进程会在安装器还在替换文件时
+    # 启动、重新锁住 exe。重开延时要用不读 stdin 的 ping -n。
+    if not rel.endswith("lint_patterns.py") \
+            and "timeout /t" in source and "DEVNULL" in source:
+        line = source.count("\n", 0, source.find("timeout /t")) + 1
+        problems.append(
+            f"{rel}:{line} [timeout 延迟失效] stdin=DEVNULL 时 timeout.exe 立即退出，"
+            "延迟为 0；装完立刻重开会锁住正在替换的 exe。改用 ping -n <秒+1> 127.0.0.1")
+
     return problems
 
 
@@ -457,6 +470,51 @@ def check_deploy_configs(configs: tuple[Path, ...] | None = None) -> list[str]:
 KT_ROOT = ROOT / "mobile" / "app" / "src" / "main"
 
 
+def _balanced(source: str, start: int, opener: str = "(", closer: str = ")") -> str:
+    """从 start 处的开括号起配平取内容，跳过字符串字面量与注释。
+
+    Kotlin 的模板串里常有不配对的括号/花括号，裸 regex 会在第一个 ) 或 } 处截断，
+    导致 key 判断与函数体切片误报或漏报。返回不含首尾括号的内容；找不到返回空串。
+    """
+    i = start
+    while i < len(source) and source[i] != opener:
+        i += 1
+    if i >= len(source):
+        return ""
+    depth, out = 0, []
+    quote = ""
+    while i < len(source):
+        c = source[i]
+        if quote:
+            out.append(c)
+            if c == "\\":
+                i += 1
+                if i < len(source):
+                    out.append(source[i])
+            elif c == quote:
+                quote = ""
+        elif c in ('"', "'", "`"):
+            quote = c
+            out.append(c)
+        elif c == "/" and i + 1 < len(source) and source[i + 1] == "/":
+            while i < len(source) and source[i] != "\n":
+                i += 1
+            continue
+        elif c == opener:
+            depth += 1
+            if depth > 1:
+                out.append(c)
+        elif c == closer:
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+            out.append(c)
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _kt_problems(source: str, rel: str) -> list[str]:
     problems: list[str] = []
     # 扫码无反应：分析器在每帧回调里新建，节流与解码状态每帧丢失
@@ -473,6 +531,70 @@ def _kt_problems(source: str, rel: str) -> list[str]:
         problems.append(
             f"{rel}:{line} [响应体进提示] 异常信息里直接拼 body，"
             "站点返回网页时会把整页塞进界面；按内容类型给一句可读的原因")
+
+    # 规则（2026-11-21 旋转闪退）：显示中的位图一旦交给 Compose 状态，
+    # 绘制队列可能还在用；此时 recycle() 会让下一帧直接崩在渲染线程。
+    # 临时位图（source/result/bitmaps 等局部对象）回收是合法的，不在此列。
+    for m in re.finditer(r"\b(?:preview|display\w*|shown|visible)\w*\??\.recycle\(\)", source):
+        line = source.count("\n", 0, m.start()) + 1
+        problems.append(
+            f"{rel}:{line} [显示位图提前回收] 显示中的位图不能 recycle()："
+            "渲染队列仍可能读它，旋转时会闪退；让 Compose 缓存自然释放")
+
+    # 规则（2026-11-21 侧拍照片）：相机 JPEG 带 EXIF 方向，ScanSession 是唯一的
+    # 入库解码点；这里不应用方向，侧拍照片进入裁切时就是歪的。
+    # 已校正图的再次解码（CropEditor）、验证码（LoginScreen）不走这条。
+    if rel.endswith("ScanSession.kt"):
+        for m in re.finditer(r"BitmapFactory\.decode(File|Stream|ByteArray)\s*\(", source):
+            # 全文出现 ExifInterface 就放行会漏报（两处 decode 只校正一处）；
+            # 但"往后 N 字符"又太窄，把「decodeStream→存盘→addFromFile 重入校正路径」
+            # 误判。按所在函数体判断：函数里要么自己用 ExifInterface，要么把图
+            # 交回 addFromFile（它内部会校正），才算这一处解码没问题。
+            # 取包含本次 decode 的那个函数体：从每个 fun 的花括号配平，看
+            # decode 的偏移是否落在这段范围内。全文放行会漏报，定长 tail
+            # 又会把「decodeStream→addFromFile 重入校正路径」误判。
+            body = source
+            for fn in re.finditer(r"\bfun\s+\w+\s*\(", source):
+                brace = source.find("{", fn.end())
+                if brace < 0 or brace > m.start():
+                    continue
+                candidate = _balanced(source, brace, "{", "}")
+                if m.start() < brace + 1 + len(candidate):
+                    body = candidate
+                    break
+            if not re.search(r"ExifInterface|exif|Orientation|addFromFile", body, re.I):
+                line = source.count("\n", 0, m.start()) + 1
+                problems.append(
+                    f"{rel}:{line} [EXIF 未应用] 相机 JPEG 解码后必须过 ExifInterface 旋转/翻转，"
+                    "否则侧拍照片进入裁切时就是歪的")
+                break
+
+    # 规则（2026-11-21 旋转后识别框错位）：影响渲染效果的 remember/LaunchedEffect
+    # 若只以页面 id 为 key，旋转后不会重算预览与识别框，框与图错位。
+    for m in re.finditer(r"LaunchedEffect\s*\(", source):
+        key = _balanced(source, m.end() - 1)   # 配平取 key，容忍 remember(...) 等嵌套
+        if "page.id" in key and "rotation" not in key:
+            line = source.count("\n", 0, m.start()) + 1
+            problems.append(
+                f"{rel}:{line} [旋转未进 effect key] LaunchedEffect 用了 page.id 但漏了 rotation，"
+                "点旋转后预览/识别框不重算会错位；key 里补上 page.rotation")
+
+    # 规则（2026-11-22 切页卡顿）：remember 里同步扫目录或读文件。
+    # 页面在 pager 里跨页跳转时才首次组合，IO 正好落在切页那一帧的预算里，
+    # 表现为"点底栏后要顿一下才动"，与处理器无关。
+    io_api = re.compile(r"DocStore\.list\(|\.listFiles\(|\.read(?:Text|Bytes|Lines)\(|FileInputStream\s*\(")
+    for m in re.finditer(r"\bremember\b", source):
+        tail = source[m.end():m.end() + 200]
+        brace = tail.find("{")
+        if brace < 0:
+            continue
+        # key 里可能带括号，花括号才是 lambda 起点
+        body = _balanced(source, m.end() + brace, "{", "}")
+        if io_api.search(body[:2000]):
+            line = source.count("\n", 0, m.start()) + 1
+            problems.append(
+                f"{rel}:{line} [组合期读盘] remember 里扫目录或读文件，切页那一帧会阻塞主线程；"
+                "挪到 LaunchedEffect + withContext(Dispatchers.IO)")
     return problems
 
 
@@ -495,6 +617,39 @@ def _network_problems(body: str, rel: str) -> list[str]:
     return []
 
 
+def _update_install_problems(source: str, rel: str) -> list[str]:
+    """更新流程里下载成功不得自动拉起安装。
+
+    桌面端规则 19 的 Kotlin 镜像：下载完只停在 Ready，安装必须由用户点。
+    否则用户以为在「检查更新」，手机已经弹出安装器——尤其在静默检查后。
+    """
+    problems: list[str] = []
+    for m in re.finditer(r"fun\s+\w*download\w*\s*\(", source, re.I):
+        # 配平函数体并跳过字符串/注释：模板串里的花括号会让裸切片提前截断或越界
+        brace = source.find("{", m.end())
+        if brace < 0:
+            continue
+        body = _balanced(source, brace, "{", "}")
+        if re.search(r"startActivity\s*\(|installIntent\s*\(|ACTION_MANAGE_UNKNOWN_APP_SOURCES", body):
+            line = source.count("\n", 0, m.start()) + 1
+            problems.append(
+                f"{rel}:{line} [下载后自动安装] download() 里拉起安装器或权限页："
+                "下载完只能停在 Ready，安装必须由用户点；把跳转放进 installReady()")
+    return problems
+
+
+def check_update_no_auto_install() -> list[str]:
+    problems: list[str] = []
+    update_dir = KT_ROOT / "update"
+    if not update_dir.exists():
+        return problems
+    for path in sorted(update_dir.rglob("*.kt")):
+        problems.extend(
+            _update_install_problems(path.read_text(encoding="utf-8", errors="replace"),
+                                     _rel(path)))
+    return problems
+
+
 def check_android_network_config() -> list[str]:
     xml = KT_ROOT / "res" / "xml" / "network_security_config.xml"
     if not xml.exists():
@@ -508,6 +663,7 @@ def run(quiet: bool = False) -> list[str]:
         problems.extend(check_file(path))
     problems.extend(check_deploy_configs())
     problems.extend(check_kotlin_patterns())
+    problems.extend(check_update_no_auto_install())
     problems.extend(check_android_network_config())
     if not quiet:
         for line in problems:

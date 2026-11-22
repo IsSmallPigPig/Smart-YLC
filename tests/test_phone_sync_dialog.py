@@ -92,3 +92,45 @@ def test_http_received_connected_to_show():
     finally:
         dialog._cleanup()
         dialog.deleteLater()
+
+
+def test_stop_relay_orphans_running_worker():
+    """请求未回来时关窗：线程要脱离弹窗并由模块级集合持有，否则析构 abort。"""
+    from PyQt5.QtCore import QMutex, QMutexLocker, QThread, QWaitCondition
+
+    from app.ui import phone_sync_dialog as psd
+
+    class _Blocked(QThread):
+        def __init__(self):
+            super().__init__()
+            self._m = QMutex()
+            self._c = QWaitCondition()
+            self._release = False
+
+        def run(self):
+            with QMutexLocker(self._m):
+                while not self._release:
+                    self._c.wait(self._m, 100)
+
+        def stop(self):
+            pass   # 模拟网络请求还没回来，stop() 无法立刻结束线程
+
+        def release(self):
+            with QMutexLocker(self._m):
+                self._release = True
+                self._c.wakeAll()
+
+    dialog = _dialog()
+    worker = _Blocked()
+    worker.start()
+    try:
+        dialog._relay_worker = worker
+        dialog._stop_relay()          # stop() 对 _Blocked 无效：仍在跑
+        assert worker.parent() is None
+        assert worker in psd._orphaned_relays
+        assert dialog._relay_worker is None
+    finally:
+        worker.release()
+        worker.wait(2000)
+        psd._drop_orphan(worker)
+        dialog.deleteLater()

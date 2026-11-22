@@ -56,7 +56,7 @@ from app.ui.widgets import PillLabel, ProgressToast, StatusList
 from app.ui.upload_widgets import _DropZone, _DropOverlay, _FolderCard
 from app.ui.upload_workers import (
     COMPRESS_TARGET, MAX_BATCH, RESULT_TONE, ScanWorker, UploadWorker,
-    _worker_count,
+    CellCheckWorker, _worker_count,
 )
 
 
@@ -83,7 +83,7 @@ class UploadPage(FluentPage):
         # 按内容摘要缓存（key 由 _cell_key 给出）：同一份档案无论改名、重压、
         # 还是重启程序后重新扫描，都不会重复扫几百页
         self._cell_cache: dict[str, int] = {}
-        self._cell_queued: set[str] = set()   # 本轮已入队的摘要，避免同内容副本重复检查
+        self._cell_queued: dict[str, list[str]] = {}   # 摘要 → 该内容的全部原件
         self._cell_worker = None
         self._cell_total = 0
         self._cell_done = 0
@@ -684,8 +684,9 @@ class UploadPage(FluentPage):
                     cached_hits += 1
                     continue
                 if key in self._cell_queued:
-                    continue                  # 内容相同的副本本轮已排队，不重复检查
-                self._cell_queued.add(key)
+                    self._cell_queued[key].append(original)   # 一起回填，避免漏显示
+                    continue
+                self._cell_queued[key] = [original]
             targets.append((original, copy))
         if cached_hits:
             # 命中缓存的也要重建卡片，否则行说明还是空的
@@ -704,31 +705,7 @@ class UploadPage(FluentPage):
         self._cell_toast.set_progress(0, self._cell_total)
         self._cell_toast.show()
 
-        class _Worker(QThread):
-            one = Signal(str, int, str)   # 原件路径, 空格数（-1=没查成）, 跳过原因
-            finished_all = Signal()
-
-            def run(inner):
-                # 逐格检查是 PyMuPDF 渲染 + OpenCV 形态学：两个库在算的时候都放
-                # GIL，用线程池能吃满剩下的核。实测 47 份 4.61s→3.29s（1.4x）。
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-
-                workers = _worker_count(4)
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {pool.submit(check_cells, copy): original
-                               for original, copy in targets}
-                    for future in as_completed(futures):
-                        original = futures[future]
-                        try:
-                            result = future.result()
-                            count = -1 if result.skipped else len(result.blanks)
-                            reason = result.skipped
-                        except Exception as exc:   # noqa: BLE001 - 单份失败不拖垮整批
-                            count, reason = -1, str(exc)
-                        inner.one.emit(original, count, reason)
-                inner.finished_all.emit()
-
-        worker = _Worker(self)
+        worker = CellCheckWorker(targets, check_cells, _worker_count, self)
         worker.one.connect(self._on_cell_count)
         worker.finished_all.connect(self._on_cells_done)
         self._cell_worker = worker
@@ -737,6 +714,11 @@ class UploadPage(FluentPage):
     def _on_cell_count(self, path: str, count: int, reason: str = ""):
         if count >= 0:
             self._cell_counts[path] = count
+            for key, owners in self._cell_queued.items():
+                if path in owners:
+                    for sibling in owners:
+                        self._cell_counts[sibling] = count
+                    break
             copy = (getattr(self, "_cell_targets", {}) or {}).get(path, path)
             key = self._cell_key(copy)
             if key is not None:

@@ -59,6 +59,7 @@ from app.ui.combo import ComboBox
 from app.ui import palette as P
 from app.domain.check_templates import default_identity_template, default_report_template
 from app.ui.export_flow import start_export
+from app.ui.widgets import tint as _tint
 from app.ui.page import (BatchedBuild, BusyOverlay, CardRow, FluentPage,
                          PageBanner, chevron_icon, note_label, paint_tinted_card,
                          set_tip, section_title, theme_font)
@@ -72,11 +73,6 @@ KIND_TEXT = {"identity": "信息错误", "report": "没有报道", "archive": "�
 def _rec_from_dict(d: dict) -> MemberRecord:
     fields = {f for f in MemberRecord.__dataclass_fields__}
     return MemberRecord(**{k: v for k, v in d.items() if k in fields})
-
-
-def _tint(color: str, alpha: int = 26) -> str:
-    c = QColor(color)
-    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
 
 
 def _pill(text: str, color: str) -> BodyLabel:

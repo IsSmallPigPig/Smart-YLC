@@ -39,6 +39,15 @@ from app.ui import palette as P
 from app.ui.dialogs import FluentPanelDialog
 from app.ui.page import theme_font
 
+# 弹窗关闭时仍在联网的中转线程：断开 parent 后由这里持有，线程自然退出再回收。
+# 不放弹窗实例上——弹窗一旦析构，Python 引用也没了，QThread 仍会被析构 abort。
+_orphaned_relays: set[QThread] = set()
+
+
+def _drop_orphan(worker: QThread) -> None:
+    _orphaned_relays.discard(worker)
+    worker.deleteLater()
+
 
 class _RelayWorker(QThread):
     """后台轮询中转站，把手机传来的档案拉回本地。
@@ -223,10 +232,21 @@ class PhoneSyncDialog(FluentPanelDialog):
         worker.start()
 
     def _stop_relay(self):
-        if self._relay_worker is not None:
-            self._relay_worker.stop()
-            self._relay_worker.wait(2000)
+        worker = self._relay_worker
+        if worker is None:
+            return
+        worker.stop()
+        if worker.wait(2000):
             self._relay_worker = None
+            return
+        # 请求可能还要十几秒才返回，此时 run() 还没走到检查 _stop 的地方。
+        # 线程以弹窗为 parent，弹窗析构会 abort。解除父子关系，交给模块级集合
+        # 持有到线程真正结束——它下一轮醒来就会自行退出。
+        worker.setParent(None)
+        _orphaned_relays.add(worker)
+        worker.finished.connect(
+            lambda w=worker: _drop_orphan(w), Qt.ConnectionType.QueuedConnection)
+        self._relay_worker = None
 
     def _on_relay_got(self, summary: dict):
         saved = summary.get("saved") or []

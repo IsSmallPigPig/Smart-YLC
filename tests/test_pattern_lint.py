@@ -389,3 +389,174 @@ def _drop_payload(mime):
     return [os.path.normpath(url.toLocalFile()) for url in mime.urls()]
 '''
     assert check(good) == []
+
+
+def test_bitmap_recycle_while_visible():
+    """旋转时闪退：显示中的位图被 LaunchedEffect 里 recycle，渲染队列还在读。"""
+    source = """
+        LaunchedEffect(page.id, page.rotation) {
+            preview?.recycle()
+            preview = render(page)
+        }
+    """
+    problems = lint_patterns._kt_problems(source, "CropEditor.kt")
+    assert any("显示位图提前回收" in p for p in problems), problems
+
+
+def test_decode_with_exif_is_clean():
+    source = """
+        val bitmap = BitmapFactory.decodeFile(path)
+        val oriented = applyExifOrientation(bitmap, ExifInterface(path))
+    """
+    assert lint_patterns._kt_problems(source, "ScanSession.kt") == []
+
+
+def test_decode_without_exif():
+    """侧拍照片进裁切就是歪的：BitmapFactory 解码后没应用 EXIF 方向。"""
+    source = """
+        val bitmap = BitmapFactory.decodeFile(path)
+    """
+    problems = lint_patterns._kt_problems(source, "ScanSession.kt")
+    assert any("EXIF 未应用" in p for p in problems), problems
+
+
+def test_download_auto_installs():
+    """下载完自动弹安装器：用户还没确认，桌面端规则 19 在移动端重演。"""
+    source = """
+        fun download(info: Info) {
+            scope.launch {
+                GitHubUpdate.download(info).onSuccess { uri ->
+                    app.startActivity(GitHubUpdate.installIntent(uri))
+                }
+            }
+        }
+    """
+    problems = lint_patterns._update_install_problems(source, "UpdateManager.kt")
+    assert problems and "下载后自动安装" in problems[0], problems
+
+
+def test_download_leaves_install_to_user_is_clean():
+    source = """
+        fun download(info: Info) {
+            scope.launch { _state.value = UpdateUi.Ready(info, uri) }
+        }
+        fun installReady(uri: Uri) { app.startActivity(GitHubUpdate.installIntent(uri)) }
+    """
+    assert lint_patterns._update_install_problems(source, "UpdateManager.kt") == []
+
+
+def test_no_recycle_is_clean():
+    source = """
+        LaunchedEffect(page.id, page.rotation) {
+            preview = render(page)
+        }
+    """
+    assert lint_patterns._kt_problems(source, "CropEditor.kt") == []
+
+
+def test_remember_scanning_directory_is_flagged():
+    """切页卡顿：页面首次组合时同步扫目录，顿在切页那一帧。"""
+    source = """
+        @Composable
+        fun ScansScreen() {
+            var docs by remember { mutableStateOf(DocStore.list()) }
+        }
+    """
+    problems = lint_patterns._kt_problems(source, "ScansScreen.kt")
+    assert any("组合期读盘" in p for p in problems), problems
+
+
+def test_remember_then_load_in_effect_is_clean():
+    source = """
+        @Composable
+        fun ScansScreen() {
+            var docs by remember { mutableStateOf<List<SavedDoc>>(emptyList()) }
+            LaunchedEffect(Unit) { docs = withContext(Dispatchers.IO) { DocStore.list() } }
+        }
+    """
+    assert lint_patterns._kt_problems(source, "ScansScreen.kt") == []
+
+
+def test_rotation_in_effect_key_is_clean():
+    source = """
+        val page by viewModel.page
+        LaunchedEffect(page.id, page.rotation) { preview = render(page) }
+        val turned = page.rotation
+    """
+    assert lint_patterns._kt_problems(source, "CropEditor.kt") == []
+
+
+def test_rotation_missing_from_effect_key():
+    """点旋转后识别框和图片错位：effect 只以 page.id 为 key，不重算。"""
+    source = """
+        val page by viewModel.page
+        LaunchedEffect(page.id) { preview = render(page) }
+        val turned = page.rotation
+    """
+    problems = lint_patterns._kt_problems(source, "CropEditor.kt")
+    assert any("旋转未进 effect key" in p for p in problems), problems
+
+
+def test_temporary_bitmap_recycle_is_allowed():
+    """渲染中间的 source/result 回收是合法的，不能误伤。"""
+    source = """
+        val source = decode(page.file, maxEdge)
+        val result = DocDetect.rectify(source, page.quad, page.filter)
+        source.recycle()
+        return result
+    """
+    assert lint_patterns._kt_problems(source, "ScanSession.kt") == []
+
+
+def test_rotation_nested_paren_key_is_clean():
+    """key 里的 remember(...) 曾让裸 regex 在第一个 ) 截断而误报。"""
+    source = """
+        LaunchedEffect(remember(page.id) { page.id }, page.rotation) { preview = render(page) }
+    """
+    assert lint_patterns._kt_problems(source, "CropEditor.kt") == []
+
+
+def test_remember_nested_brace_still_flagged():
+    """remember { mutableStateOf(run { DocStore.list() }) } 的花括号嵌套不能漏报。"""
+    source = """
+        var docs by remember { mutableStateOf(run { DocStore.list() }) }
+    """
+    problems = lint_patterns._kt_problems(source, "ScansScreen.kt")
+    assert any("组合期读盘" in p for p in problems), problems
+
+
+def test_exif_second_decode_without_correction_flagged():
+    """同一文件两处 decode、只校正第一处时，全文放行会漏掉第二处。"""
+    source = """
+        fun loadFirst() {
+            val a = BitmapFactory.decodeFile(first)
+            val fixed = ExifInterface(first)
+        }
+        fun loadSecond() {
+            val b = BitmapFactory.decodeFile(second)
+        }
+    """
+    problems = lint_patterns._kt_problems(source, "ScanSession.kt")
+    assert any("EXIF 未应用" in p for p in problems), problems
+
+
+# —— 自动重开竞态（2026-11-22）：timeout + DEVNULL 延迟失效 ——
+
+def test_timeout_with_devnull_rejected():
+    """能拦住旧写法：timeout /t 配 stdin=DEVNULL，延迟立即失效。"""
+    bad = '''\
+def schedule():
+    command = 'timeout /t 12 /nobreak >nul & start "" exe'
+    Popen(["cmd", "/c", command], stdin=subprocess.DEVNULL)
+'''
+    assert any("timeout 延迟失效" in p for p in check(bad)), check(bad)
+
+
+def test_ping_delay_is_allowed():
+    """当前库干净：ping -n 不读 stdin，延迟可靠。"""
+    good = '''\
+def schedule():
+    command = 'ping -n 13 127.0.0.1 >nul & start "" exe'
+    Popen(["cmd", "/c", command], stdin=subprocess.DEVNULL)
+'''
+    assert check(good) == []

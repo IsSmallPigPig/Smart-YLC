@@ -59,12 +59,7 @@ class AccountStore(context: Context) {
 
     /** 当前配置下的账号；没有配置档案时用 legacy，老账号照常可见。 */
     val accounts: List<Account>
-        get() {
-            val scope = CloudProfiles.activeId.let {
-                if (it.isBlank()) CloudProfile.LEGACY_ID else it
-            }
-            return allAccounts.filter { it.profileId == scope }
-        }
+        get() = allAccounts.filter { it.profileId == scope() }
 
     val activeUserName: String
         get() {
@@ -90,7 +85,7 @@ class AccountStore(context: Context) {
 
     fun remove(userName: String) {
         allAccounts = allAccounts.filterNot { it.userName == userName && it.profileId == scope() }
-        prefs.edit { remove(cookieKey(userName)) }
+        clearCookies(userName)
         if (activeUserName == userName) {
             setActive(accounts.firstOrNull()?.userName.orEmpty())
         }
@@ -99,26 +94,37 @@ class AccountStore(context: Context) {
     /** 删除云端配置时连它名下的账号与会话一起清掉，不留孤儿数据。 */
     fun removeProfile(profileId: String) {
         allAccounts.filter { it.profileId == profileId }.forEach {
-            prefs.edit { remove(cookieKey(it.userName)) }
+            prefs.edit {
+                remove(cookieKey(it.userName, profileId))
+                remove("cookie:${it.userName}")   // 升级前的旧键
+            }
         }
         allAccounts = allAccounts.filterNot { it.profileId == profileId }
     }
 
     private fun scope(): String = CloudProfiles.activeId.ifBlank { CloudProfile.LEGACY_ID }
 
-    fun cookieHeader(userName: String): String = prefs.getString(cookieKey(userName), "").orEmpty()
+    fun cookieHeader(userName: String): String {
+        val scoped = prefs.getString(cookieKey(userName, scope()), "").orEmpty()
+        // 老版本只按用户名存 cookie；升级后第一次用仍要认得旧键，否则全员要重登。
+        return scoped.ifEmpty { prefs.getString("cookie:$userName", "").orEmpty() }
+    }
 
     fun saveCookies(userName: String, header: String) {
-        prefs.edit { putString(cookieKey(userName), header) }
+        prefs.edit { putString(cookieKey(userName, scope()), header) }
     }
 
     fun clearCookies(userName: String) {
-        prefs.edit { remove(cookieKey(userName)) }
+        prefs.edit {
+            remove(cookieKey(userName, scope()))
+            remove("cookie:$userName")
+        }
     }
 
     private companion object {
         const val KEY_ACCOUNTS = "accounts_json"
         const val KEY_ACTIVE = "active_user"
-        fun cookieKey(userName: String) = "cookie:$userName"
+        // 会话键必须带配置维度：不同云端配置常有同名账号，只按用户名会串号。
+        fun cookieKey(userName: String, profileId: String) = "cookie:$profileId:$userName"
     }
 }

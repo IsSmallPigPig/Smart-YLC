@@ -175,7 +175,10 @@ def _schedule_windows_relaunch(delay: int = 12) -> None:
     if not _packaged():
         return      # 源码版的解释器也叫 python.exe，按扩展名判断会连开发机一起重开
     exe = Path(sys.executable)
-    command = f'timeout /t {delay} /nobreak >nul & start "" "{exe}"'
+    # 不用 timeout：stdin 重定向到 DEVNULL 时 Windows 的 timeout.exe 直接报错退出，
+    # 12 秒延迟形同虚设，新进程会在安装器还在替换文件时启动、重新锁住 exe。
+    # ping 的 -n 计时不读 stdin，在 DETACHED_PROCESS 下照样可靠。
+    command = f'ping -n {int(delay) + 1} 127.0.0.1 >nul & start "" "{exe}"'
     flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
              | getattr(subprocess, "CREATE_NO_WINDOW", 0)
              | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))

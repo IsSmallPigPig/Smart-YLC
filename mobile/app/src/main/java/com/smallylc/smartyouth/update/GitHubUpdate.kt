@@ -3,16 +3,21 @@ package com.smallylc.smartyouth.update
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CancellationException
 import com.smallylc.smartyouth.BuildConfig
 import com.smallylc.smartyouth.app
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -27,6 +32,7 @@ import java.util.concurrent.TimeUnit
  */
 object GitHubUpdate {
 
+    private const val TAG = "GitHubUpdate"
     const val REPO = "IsSmallPigPig/Smart-YLC"
     private const val RELEASES_API = "https://api.github.com/repos/$REPO/releases"
     private const val TAG_PREFIX = "mobile-v"
@@ -61,6 +67,7 @@ object GitHubUpdate {
         val notes: String,
         val apkUrl: String,
         val size: Long,
+        val sha256: String = "",   // GitHub asset 的 digest；镜像返回的内容要靠它验真伪
     )
 
     sealed class CheckResult {
@@ -108,6 +115,7 @@ object GitHubUpdate {
                 var notes = ""
                 var apkUrl = ""
                 var apkSize = 0L
+                var apkDigest = ""
                 for (i in 0 until releases.length()) {
                     val release = releases.getJSONObject(i)
                     val tag = release.optString("tag_name")
@@ -120,6 +128,9 @@ object GitHubUpdate {
                         if (asset.optString("name").endsWith(".apk")) {
                             apkUrl = asset.optString("browser_download_url")
                             apkSize = asset.optLong("size")
+                            // GitHub 给的是 "sha256:<hex>"；摘要随下载字节校验，
+                            // 挡住镜像站返回篡改包（系统签名校验之外的第二道）。
+                            apkDigest = asset.optString("digest").removePrefix("sha256:")
                             break
                         }
                     }
@@ -131,11 +142,16 @@ object GitHubUpdate {
                 } else if (!isNewer(version, BuildConfig.VERSION_NAME)) {
                     CheckResult.UpToDate
                 } else {
-                    CheckResult.NewVersion(Info(version, notes, apkUrl, apkSize))
+                    CheckResult.NewVersion(Info(version, notes, apkUrl, apkSize, apkDigest))
                 }
             }
+        } catch (e: CancellationException) {
+            throw e   // 协程取消不是故障，别折叠成 Failed
         } catch (t: Throwable) {
-            CheckResult.Failed(t.message ?: "网络不通")
+            // 保留根因到日志：JSON 结构变了、SSL 失败、DNS 不通都压成一句
+            // "网络不通"时，用户截图过来根本无从判断是哪一种。
+            Log.w(TAG, "检查更新失败", t)
+            CheckResult.Failed(t.message?.take(200) ?: "网络不通")
         }
     }
 
@@ -159,22 +175,27 @@ object GitHubUpdate {
 
     private suspend fun probePrefixes(): List<String> = coroutineScope {
         val probe = "$RELEASES_API?per_page=1"
+        // 21 站全并发会一次压满移动网络，且 awaitAll 要等最慢一站的 15s 读超时。
+        // 限到 5 路；探测用短超时客户端，避免"连上不回包"的站拖住整批。
+        val gate = Semaphore(5)
         MIRROR_PREFIXES.map { prefix ->
             async(Dispatchers.IO) {
-                val started = System.currentTimeMillis()
-                val ok = runCatching {
-                    val request = okhttp3.Request.Builder()
-                        .url(prefix + probe)
-                        .header("Accept", "application/vnd.github+json")
-                        .build()
-                    client.newCall(request).execute().use { r ->
-                        // 读掉响应体，连接才能回到共享池给后续下载复用。
-                        r.body?.string()
-                        r.code == 200 || r.code == 403 || r.code == 429
-                    }
-                }.getOrDefault(false)
-                val elapsed = System.currentTimeMillis() - started
-                if (ok && elapsed < 6000) prefix to elapsed else null
+                gate.withPermit {
+                    val started = System.currentTimeMillis()
+                    val ok = runCatching {
+                        val request = okhttp3.Request.Builder()
+                            .url(prefix + probe)
+                            .header("Accept", "application/vnd.github+json")
+                            .build()
+                        probeClient.newCall(request).execute().use { r ->
+                            // 读掉响应体，连接才能回到共享池给后续下载复用。
+                            r.body?.string()
+                            r.code == 200 || r.code == 403 || r.code == 429
+                        }
+                    }.getOrDefault(false)
+                    val elapsed = System.currentTimeMillis() - started
+                    if (ok && elapsed < 6000) prefix to elapsed else null
+                }
             }
         }.awaitAll().filterNotNull().sortedBy { it.second }.map { it.first }
     }
@@ -191,17 +212,17 @@ object GitHubUpdate {
         val gateways = ranked + ""
         val dir = File(app.cacheDir, "update").apply { mkdirs() }
         val target = File(dir, "smart-youth-${info.version}.apk")
-        if (target.exists() && target.length() == info.size) {
+        if (target.exists() && target.length() == info.size && digestOk(target, info)) {
             onProgress(100)
             return@withContext Result.success(uriOf(target))
         }
         val errors = ArrayList<String>()
-        var lastPercent = -1
         for (prefix in gateways) {
+            var lastPercent = -1     // 每个网关从 0 重新报，否则重试时进度条从 50% 直接跳 51%
             val part = File(dir, target.name + ".part")
             runCatching {
                 val request = okhttp3.Request.Builder().url(prefix + info.apkUrl).build()
-                downloadClient().newCall(request).execute().use { response ->
+                downloadClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) error("HTTP ${response.code}")
                     val total = if (info.size > 0) info.size else response.body?.contentLength() ?: -1L
                     part.outputStream().use { out ->
@@ -224,6 +245,7 @@ object GitHubUpdate {
                         }
                     }
                     if (total > 0 && part.length() != total) error("下载不完整")
+                    if (!digestOk(part, info)) error("校验失败：下载内容与官方摘要不符")
                     target.delete()
                     if (!part.renameTo(target)) error("保存失败")
                 }
@@ -239,11 +261,41 @@ object GitHubUpdate {
         Result.failure(IllegalStateException(errors.lastOrNull() ?: "下载失败"))
     }
 
-    /** 下载用更长的读超时：APK 比 API 响应大得多。 */
-    private fun downloadClient() = app.okhttpClient.newBuilder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
-        .build()
+    /** 探测用短超时：镜像"连上不回包"时不能拖住整批。 */
+    private val probeClient by lazy {
+        app.okhttpClient.newBuilder()
+            .connectTimeout(4, TimeUnit.SECONDS)
+            .readTimeout(3, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** 下载用更长的读超时：APK 比 API 响应大得多。单例复用连接池，别在重试循环里反复建。 */
+    private val downloadClient by lazy {
+        app.okhttpClient.newBuilder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** 用 GitHub 给的摘要校验下载字节；镜像站被篡改时这一关会挡下。 */
+    internal fun sha256(file: File): String =
+        MessageDigest.getInstance("SHA-256").let { md ->
+            file.inputStream().use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    md.update(buffer, 0, n)
+                }
+            }
+            md.digest().joinToString("") { "%02x".format(it) }
+        }
+
+    /** 没有摘要（老 Release 未带 digest）时退回按大小校验，不阻碍升级。 */
+    internal fun digestOk(file: File, info: Info): Boolean {
+        if (info.sha256.isNotBlank()) return sha256(file).equals(info.sha256, ignoreCase = true)
+        return info.size <= 0 || file.length() == info.size
+    }
 
     private fun uriOf(file: File): Uri =
         FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", file)
