@@ -49,6 +49,7 @@ import com.smallylc.smartyouth.scan.DocStore
 import com.smallylc.smartyouth.ui.component.CardGap
 import com.smallylc.smartyouth.ui.component.EmptyHint
 import com.smallylc.smartyouth.ui.component.MutedText
+import com.smallylc.smartyouth.ui.component.ToneGreen
 import com.smallylc.smartyouth.ui.component.ToneRed
 import com.smallylc.smartyouth.ui.theme.LocalEnableBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons

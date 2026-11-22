@@ -602,3 +602,18 @@ def test_landscape_pager_must_fill_width():
            '}\n')
     assert any("横屏内容限宽" in x
                for x in lint_patterns._kt_problems(bad, "MainActivity.kt"))
+
+
+def test_kotlin_semantic_color_import():
+    """用语义色必须 import，本地编不了 Kotlin，漏了要到 CI 才炸。"""
+    root = ROOT / "mobile" / "app" / "src"
+    for path in root.rglob("*.kt"):
+        source = path.read_text(encoding="utf-8")
+        rel = path.relative_to(ROOT / "mobile" / "app" / "src").as_posix()
+        assert not any("语义色漏 import" in x
+                       for x in lint_patterns._kt_problems(source, rel)), path
+
+    bad = ('package demo\n'
+           'color = if (ok) ToneGreen else ToneRed\n')
+    problems = lint_patterns._kt_problems(bad, "ScansScreen.kt")
+    assert any("ToneGreen" in x and "语义色漏 import" in x for x in problems)

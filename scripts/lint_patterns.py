@@ -22,6 +22,7 @@
     25 readyRead 前未补读缓冲       26 拖放路径未归一
     27 timeout 配 stdin=DEVNULL 立即退出    28 配对成功未提示未记设备
     29 手机端配对后结束会话或未保存绑定    30 横屏主内容被固定宽度限制
+    31 Kotlin 用到语义色但漏了 import
 
 结构：规则 1–14、16–23、27 在 check_file() 里按编号注释块排布；规则 15 扫非
 .py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式、更新流程与网络
@@ -631,6 +632,22 @@ def _kt_problems(source: str, rel: str) -> list[str]:
         problems.append(
             f"{rel} [横屏内容限宽] 主内容用了 widthIn(max=...)，横屏卡片不会铺满屏幕；"
             "让 pager fillMaxWidth()，由侧边导航占用剩余空间")
+
+    # 规则 31（2026-11-22 CI 编译失败）：用到语义色却漏 import。
+    # 本地没有 Android SDK/JDK，Kotlin 只在 CI 编译；一个漏掉的 import 会等
+    # tag 推出去才发现，桌面产物都好了、Release 却发不出来。
+    if rel.endswith("component/Common.kt"):
+        return problems
+    body = "\n".join(line for line in source.splitlines()
+                     if not line.lstrip().startswith("import "))
+    for color in ("ToneGreen", "ToneRed", "ToneAmber"):
+        if re.search(rf"\b{color}\b", body) and not re.search(
+                rf"^import\s+com\.smallylc\.smartyouth\.ui\.component\.{color}\b",
+                source, re.M):
+            problems.append(
+                f"{rel} [语义色漏 import] 用了 {color} 但没有 import "
+                f"com.smallylc.smartyouth.ui.component.{color}；"
+                "本地编不了 Kotlin，漏 import 要到 CI 才发现")
     return problems
 
 
