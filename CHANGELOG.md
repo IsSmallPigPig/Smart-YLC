@@ -7,6 +7,13 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.2.2
+
+- [268c5cf] feat(mobile): 配对绑定持久化，新档案默认传电脑
+- [11d5f8f] feat: 配对成功后电脑端提示并保存已绑定设备
+
+@IsSmallPigPig
+
 ## v1.2.1
 
 - [c19b7d9] docs: 按实测更新 README 并补手机端与协同章节

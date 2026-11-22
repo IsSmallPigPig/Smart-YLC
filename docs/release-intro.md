@@ -10,6 +10,10 @@
 
 > macOS 仅支持 Apple Silicon。Windows 按系统与位数选包：Win10/11 用 Windows10-x64 或 Windows10-x86，Windows 7 用 Windows7-x64 或 Windows7-x86（Win7 包基于 Python 3.8，无法使用 Win10/11 包）。安装包用英文名（GitHub 下载文件名不支持中文），装好后的应用名是「智慧团委」。
 
+手机与电脑协同：电脑在「上传档案 - 手机接收」显示二维码，手机 App 扫同一张码配对。
+配对成功后电脑端会提示并记下设备；退出配对页仍保持连接，之后新拍的档案默认直接传到电脑，
+也可以手动上传到智慧团建网站。
+
 首次运行：macOS 若提示「无法验证开发者」，右键 → 打开，或执行 `xattr -cr /Applications/智慧团委.app`；
 Windows 双击安装包，SmartScreen 提示时点「更多信息 → 仍要运行」。
 
