@@ -7,6 +7,14 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.2.1
+
+- [c19b7d9] docs: 按实测更新 README 并补手机端与协同章节
+- [7ef6cb0] fix: codeview/simplify 两端审查修复与 lint 规则整理
+- [3cdb12e] fix(mobile): 显式指定调试签名，CI 不再自己生成 key
+
+@IsSmallPigPig
+
 ## v1.2.0
 
 - [675dba7] fix(mobile): 更新检查取 100 条 release，避免手机版被桌面版本挤出窗口
