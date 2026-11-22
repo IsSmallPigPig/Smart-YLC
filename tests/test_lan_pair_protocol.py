@@ -176,3 +176,13 @@ def test_relay_worker_stops_cleanly(qapp_session):
     time.sleep(0.15)
     worker.stop()
     assert worker.wait(2000), "线程没在 2 秒内退出"
+
+
+def test_pair_callback_reports_device_and_host(share):
+    """配对成功要把设备和来源地址交给调用方，界面才能提示并记录绑定。"""
+    s, base = share
+    seen = []
+    s.on_paired = lambda device, host: seen.append((device, host))
+    code, data = post(base, "/api/pair", {"pin": s.pin, "device": "我的手机"})
+    assert code == 200 and len(seen) == 1
+    assert seen[0][0] == "我的手机" and seen[0][1]  # 地址由真实连接决定

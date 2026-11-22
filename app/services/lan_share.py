@@ -138,6 +138,9 @@ class LanShare:
     # 本机配置档案的提取码。非空时，手机必须报一个相同的 code 才能配对——
     # 这就是「相同配置的设备」。空列表表示本机没启用这项校验。
     allowed_codes: list[str] = field(default_factory=list)
+    # 配对成功回调 callable(device: str, host: str)。跑在 HTTP 请求线程，
+    # 调用方必须自己把结果投递回 GUI 线程（见 PhoneSyncDialog._on_paired）。
+    on_paired: object = None
 
     # ---- 生命周期 ----
 
@@ -251,7 +254,8 @@ class LanShare:
 
     # ---- App 配对（v1 协议）----
 
-    def pair(self, pin: str, device: str = "", config_code: str = "") -> tuple[PairSession | None, str]:
+    def pair(self, pin: str, device: str = "", config_code: str = "",
+             host: str = "") -> tuple[PairSession | None, str]:
         """配对换 token，返回 (会话, 拒绝原因)。
 
         reason: ok / bad_pin / bad_config。两种失败分开报，手机端才能告诉用户
@@ -276,6 +280,13 @@ class LanShare:
         with self._lock:
             self._sessions[sess.token] = sess
         self.touch()
+        if callable(self.on_paired):
+            try:
+                self.on_paired(sess.device, host)
+            except Exception:                     # 提示失败不能让配对本身失败
+                from app.services import app_log
+
+                app_log.warning("配对成功提示失败")
         return sess, "ok"
 
     def session(self, token: str) -> PairSession | None:
@@ -432,7 +443,8 @@ def _make_handler(share: LanShare):
                 sess, reason = share.pair(
                     str(body.get("pin") or ""),
                     str(body.get("device") or ""),
-                    str(body.get("configCode") or ""))
+                    str(body.get("configCode") or ""),
+                    host=self.client_address[0])
                 if reason == "bad_config":
                     self._json(403, {"ok": False, "error": "config",
                                      "reason": "手机与电脑的配置提取码不一致，请在手机 App 里填同一个码"})

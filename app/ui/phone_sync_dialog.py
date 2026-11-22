@@ -25,6 +25,8 @@ from PyQt5.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
+    QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
@@ -112,16 +114,22 @@ class PhoneSyncDialog(FluentPanelDialog):
 
     file_received = Signal(str)      # 落盘路径
     _http_received = Signal(object)  # HTTP 线程 → GUI 线程的收件投递
+    _paired = Signal(str, str)       # HTTP 线程 → GUI 线程的配对提醒（设备名、地址）
 
     def __init__(self, parent=None, auto_start: bool = True):
         super().__init__(parent)
-        self.widget.setMinimumWidth(480)
+        # 横屏时窗口更宽：弹窗跟着放大，别让二维码和设备列表挤在窄条里。
+        # 以宿主窗口宽度为准，上限 720 避免在小屏上盖满整个界面。
+        host_width = parent.width() if parent is not None else 0
+        self.widget.setMinimumWidth(max(480, min(720, host_width - 120)))
         # LanShare 的回调跑在 ThreadingHTTPServer 的请求线程（无 Qt 事件循环），
         # 那里建的 QTimer 永不触发；信号 emit 由 Qt 自动 queued 回 GUI 线程。
         self._http_received.connect(self._show_received)
+        self._paired.connect(self._show_paired)
         from app.services.cloud_backup import local_config_codes
 
         self.share = LanShare(on_received=self._on_received,
+                              on_paired=self._on_paired,
                               allowed_codes=local_config_codes())
         self._timer: QTimer | None = None
         self._relay_worker: _RelayWorker | None = None
@@ -159,6 +167,22 @@ class PhoneSyncDialog(FluentPanelDialog):
         addr_lay.addWidget(self.copy_btn)
         addr_lay.addWidget(self.folder_btn)
         self.viewLayout.addWidget(addr_row)
+
+        # 已绑定设备：配对成功就记下来，视为已绑定。列表常驻，关掉重开还在。
+        self.device_title = BodyLabel("已绑定设备", self.widget)
+        self.viewLayout.addWidget(self.device_title)
+        self.device_box = QWidget(self.widget)
+        self.device_lay = QVBoxLayout(self.device_box)
+        self.device_lay.setContentsMargins(0, 0, 0, 0)
+        self.device_lay.setSpacing(4)
+        self.device_scroll = QScrollArea(self.widget)
+        self.device_scroll.setWidgetResizable(True)
+        self.device_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.device_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.device_scroll.setMaximumHeight(96)
+        self.device_scroll.setWidget(self.device_box)
+        self.viewLayout.addWidget(self.device_scroll)
+        self._refresh_devices()
 
         self.result_label = BodyLabel("", self.widget)
         self.result_label.setWordWrap(True)
@@ -290,6 +314,71 @@ class PhoneSyncDialog(FluentPanelDialog):
     def _on_received(self, item: Received):
         # 回调在 HTTP 线程里；emit 让 Qt 把它排到 GUI 线程再更新界面。
         self._http_received.emit(item)
+
+    # ---- 配对提醒与设备绑定 ----
+
+    def _on_paired(self, device: str, host: str):
+        # LanShare.pair() 在请求线程调用；不能在这里碰界面或写列表。
+        self._paired.emit(device, host)
+
+    def _show_paired(self, device: str, host: str):
+        from app.services import paired_devices
+        from app.ui.bg_toast import alert
+
+        name = device or "手机"
+        shown = f"{name}（{host}）" if host else name
+        try:
+            paired_devices.remember(name, host)
+            self._refresh_devices()
+        except (OSError, RuntimeError) as exc:
+            self.result_label.setText(f"设备已连接，但未能保存绑定：{exc}")
+            return
+        self.result_label.setText(f"{shown} 已连接，档案会直接传到这台电脑")
+        alert("手机已连接", f"{shown} 已配对，档案可以直接传过来了")
+
+    def _refresh_devices(self):
+        from datetime import datetime
+
+        from app.services import paired_devices
+
+        while self.device_lay.count():
+            item = self.device_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        try:
+            devices = paired_devices.list_devices()
+        except (OSError, RuntimeError) as exc:
+            self.device_lay.addWidget(BodyLabel(f"读取已绑定设备失败：{exc}", self.device_box))
+            return
+        if not devices:
+            self.device_lay.addWidget(BodyLabel("还没有设备连接过", self.device_box))
+            return
+        for dev in devices:
+            row = QWidget(self.device_box)
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.setSpacing(8)
+            when = datetime.fromtimestamp(dev.last_at or dev.paired_at).strftime("%m-%d %H:%M")
+            label = BodyLabel(f"{dev.name}（{dev.host or '手机'}）  {when}", row)
+            label.setWordWrap(True)
+            row_lay.addWidget(label, 1)
+            remove = ToolButton(FIF.DELETE, row)
+            remove.setToolTip("解除绑定")
+            remove.clicked.connect(
+                lambda _checked=False, d=dev: self._forget_device(d.name, d.host))
+            row_lay.addWidget(remove)
+            self.device_lay.addWidget(row)
+
+    def _forget_device(self, name: str, host: str):
+        from app.services import paired_devices
+
+        try:
+            paired_devices.forget(name, host)
+            self._refresh_devices()
+            self.result_label.setText(f"已解除 {name} 的绑定")
+        except (OSError, RuntimeError) as exc:
+            self.result_label.setText(f"解除绑定失败：{exc}")
 
     def _show_received(self, item: Received):
         mark = "已收到" if item.status in ("ok", "duplicate", "need_rename") else "未接收"

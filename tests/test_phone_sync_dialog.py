@@ -134,3 +134,61 @@ def test_stop_relay_orphans_running_worker():
         worker.wait(2000)
         psd._drop_orphan(worker)
         dialog.deleteLater()
+
+
+def test_paired_signal_records_device_and_shows_hint(qapp_session, tmp_path, monkeypatch):
+    """配对提醒走信号回 GUI 线程，并写入已绑定设备列表。"""
+    from app.services import paired_devices
+    import app.ui.bg_toast as bg_toast
+
+    monkeypatch.setattr(paired_devices, "PAIRED_FILE", str(tmp_path / "paired.json"))
+    alerts = []
+    monkeypatch.setattr(bg_toast, "alert", lambda title, body="", **kw: alerts.append((title, body)))
+
+    dialog = _dialog()
+    try:
+        dialog._paired.emit("我的手机", "192.168.1.9")
+        qapp_session.processEvents()
+        assert [d.name for d in paired_devices.list_devices()] == ["我的手机"]
+        assert "我的手机" in dialog.result_label.text()
+        assert alerts and "我的手机" in alerts[0][0] + alerts[0][1]
+    finally:
+        dialog._cleanup()
+        dialog.deleteLater()
+
+
+def test_forget_device_updates_list(qapp_session, tmp_path, monkeypatch):
+    """解除绑定后列表立即刷新，磁盘记录也一并删除。"""
+    from app.services import paired_devices
+
+    monkeypatch.setattr(paired_devices, "PAIRED_FILE", str(tmp_path / "paired.json"))
+    paired_devices.remember("旧手机", "10.0.0.5")
+    dialog = _dialog()
+    try:
+        dialog._forget_device("旧手机", "10.0.0.5")
+        assert paired_devices.list_devices() == []
+        assert "还没有设备" in dialog.device_box.findChild(
+            __import__("PyQt5.QtWidgets", fromlist=["QLabel"]).QLabel).text()
+    finally:
+        dialog._cleanup()
+        dialog.deleteLater()
+
+
+def test_dialog_widens_with_host(qapp_session):
+    """横屏宿主更宽时弹窗构造出来就更宽，别把二维码挤在窄条里。"""
+    from PyQt5.QtWidgets import QWidget
+
+    from app.ui.phone_sync_dialog import PhoneSyncDialog
+
+    small = QWidget()
+    small.resize(500, 600)
+    host = QWidget()
+    host.resize(1000, 600)
+    narrow = PhoneSyncDialog(small, auto_start=False)
+    wide = PhoneSyncDialog(host, auto_start=False)
+    assert narrow.widget.minimumWidth() >= 480
+    assert wide.widget.minimumWidth() > narrow.widget.minimumWidth()
+    narrow._cleanup()
+    narrow.deleteLater()
+    wide._cleanup()
+    wide.deleteLater()
