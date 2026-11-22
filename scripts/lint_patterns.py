@@ -22,7 +22,7 @@
     25 readyRead 前未补读缓冲       26 拖放路径未归一
     27 timeout 配 stdin=DEVNULL 立即退出    28 配对成功未提示未记设备
     29 手机端配对后结束会话或未保存绑定    30 横屏主内容被固定宽度限制
-    31 Kotlin 用到语义色但漏了 import
+    31 Kotlin 用到语义色但漏了 import    32 手机版更新只认 mobile-v tag
 
 结构：规则 1–14、16–23、27 在 check_file() 里按编号注释块排布；规则 15 扫非
 .py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式、更新流程与网络
@@ -648,6 +648,19 @@ def _kt_problems(source: str, rel: str) -> list[str]:
                 f"{rel} [语义色漏 import] 用了 {color} 但没有 import "
                 f"com.smallylc.smartyouth.ui.component.{color}；"
                 "本地编不了 Kotlin，漏 import 要到 CI 才发现")
+
+    # 规则 32（2026-11-22 手机漏更新）：手机版更新只认 mobile-v tag。
+    # APK 从 v1.2.0 起随统一 tag 发布，写死 prefix 会把新版全部跳过，
+    # 界面还显示「已是最新」，用户完全看不到异常。
+    if rel.endswith("GitHubUpdate.kt"):
+        if re.search(r'"mobile-v"', body) or re.search(r"startsWith\s*\([^)]*TAG_PREFIX", body):
+            problems.append(
+                f"{rel} [手机版更新漏版本] 只认 mobile-v tag 会漏掉统一 tag 里的 APK；"
+                "遍历所有 Release，从 APK 资产名解析版本号并取最高的一份")
+        if not re.search(r"apkVersion\s*\(", body):
+            problems.append(
+                f"{rel} [APK 版本未解析] 更新检查要从 APK 资产名取版本号，"
+                "不能拿桌面 tag 当手机版本")
     return problems
 
 

@@ -1,6 +1,8 @@
 package com.smallylc.smartyouth.update
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -80,5 +82,23 @@ class GitHubUpdateIsNewerTest {
         assertTrue(GitHubUpdate.digestOk(f, info))
         assertFalse(GitHubUpdate.digestOk(f, info.copy(size = 9)))
         f.delete()
+    }
+}
+
+/** 更新检查必须认统一 tag 里的 APK，不能只看 mobile-v。 */
+class GitHubUpdateApkTest {
+
+    @Test
+    fun parsesBothOldAndUnifiedAssetNames() {
+        assertEquals("2.1.0", GitHubUpdate.apkVersion("SmartYouth-mobile-v2.1.0.apk"))
+        assertEquals("2.2.0", GitHubUpdate.apkVersion("SmartYouth-mobile-2.2.0.apk"))
+        assertFalse(GitHubUpdate.isNewer("2.1.0", "2.2.0"))
+        assertTrue(GitHubUpdate.isNewer("2.2.0", "2.1.0"))
+    }
+
+    @Test
+    fun ignoresUnrelatedAssets() {
+        assertNull(GitHubUpdate.apkVersion("SmartYouth-Linux-x64.deb"))
+        assertNull(GitHubUpdate.apkVersion("SmartYouth-mobile-latest.apk"))
     }
 }

@@ -617,3 +617,17 @@ def test_kotlin_semantic_color_import():
            'color = if (ok) ToneGreen else ToneRed\n')
     problems = lint_patterns._kt_problems(bad, "ScansScreen.kt")
     assert any("ToneGreen" in x and "语义色漏 import" in x for x in problems)
+
+
+def test_mobile_update_must_read_apk_asset_version():
+    """手机版更新不能写死 mobile-v tag，统一 tag 里的 APK 也要认。"""
+    p = (ROOT / "mobile" / "app" / "src" / "main" / "java" /
+         "com" / "smallylc" / "smartyouth" / "update" / "GitHubUpdate.kt")
+    source = p.read_text(encoding="utf-8")
+    assert lint_patterns._kt_problems(source, "GitHubUpdate.kt") == []
+
+    bad = ('const val TAG_PREFIX = "mobile-v"\n'
+           'if (!tag.startsWith(TAG_PREFIX)) continue\n')
+    problems = lint_patterns._kt_problems(bad, "GitHubUpdate.kt")
+    assert any("手机版更新漏版本" in x for x in problems)
+    assert any("APK 版本未解析" in x for x in problems)

@@ -27,15 +27,17 @@ import java.util.concurrent.TimeUnit
  * - 检查只走直连：api.github.com 响应快，不让不可用的镜像拖住启动后的检查；
  * - 下载才用镜像：gh-proxy 型前缀拼接原始链接，并发测速按延迟排队，逐站回退。
  *
- * 手机版与桌面版同号不同线：桌面用仓库最新 Release，手机只认 tag 前缀
- * `mobile-v` 的 Release，APK 作为该 Release 的资产上传。
+ * 手机版和桌面版共用同一个 Release：从所有 Release 的 APK 资产里按文件名解析
+ * 手机版本号，取最高的一份。老版 `mobile-v*` Release 继续识别，统一 tag 里
+ * 的 `SmartYouth-mobile-<版本>.apk` 也能收到更新。
  */
 object GitHubUpdate {
 
     private const val TAG = "GitHubUpdate"
     const val REPO = "IsSmallPigPig/Smart-YLC"
     private const val RELEASES_API = "https://api.github.com/repos/$REPO/releases"
-    private const val TAG_PREFIX = "mobile-v"
+    // 兼容老版 mobile-v2.1.0 的资产名，也认统一 tag 里的 SmartYouth-mobile-2.2.0.apk
+    private val APK_VERSION = Regex("""SmartYouth-mobile-v?(\d+\.\d+\.\d+)\.apk""", RegexOption.IGNORE_CASE)
 
     /** 与桌面端同一份镜像清单（2026-11 核对）；检查走直连，这里只服务下载。 */
     private val MIRROR_PREFIXES = listOf(
@@ -76,7 +78,11 @@ object GitHubUpdate {
         data class Failed(val reason: String) : CheckResult()
     }
 
-    /** 版本号点分数字比较；tag 里的 `mobile-v` 前缀先剥掉。 */
+    /** 从 APK 资产名取手机版本号；老资产带 v、新资产不带，都要认。 */
+    internal fun apkVersion(assetName: String): String? =
+        APK_VERSION.find(assetName)?.groupValues?.get(1)
+
+    /** 版本号点分数字比较；调用方传入的已经是纯数字版本。 */
     internal fun isNewer(remote: String, local: String): Boolean {
         fun parts(v: String) = Regex("\\d+").findAll(v).map { it.value.toLong() }.toList()
         val a = parts(remote)
@@ -111,38 +117,36 @@ object GitHubUpdate {
                 }
                 val body = response.body?.string().orEmpty()
                 val releases = org.json.JSONArray(body)
-                var tagVersion: String? = null
-                var notes = ""
-                var apkUrl = ""
-                var apkSize = 0L
-                var apkDigest = ""
+                var latest: Info? = null
                 for (i in 0 until releases.length()) {
                     val release = releases.getJSONObject(i)
-                    val tag = release.optString("tag_name")
-                    if (!tag.startsWith(TAG_PREFIX) || release.optBoolean("draft") || release.optBoolean("prerelease")) continue
-                    tagVersion = tag.removePrefix(TAG_PREFIX)
-                    notes = release.optString("body").take(2000)
+                    if (release.optBoolean("draft") || release.optBoolean("prerelease")) continue
+                    val notes = release.optString("body").take(2000)
                     val assets = release.optJSONArray("assets") ?: org.json.JSONArray()
                     for (j in 0 until assets.length()) {
                         val asset = assets.getJSONObject(j)
-                        if (asset.optString("name").endsWith(".apk")) {
-                            apkUrl = asset.optString("browser_download_url")
-                            apkSize = asset.optLong("size")
+                        val name = asset.optString("name")
+                        val version = apkVersion(name) ?: continue
+                        val apkUrl = asset.optString("browser_download_url")
+                        if (apkUrl.isEmpty()) continue
+                        val candidate = Info(
+                            version = version,
+                            notes = notes,
+                            apkUrl = apkUrl,
+                            size = asset.optLong("size"),
                             // GitHub 给的是 "sha256:<hex>"；摘要随下载字节校验，
                             // 挡住镜像站返回篡改包（系统签名校验之外的第二道）。
-                            apkDigest = asset.optString("digest").removePrefix("sha256:")
-                            break
-                        }
+                            sha256 = asset.optString("digest").removePrefix("sha256:"),
+                        )
+                        val current = latest
+                        if (current == null || isNewer(version, current.version)) latest = candidate
                     }
-                    break
                 }
-                val version = tagVersion
-                if (version == null || apkUrl.isEmpty()) {
-                    CheckResult.Failed("还没发布过手机版")
-                } else if (!isNewer(version, BuildConfig.VERSION_NAME)) {
-                    CheckResult.UpToDate
-                } else {
-                    CheckResult.NewVersion(Info(version, notes, apkUrl, apkSize, apkDigest))
+                val found = latest
+                when {
+                    found == null -> CheckResult.Failed("还没发布过手机版")
+                    !isNewer(found.version, BuildConfig.VERSION_NAME) -> CheckResult.UpToDate
+                    else -> CheckResult.NewVersion(found)
                 }
             }
         } catch (e: CancellationException) {
