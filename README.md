@@ -17,7 +17,7 @@
 </div>
 
 > [!TIP]
-> 面向学校团委管理员的桌面工具。一个窗口里管几十个团支部账号：上传入团志愿书、核对报到与缴费、看支部异常、导出表格，不用在几十个浏览器标签之间来回切。
+> 面向学校团委管理员的桌面工具。一个窗口里管几十个团支部账号：上传入团志愿书、核对报到与缴费、看支部异常、导出表格，不用在几十个浏览器标签之间来回切。手机端可以拍照扫描、查名单和看站内信，见下面的「手机端」。
 
 ## 特性
 
@@ -26,7 +26,8 @@
 * **数据不只是数字。** 首页概览展示上传进度、团员与支部数量、四类异常和未读消息；组织管理可以逐支部看人，详情里的数字和条形图带过渡动画。
 * **导出按需组合。** 五类内容（团员信息、未缴费、无档案、转接申请、信息错误）任选，始终导出一个 xlsx：分班时一个班一张表、各类异常都写在这张表的「异常」列里，合并时每项内容一张子表或全部合成一张。
 * **跨学校可用。** 学号与账号编号规则可自定义，占位符描述年级、班号与忽略位，改示例编号就能实时看到解析结果。规则可以导出成 JSON 给别的学校用。
-* **该省的都省了。** 已保存的会话优先复用，登录状态按账号 4 小时节流；更新在后台静默下载安装，装完才提示重启，不打断手头的活。
+* **该省的都省了。** 已保存的会话优先复用，登录状态按账号 4 小时节流；更新在后台下载，装好之后才提示你确认重启，不打断手头的活。
+* **手机直接传档案。** 同一 Wi-Fi 下扫二维码就能把手机里的 PDF 送到电脑；不在同一网络时用中转，走同一套配置提取码。详见「手机与电脑协同」。
 
 ## 界面预览
 
@@ -55,6 +56,7 @@
 | **Windows 10 / 11** | 10 及以上 | x86_64 / x86（32 位） |
 | **Windows 7** | SP1 | x86_64 / x86（32 位） |
 | **Linux** | Ubuntu 22.04+ / Debian 12+ | x86_64 |
+| **Android** | 12 及以上 | arm64-v8a / x86_64 |
 
 > [!WARNING]
 > 密码只保存在本机 `~/.gd12355-helper/config.json`，请自行做好磁盘加密与备份。工具只做正常登录能做的事，不会绕过站点风控；密码错误过多触发验证码时，先在网页端登录一次。
@@ -67,7 +69,9 @@
 
 ### 安装包
 
-到 [Releases][release-url] 下载对应平台的安装包：macOS 用 dmg，Windows 用 `setup.exe`（每用户安装，不需要管理员权限，不弹 UAC）。首次启动在「系统配置」里填入团支部账号，或导入账号模板 xlsx。换机时用「系统配置 → 系统备份 → 导出备份」把全部设置整份搬走：导出的是 config.json 快照，含账号、名单、工作区、通知、明暗模式、窗口材质、首页头图与编号规则；「恢复备份」会替换当前全部设置（先把旧配置另存一份）。只搬账号时用「支部账号 → 账号表格」。
+到 [Releases][release-url] 下载对应平台的安装包：macOS 用 dmg，Windows 用 `setup.exe`（每用户安装，不需要管理员权限，不弹 UAC），Linux 用 deb，Android 用 apk。首次启动在「系统配置」里填入团支部账号，或导入账号模板 xlsx。
+
+换机时用「系统配置 → 系统备份 → 导出备份」把全部设置整份搬走：导出的是 config.json 快照，含账号、名单、工作区、通知、明暗模式、窗口材质、首页头图与编号规则；「恢复备份」会替换当前全部设置（先把旧配置另存一份）。只搬账号时用「支部账号 → 账号表格」。
 
 ### 从源码运行
 
@@ -92,7 +96,7 @@ python -m app.main --demo   # 演示数据：6 个支部、260 名团员，隔�
 
 ```bash
 pip install pyinstaller
-python3 scripts/build.py          # 只打当前平台
+python3 scripts/build.py            # 只打当前平台
 python3 scripts/build.py --dry-run  # 只看命令，不打包
 ```
 
@@ -100,6 +104,7 @@ python3 scripts/build.py --dry-run  # 只看命令，不打包
 
 - Windows：`dist/SmartYouth/智慧团委.exe`
 - macOS：`dist/智慧团委.app`（前提是先按 workflow 里那一步生成 `build/SmartYouth.icns`）
+- Linux：`dist/SmartYouth/`（workflow 用 dpkg-deb 打成 `.deb`）
 
 > [!TIP]
 > 打包后图标的两种落点（源码、PyInstaller 的 `_MEIPASS/assets`）由 `brand.assets_dir()` / `icons_dir()` 统一判断，新增图片仍只需放进 `app/assets/`。
@@ -109,14 +114,13 @@ python3 scripts/build.py --dry-run  # 只看命令，不打包
 `scripts/release.py` 准备发布内容：更新应用版本号、在 CHANGELOG 顶部生成版本段、可选更新发布说明的前导文本。
 
 ```bash
-python3 scripts/release.py --version 1.0.1 --dry-run   # 预览，不写文件
-python3 scripts/release.py --version 1.0.1             # 写文件，前导文本沿用上一版
-python3 scripts/release.py --version 1.0.1 --intro-file notes.md   # 同时换前导文本
+python3 scripts/release.py --version 1.2.1 --since 8dd2b17 --include-types feat,fix,perf --dry-run
+python3 scripts/release.py --version 1.2.1 --since 8dd2b17 --include-types feat,fix,perf
 ```
 
-版本段从最近 tag 到 HEAD 的 `feat` / `fix` 提交自动生成，每行 `- [短hash] <提交标题>`，文末 @ 贡献者。发布说明的前导文本（下载指引那一段）存在 `docs/release-intro.md`，`--intro` / `--intro-file` 不传就沿用原文件，改这段也可直接编辑该文件。
+`--since` 指向上一个 release 提交；重写过历史后，旧 tag 可能不在当前分支上，用提交哈希更稳。`--include-types` 决定收录哪些提交类型，默认不含 `refactor`。版本段每行是 `- [短hash] <提交标题>`，文末 @ 贡献者。发布说明的前导文本（下载指引那一段）存在 `docs/release-intro.md`，`--intro` / `--intro-file` 不传就沿用原文件，改这段也可直接编辑该文件。
 
-脚本只改本地文件，不 commit、不 push、不打 tag、不触发发布。检查 `git diff` 后自行提交；发布由维护者另行打 tag 触发 CI。
+脚本只改本地文件，不 commit、不 push、不打 tag、不触发发布。检查 `git diff` 后自行提交；发布由维护者打 tag 触发 CI。
 
 ### Windows 安装包与代码签名
 
@@ -152,6 +156,30 @@ Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 PyInstaller �
 > [!TIP]
 > 搜索框固定在窗口标题栏中央，组织管理搜团员、系统消息搜消息内容、上传档案搜文件名与支部；
 > 切换页面时自动换提示语并清空关键词。
+
+## 手机端
+
+Android 原生端用 Kotlin + Compose + Miuix 构建，源码在 `mobile/`，构建说明见 `mobile/README.md`。当前版本 2.1.1，安装包随桌面端 Release 一起发布。
+
+底部五个标签：首页、名单、扫描、消息、我的。
+
+| 标签 | 做什么 |
+|---|---|
+| 首页 | 上传进度、四类异常分布、未读消息入口、账号与同步状态 |
+| 名单 | 团员搜索与筛选，离线可读本地缓存；点团员可直接为他扫描 |
+| 扫描 | 拍照或相册导入 → 多页预览 → 逐页拉四角、旋转、滤镜 → 补齐姓名与手机号 → 生成 PDF。扫描件存在本机，可打开、分享、上传 |
+| 消息 | 站内信按报到 / 转接 / 其他分类 |
+| 我的 | 账号、扫描默认参数、主题、关于 |
+
+站点协议移植自桌面端 `app/services/api.py` 与 `app/domain/*`：登录（double-MD5、验证码）、组织树、团员分页、站内信、分片上传与审核。Cookie 按账号分别持久化，切换账号不会顶掉另一个登录态。命名规则和桌面端一致：`姓名+手机号+入团志愿书.pdf`。生成的 PDF 会按目标体积自动降质量，满足站点单文件 10MB 上限。
+
+账号密码与会话 Cookie 只存在应用私有目录；扫描件存在 `getExternalFilesDir("documents")/scan`，卸载应用时清除。纸边检测依赖 OpenCV，加载失败时退化为整幅图加内边距，仍可手动拉四角。
+
+## 手机与电脑协同
+
+上传页点「手机同步」会起一个本地 HTTP 服务（默认 8765，被占用时由系统分配），只接受来自私有网段的请求。弹窗给出二维码和完整地址；同一 Wi-Fi 下用手机扫码，就能把 PDF 传到电脑，落盘到 `~/同步自手机/<日期>/`，按 SHA-256 判重，并自动登记为来源目录。
+
+手机和电脑不在同一网络时走中转：手机把文件分片传到中转服务，电脑端自动取回。两条路用同一个配置提取码。协议细节见 `docs/app-pair-protocol.md`，设计取舍见 `docs/phone-sync-design.md`。
 
 ## 响应速度
 
@@ -236,20 +264,21 @@ Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 PyInstaller �
 
 ## 自动更新
 
-「系统配置 - 关于项目」里可以开作者主页、提交反馈、检查更新。
+「系统配置 - 关于项目」里可以开作者主页、提交反馈、检查更新。桌面端和手机端共用同一个 Release 页面，各取自己的安装包。
 
-- 来源固定为 `IsSmallPigPig/Smart-YLC`：先读最新 Release，按平台挑安装包（macOS 取 dmg、Windows 取 exe）；没有 Release 时回退 `main` 分支的 `__version__` 并下载源码包。
-- 启动后延迟 2.5 秒静默检查；发现新版本就直接下载并交给独立进程静默安装，不弹版本提示、不弹安装窗口。手动检查与下载仍用右下角浮动进度条展示（检查时为扫描进度，下载按百分比推进），「关于项目 → 检查更新」那一行的按钮依次变成「下载 x.y.z」「正在安装」。
+- 来源固定为 `IsSmallPigPig/Smart-YLC`：桌面端按平台挑安装包（macOS 取 dmg、Windows 取 exe、Linux 取 deb），手机端取 tag 以 `mobile-v` 开头的 Release 里的 apk。
+- 桌面端启动后延迟 2.5 秒静默检查；发现新版本就在后台下载。下载完成后弹一条常驻提示，按钮变成「待重启」；**安装要由你确认**，点「重启」才会退出主程序、交给独立进程静默安装，装完自动打开新版本。源码运行时不会自动重开。手动检查与下载仍用右下角浮动进度条展示（检查时为扫描进度，下载按百分比推进）。
+- 手机端发现新版本后停在「待安装」，点确认才拉起系统安装器；安装包下载后会按 GitHub 给出的 SHA-256 摘要校验，镜像站返回的内容对不上就换下一个站。
 - 镜像源集中在 `updater.MIRRORS` 维护：二十多个公开加速站，末尾留直连 GitHub 兜底。设置页「检查更新」那一行左边就是镜像源选择——默认「自动选择」，点开先并发测速，站名后面跟本轮实测延迟（`(845 ms)`），没通的标「(超时)」「(不可用)」；也可以指定某一个站，或填自定义站址。选完直接开下，不再每次问走哪个站；指定的站失败会自动按顺序换下一个。站失效了改 `MIRRORS` 一处即可。包落在 `~/.gd12355-helper/updates/`，用 `.part` 加原子替换。
-- 安装由 `--silent-install` 助手完成：Windows 对 setup.exe 用 `/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS`（MSI 用 `msiexec /qn`），macOS 挂载 dmg 后把 `.app` 复制到「应用程序」。主程序先退出让出文件，助手装完再发系统通知「更新已完成，重启应用后生效」。
+- 安装由独立进程完成：Windows 对 setup.exe 用 `/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS`（MSI 用 `msiexec /qn`），macOS 挂载 dmg 后把 `.app` 复制到「应用程序」。
 - 助手拉不起来或安装失败时保留更新包，按钮回到「打开目录」，并在系统通知里说明需要手动安装。
 - macOS 打包版的后台提醒走系统原生通知，点击会回到对应页面；源码运行没有 bundle id 时回落到应用内浮窗。首次发送需要允许通知权限。
 - macOS 上 Python 不读系统钥匙串，检查前会把系统受信任根证书补进 `SSLContext`，证书校验始终开启。
-- 推 `v*` tag 会触发 `.github/workflows/release.yml` 构建两个平台的安装包并发布 Release。
+- 推 `v*` tag 会触发 `.github/workflows/release.yml`，构建 macOS、Windows 10/11（32/64 位）、Windows 7（32/64 位）、Linux 六个桌面安装包，以及 Android APK，一起发布到 Release。
 
 ## 数据与配置
 
-全部数据在 `~/.gd12355-helper/`：
+桌面端全部数据在 `~/.gd12355-helper/`：
 
 | 文件 / 键 | 内容 |
 |---|---|
@@ -270,7 +299,7 @@ Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 PyInstaller �
 python3 -m pytest tests/ -q
 ```
 
-覆盖命名与页数检查、上传检查与路由、检查规则、登录协议、分片协议、登录闸门、网页会话、跨学校编号规则、导出数据、通知节奏、更新服务，以及界面构造冒烟。全部使用纯函数或假客户端，不发网络。
+覆盖命名与页数检查、上传检查与路由、检查规则、登录协议、分片协议、登录闸门、网页会话、跨学校编号规则、导出数据、通知节奏、更新服务，以及界面构造冒烟。全部使用纯函数或假客户端，不发网络。另有 `scripts/lint_copy.py` 检查用户可见文案，`scripts/lint_patterns.py` 检查代码反模式，两者都要求零问题。
 
 ## 协议来源
 
@@ -283,7 +312,7 @@ python3 -m pytest tests/ -q
 
 ## 贡献
 
-欢迎提 issue 或 PR：复现步骤、截图、日志里的错误原文都很有用。改动涉及网络协议时，请一并补上对应的纯函数测试。
+欢迎提 issue 或 PR：复现步骤、截图、日志里的错误原文都很有用。改动涉及网络协议时，请一并补上对应的纯函数测试。新增用户可见文案或修掉一类代码缺陷时，按 `scripts/lint_patterns.py` 文件头的说明补规则和回归测试。
 
 ## 许可证
 
