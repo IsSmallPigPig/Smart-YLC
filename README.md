@@ -295,13 +295,36 @@ Android 原生端用 Kotlin + Compose + Miuix 构建，源码在同仓库的 `mo
 
 同步系统数据每 30 秒一轮，只用已保存会话取数，不登录；刷新登录状态是独立操作，按每个账号最后刷新时间做 4 小时节流。
 
+## 命令行
+
+不带界面跑检查，给脚本和 AI 用。命令在仓库根执行：
+
+```bash
+python3 cli.py doctor                      # 环境自检：配置、账号、字体、页数读取
+python3 cli.py scan ~/Downloads/档案        # 检查目录里的档案，只读
+python3 cli.py scan ~/Downloads/档案 --json # 同一份结果，机器可读
+python3 cli.py version
+```
+
+`scan` 给出每个文件的状态（命名、页数、支部、缺团员、重复）、按支部的份数，以及文件名解析不出姓名与手机号、没纳入检查的 PDF。它不改名、不压缩、不写缓存、不联网。
+
+加 `--json` 后标准输出只有一个对象：
+
+```json
+{"schema": 1, "ok": true, "command": "scan", "data": {"counts": {}, "files": []}, "warnings": []}
+```
+
+失败时 `ok` 为 false，`error.code` 说明原因（`missing_dir`、`config_unreadable`、`internal`）。退出码：0 成功，2 参数不对，3 前置条件不满足，4 运行出错。
+
+`--config-dir <目录>` 换一份配置，`--expected-pages` 与 `--roster` 覆盖配置里的页数要求与名单。
+
 ## 测试
 
 ```bash
 python3 -m pytest tests/ -q
 ```
 
-覆盖命名与页数检查、上传检查与路由、检查规则、登录协议、分片协议、登录闸门、网页会话、跨学校编号规则、导出数据、通知节奏、更新服务，以及界面构造冒烟。全部使用纯函数或假客户端，不发网络。另有 `scripts/lint_copy.py` 检查用户可见文案，`scripts/lint_patterns.py` 检查代码反模式，两者都要求零问题。
+覆盖命名与页数检查、上传检查与路由、检查规则、登录协议、分片协议、登录闸门、网页会话、跨学校编号规则、导出数据、通知节奏、更新服务、命令行契约，以及界面构造冒烟。全部使用纯函数或假客户端，不发网络。另有 `scripts/lint_copy.py` 检查用户可见文案，`scripts/lint_patterns.py` 检查代码反模式，两者都要求零问题。
 
 ## 协议来源
 

@@ -654,3 +654,18 @@ def test_materials_module_is_clean():
     """当前库干净：只剩 Win11 的系统接口。"""
     p = ROOT / "app" / "services" / "materials.py"
     assert not any("Win10 亚克力已停用" in x for x in lint_patterns.check_file(p))
+
+
+def test_cli_must_not_import_qt():
+    """能拦住旧写法：命令行 import 了组件库，`--json` 输出里混进横额。"""
+    bad = ('from PyQt5.QtWidgets import QApplication\n'
+           'from qfluentwidgets import setTheme\n')
+    problems = check(bad, "cli.py")
+    assert any("CLI 输出被污染" in p for p in problems), problems
+
+
+def test_cli_module_is_clean():
+    """当前库干净：命令行只依赖纯逻辑模块。"""
+    for name in ("app/cli.py", "cli.py"):
+        assert not any("CLI 输出被污染" in x
+                       for x in lint_patterns.check_file(ROOT / name)), name

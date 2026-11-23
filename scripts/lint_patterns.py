@@ -23,7 +23,7 @@
     27 timeout 配 stdin=DEVNULL 立即退出    28 配对成功未提示未记设备
     29 手机端配对后结束会话或未保存绑定    30 横屏主内容被固定宽度限制
     31 Kotlin 用到语义色但漏了 import    32 手机版更新只认 mobile-v tag
-    33 Win10 重新挂上 WCA 亚克力
+    33 Win10 重新挂上 WCA 亚克力    34 命令行混入 Qt/组件库
 
 结构：规则 1–14、16–23、27 在 check_file() 里按编号注释块排布；规则 15 扫非
 .py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式、更新流程与网络
@@ -456,6 +456,18 @@ def check_file(path: Path) -> list[str]:
             problems.append(
                 f"{rel}:{line} [Win10 亚克力已停用] {win10_gate} 把模糊放回了 Windows 10；"
                 "Win10 上会出黑块与发灰，模糊只从 Win11 22000 起")
+
+    # 规则 34（2026-11-23 CLI 输出被污染）：命令行不能 import Qt 或组件库。
+    # qfluentwidgets 被 import 时会往标准输出打欢迎横幅，`--json` 的输出就不再是
+    # 合法 JSON；界面初始化还会拉起字体、主题等成串依赖。字体常量放在 app/fonts.py。
+    if rel.endswith("cli.py"):
+        for needle in ("PyQt5", "qfluentwidgets", "from app.setup", "import app.setup"):
+            if needle in source:
+                line = source.count("\n", 0, source.find(needle)) + 1
+                problems.append(
+                    f"{rel}:{line} [CLI 输出被污染] 引入了 {needle}："
+                    "组件库 import 时会往 stdout 打横幅，JSON 解析直接失败；"
+                    "需要的常量放进不依赖 Qt 的模块")
 
     return problems
 
