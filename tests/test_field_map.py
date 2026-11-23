@@ -42,3 +42,15 @@ def test_really_missing_field_still_drifts():
     _, diags = parse_member(row)
     assert any(d.code == "PARSE_DRIFT" and "real_name_status" in d.reason
                for d in diags)
+
+
+def test_fonts_dir_prefers_packaged_assets(tmp_path, monkeypatch):
+    """打包后字体在 _MEIPASS/assets/fonts，不能拿源码路径误报缺失。"""
+    import sys
+
+    from app.fonts import fonts_dir
+
+    packed = tmp_path / "assets" / "fonts"
+    packed.mkdir(parents=True)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    assert fonts_dir() == packed

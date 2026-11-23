@@ -111,9 +111,9 @@ def _abs_out(path: str, suffix: str = "") -> str:
 def cmd_version(args) -> tuple[dict, list[str]]:
     from app import __version__
     from app.constants import CONFIG_FILE
-    from app.fonts import CJK_FAMILY, FONT_FAMILY, FONT_FILES
+    from app.fonts import CJK_FAMILY, FONT_FAMILY, FONT_FILES, fonts_dir
 
-    fonts = Path(__file__).resolve().parent / "assets" / "fonts"
+    fonts = fonts_dir()
     return {
         "version": __version__,
         "python": platform.python_version(),
@@ -149,9 +149,9 @@ def cmd_doctor(args) -> tuple[dict, list[str]]:
         "来源目录都在" if not missing else f"找不到：{'、'.join(missing)}",
         "warning")
 
-    from app.fonts import CJK_FAMILY, FONT_FAMILY, FONT_FILES
+    from app.fonts import CJK_FAMILY, FONT_FAMILY, FONT_FILES, fonts_dir
 
-    fonts = Path(__file__).resolve().parent / "assets" / "fonts"
+    fonts = fonts_dir()
     absent = [name for name in FONT_FILES if not (fonts / name).is_file()]
     add("fonts", not absent,
         f"{FONT_FAMILY} + {CJK_FAMILY} 已打包" if not absent else f"缺字体文件：{'、'.join(absent)}")
