@@ -24,6 +24,7 @@
     29 手机端配对后结束会话或未保存绑定    30 横屏主内容被固定宽度限制
     31 Kotlin 用到语义色但漏了 import    32 手机版更新只认 mobile-v tag
     33 Win10 重新挂上 WCA 亚克力    34 命令行混入 Qt/组件库
+    35 更新按钮绕过高亮
 
 结构：规则 1–14、16–23、27 在 check_file() 里按编号注释块排布；规则 15 扫非
 .py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式、更新流程与网络
@@ -468,6 +469,18 @@ def check_file(path: Path) -> list[str]:
                     f"{rel}:{line} [CLI 输出被污染] 引入了 {needle}："
                     "组件库 import 时会往 stdout 打横幅，JSON 解析直接失败；"
                     "需要的常量放进不依赖 Qt 的模块")
+
+    # 规则 35（2026-11-23 更新按钮没有高亮）：检查更新那一格的按钮按状态换成
+    # 普通或主色两个实例，文案与启用状态统一走 _set_action。直接对 check_btn
+    # setText/setEnabled 会绕过主色切换——发现新版本时按钮还是一副「导出日志」
+    # 的样子，用户看不出有版本在等他装。
+    if rel.endswith("about_card.py"):
+        for call in ("check_btn.setText(", "check_btn.setEnabled("):
+            if call in source:
+                line = source.count("\n", 0, source.find(call)) + 1
+                problems.append(
+                    f"{rel}:{line} [更新按钮绕过高亮] 直接用 {call[:-1]}) 不会切到主色按钮；"
+                    "改用 self._set_action(文案, primary=...)，发现新版本才亮起来")
 
     return problems
 

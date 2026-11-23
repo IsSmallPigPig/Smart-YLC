@@ -669,3 +669,18 @@ def test_cli_module_is_clean():
     for name in ("app/cli.py", "cli.py"):
         assert not any("CLI 输出被污染" in x
                        for x in lint_patterns.check_file(ROOT / name)), name
+
+
+def test_update_button_must_go_through_highlight_helper():
+    """能拦住旧写法：只改文案不换主色，发现新版本时按钮看不出来。"""
+    bad = ('def _on_checked(self, info):\n'
+           '    self.check_btn.setText("立即更新")\n'
+           '    self.check_btn.setEnabled(True)\n')
+    problems = check(bad, "about_card.py")
+    assert any("更新按钮绕过高亮" in p for p in problems), problems
+
+
+def test_about_card_uses_highlight_helper():
+    """当前库干净：文案与启用状态都走 _set_action。"""
+    p = ROOT / "app" / "ui" / "about_card.py"
+    assert not any("更新按钮绕过高亮" in x for x in lint_patterns.check_file(p))

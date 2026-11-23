@@ -2,7 +2,9 @@
 
 检查与下载用右下角的浮动进度条反馈（和「同步数据」同一种），下载时按百分比
 推进。下载完成后拉起独立进程静默安装，不弹安装窗口；装完发系统通知提醒重启。
-失败时按钮变成「打开目录」，可以手动安装。
+发现新版本时右侧按钮换成主色的「立即更新」——只改文案的话，它跟同一张卡片里
+的「导出日志」长得一模一样，用户看不出有版本在等他装。下载失败时按钮变成
+「重新下载」，可以直接重试。
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     InfoBar,
     InfoBarPosition,
+    PrimaryPushButton,
     PushButton,
 )
 
@@ -95,12 +98,18 @@ class AboutCard(CollapsibleCard):
 
         # 镜像源与检查按钮同一行：左侧选走哪个站，右侧执行检查/下载
         self.mirror_combo = MirrorComboBox()
-        self.check_btn = _button(FIF.UPDATE, "检查更新")
-        self.check_btn.setFixedWidth(CONTROL_WIDTH)
-        self.check_btn.clicked.connect(self._on_action)
+        # 两个按钮同一个槽位：常态是普通按钮，发现新版本换成一个主色按钮。
+        # 只换文案的话，跟旁边「导出日志」长得一样，用户看不到有版本在等他装。
+        self._action_plain = _button(FIF.UPDATE, "检查更新")
+        self._action_primary = PrimaryPushButton(FIF.UPDATE, "立即更新")
+        for btn in (self._action_plain, self._action_primary):
+            btn.setFixedWidth(CONTROL_WIDTH)
+            btn.clicked.connect(self._on_action)
+        self._action_primary.hide()
+        self.check_btn = self._action_plain
         self.update_row = SettingRow(
             "检查更新", icon=FIF.UPDATE,
-            control=_controls(self.mirror_combo, self.check_btn))
+            control=_controls(self.mirror_combo, self._action_plain, self._action_primary))
         self.body_lay.addWidget(self.update_row)
         self._refresh_status()
 
@@ -176,6 +185,20 @@ class AboutCard(CollapsibleCard):
 
     # ------------------------------------------------------------ 检查更新
 
+    def _set_action(self, text: str, primary: bool = False, enabled: bool = True):
+        """按钮只有一个槽位，按「有没有版本在等」选普通或主色那一个。
+
+        两个实例同宽、同图标、连同一个动作，切换只是显隐：布局不跳，也不用
+        去改组件库按钮的样式表（主色按钮的悬停、按下、明暗主题都是现成的）。
+        """
+        nxt = self._action_primary if primary else self._action_plain
+        prev = self._action_plain if primary else self._action_primary
+        nxt.setText(text)
+        nxt.setEnabled(enabled)
+        prev.hide()
+        nxt.show()
+        self.check_btn = nxt
+
     def _on_action(self):
         """一个按钮依次承担：检查更新 → 立即更新（下载）→ 待重启（重启确认）。"""
         if self._downloaded:
@@ -199,8 +222,7 @@ class AboutCard(CollapsibleCard):
         if self._check_worker is not None and self._check_worker.isRunning():
             return
         self._downloaded = ""
-        self.check_btn.setEnabled(False)
-        self.check_btn.setText("正在检查")
+        self._set_action("正在检查", enabled=False)
         self._open_toast("检查更新").set_indeterminate("正在检查更新…")
         worker = update_check.CheckWorker(parent=self)
         self._check_worker = worker
@@ -211,21 +233,19 @@ class AboutCard(CollapsibleCard):
     def _on_checked(self, info):
         update_check.record("update" if info else "latest", info.version if info else "")
         self._info = info
-        self.check_btn.setEnabled(True)
         self._refresh_status()
         if info is None:
-            self.check_btn.setText("检查更新")
+            self._set_action("检查更新")
             self._close_toast(text=f"已是最新版本 {__version__}")
             return
         self._close_toast()
-        self.check_btn.setText("立即更新")
+        self._set_action("立即更新", primary=True)
         self.update_row.set_desc(f"发现新版本 {info.version}，点右侧按钮下载（当前 {__version__}）")
 
     def _on_check_failed(self, message: str):
         update_check.record("error", message[:180])
         self._info = None
-        self.check_btn.setEnabled(True)
-        self.check_btn.setText("检查更新")
+        self._set_action("检查更新")
         self._refresh_status()
         self._close_toast()
         self._notice("error", "检查更新失败", message, 8000)
@@ -245,8 +265,7 @@ class AboutCard(CollapsibleCard):
             return
         self._downloaded = ""
         self._fallback = ""
-        self.check_btn.setEnabled(False)
-        self.check_btn.setText("正在下载")
+        self._set_action("正在下载", primary=True, enabled=False)
         # 自动模式还没测过速时，下载前会先探一轮路，文案要说清在等什么
         waiting = "正在测速挑选镜像站…" if (
             mode == updater.AUTO and not updater.probe_fresh()) else "正在下载更新包 0%"
@@ -277,8 +296,7 @@ class AboutCard(CollapsibleCard):
         self._downloaded = path
         version = getattr(self._info, "version", "") or ""
         silent_update.save_pending_installer(path, version)
-        self.check_btn.setEnabled(True)
-        self.check_btn.setText("待重启")
+        self._set_action("待重启", primary=True)
         self.update_row.set_desc("更新包已下载，重启后生效")
         self._close_toast(text="更新包已下载")
 
@@ -294,8 +312,8 @@ class AboutCard(CollapsibleCard):
             restart(self._downloaded, getattr(self._info, "version", "") or "")
 
     def _on_download_failed(self, message: str):
-        self.check_btn.setEnabled(True)
-        self.check_btn.setText("重新下载" if self._info else "检查更新")
+        self._set_action("重新下载" if self._info else "检查更新",
+                         primary=self._info is not None)
         # 失败也要收掉「正在下载」，否则浮层会一直停在下载中
         self._close_toast()
         self._notice("error", "下载失败", message, 10000)

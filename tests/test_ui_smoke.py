@@ -1508,6 +1508,41 @@ def test_update_found_moves_action_into_row(app, isolated_store):
     assert "9.9.9" in card.update_row.desc_label.text()
 
 
+def test_update_found_button_turns_primary(app, isolated_store):
+    """有新版本时按钮换成主色：只改文案的话它跟「导出日志」长得一样，看不出来。"""
+    from PyQt5.QtWidgets import QVBoxLayout
+    from qfluentwidgets import PrimaryPushButton, PushButton
+
+    from app.ui.about_card import AboutCard
+    from app.ui.page import CONTROL_WIDTH
+
+    host = QWidget()
+    host.resize(900, 600)
+    lay = QVBoxLayout(host)
+    card = AboutCard()
+    lay.addWidget(card)
+    host.show()
+    _pump(app, 50)
+
+    assert type(card.check_btn) is PushButton
+    assert card.check_btn.width() == CONTROL_WIDTH
+
+    card._on_checked(type("Info", (), {"version": "9.9.9"})())
+    _pump(app, 30)
+    assert isinstance(card.check_btn, PrimaryPushButton)
+    assert card.check_btn.text() == "立即更新"
+    assert card.check_btn.isVisible()
+    assert card.check_btn.width() == CONTROL_WIDTH   # 换按钮不能让这一行跳动
+    assert not card._action_plain.isVisible()
+
+    # 再检查一次说「已是最新」：退回普通按钮，主色不留在界面上
+    card._on_checked(None)
+    _pump(app, 30)
+    assert type(card.check_btn) is PushButton
+    assert card.check_btn.text() == "检查更新"
+    assert not card._action_primary.isVisible()
+
+
 def test_progress_toast_indeterminate_scans(app, isolated_store):
     """总量未知时进度线自己走：不定模式有推动的相位，收尾会停下来。"""
     from app.ui.widgets import ProgressToast
