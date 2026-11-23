@@ -7,6 +7,13 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.2.5
+
+- [50b91617] feat: 验证码登录弹窗，修复字段 null 误报
+- [056c7b74] feat: 安装包附带命令行入口
+
+@IsSmallPigPig
+
 ## v1.2.4
 
 - [68891c2d] feat: 命令行覆盖全部业务操作
