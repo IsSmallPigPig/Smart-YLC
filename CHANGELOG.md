@@ -7,6 +7,12 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.2.6
+
+- [7e258a6a] fix: 打包版命令行读取内置字体
+
+@IsSmallPigPig
+
 ## v1.2.5
 
 - [50b91617] feat: 验证码登录弹窗，修复字段 null 误报
