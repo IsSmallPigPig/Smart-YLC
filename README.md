@@ -297,26 +297,45 @@ Android 原生端用 Kotlin + Compose + Miuix 构建，源码在同仓库的 `mo
 
 ## 命令行
 
-不带界面跑检查，给脚本和 AI 用。命令在仓库根执行：
+不带界面跑完整业务，给脚本和 AI 用。命令在仓库根执行，加 `--json` 得到机器可读结果：
 
 ```bash
-python3 cli.py doctor                      # 环境自检：配置、账号、字体、页数读取
-python3 cli.py scan ~/Downloads/档案        # 检查目录里的档案，只读
-python3 cli.py scan ~/Downloads/档案 --json # 同一份结果，机器可读
-python3 cli.py version
+# 一个常见场景：从一堆扫描件到上传完，全程不必开界面
+python3 cli.py scan ~/Downloads/档案 --json          # 先看命名、页数、支部、重复
+python3 cli.py cells ~/Downloads/档案                 # 逐格查主信息表空格
+python3 cli.py org sync --yes                        # 同步团员名单，路由才有依据
+python3 cli.py upload ~/Downloads/档案                # 不带 --yes：预演，只报计划
+python3 cli.py upload ~/Downloads/档案 --yes          # 确认后：压缩副本→上传→审核
 ```
 
-`scan` 给出每个文件的状态（命名、页数、支部、缺团员、重复）、按支部的份数，以及文件名解析不出姓名与手机号、没纳入检查的 PDF。它不改名、不压缩、不写缓存、不联网。
+`scan` 和 `cells` 默认只读，不改文件、不写缓存、不联网。`upload` 不带 `--yes` 时只报告会提交哪些支部、多少份；带 `--yes` 才真的压缩、上传、请求自动审核。其余会写盘或改配置的命令（改名、同步、导入、恢复备份、开机自启……）也遵循同一约定。
 
-加 `--json` 后标准输出只有一个对象：
+加 `--json` 后标准输出只有一个对象，别的文字都走标准错误：
 
 ```json
 {"schema": 1, "ok": true, "command": "scan", "data": {"counts": {}, "files": []}, "warnings": []}
 ```
 
-失败时 `ok` 为 false，`error.code` 说明原因（`missing_dir`、`config_unreadable`、`internal`）。退出码：0 成功，2 参数不对，3 前置条件不满足，4 运行出错。
+失败时 `ok` 为 false，`error.code` 说明原因（`missing_dir`、`config_unreadable`、`needs_yes`、`internal` 等）。退出码：0 命令执行成功（业务是否成功看 `data`），2 参数不对，3 前置条件不满足，4 运行出错。`--config-dir <目录>` 换一份配置。
 
-`--config-dir <目录>` 换一份配置，`--expected-pages` 与 `--roster` 覆盖配置里的页数要求与名单。
+完整命令（每组用 `--json` 都能拿到上面的信封）：
+
+| 组 | 命令 | 作用 |
+| --- | --- | --- |
+| 检查 | `version`、`doctor`、`scan DIRS... [--fix --yes]`、`cells PATHS...` | 环境自检、档案检查、表格空格检查 |
+| 上传 | `upload DIRS... [--account 关键字] [--yes]` | 预检查→压缩副本→按支部提交→自动审核 |
+| 登录 | `login probe [--account 关键字] [--yes]` | 逐账号测活；`--yes` 把状态写回配置 |
+| 站内信 | `messages pull [--yes]`、`messages list [--unread]`、`messages read KEY...\|--all [--yes]` | 拉取、查看、标记已读 |
+| 组织 | `org sync [--yes]`、`org stats [--online] [--yes]`、`org tree 账号` | 同步团员、统计汇总、组织树 |
+| 导出 | `export --contents members,fee,archive,transfer,identity --out PATH [--yes]` | 从缓存导出 xlsx |
+| 备份 | `backup list`、`backup probe`、`backup push --password 四位数字 --yes`、`backup pull --out PATH --yes` | 云端配置备份与恢复 |
+| 手机传档 | `pair serve [--minutes 5] --yes`、`pair pull --yes`、`pair list`、`pair forget 名称 --yes` | 局域网接收、中转拉取、配对设备管理 |
+| 配置 | `config get [KEY]`、`config set KEY VALUE --yes`、`config export PATH --yes`、`config import PATH --yes`、`config dirs list\|add\|remove PATH [--yes]` | 读写整份配置与来源目录 |
+| 名单 | `roster import XLSX [--semester 学期] --yes`、`roster use 学期 --yes`、`roster delete 学期 --yes`、`roster template --out PATH --yes` | 分学期团员名单 |
+| 团支书 | `secretary import XLSX --yes`、`secretary template --out PATH --yes` | 团支书名单与模板 |
+| 系统 | `autostart status\|on\|off`、`rule show\|explain CODE`、`update check\|download --yes`、`announce fetch`、`daily-check`、`logs --out PATH --yes` | 自启、编号规则、更新、公告、每日检查、日志 |
+
+`backup pull` 只把解密结果写到文件；确认内容后用 `config import PATH --yes` 替换配置，替换前会自动留一份 `.before-import-*` 备份。登录遇到验证码时，CLI 会明确报出来——验证码的人机输入需要到网页端登一次，这一步和浏览器标签页、文件选择框、目录实时监听一样属于界面专属操作。
 
 ## 测试
 

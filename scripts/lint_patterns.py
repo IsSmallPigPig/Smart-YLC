@@ -458,17 +458,34 @@ def check_file(path: Path) -> list[str]:
                 f"{rel}:{line} [Win10 亚克力已停用] {win10_gate} 把模糊放回了 Windows 10；"
                 "Win10 上会出黑块与发灰，模糊只从 Win11 22000 起")
 
-    # 规则 34（2026-11-23 CLI 输出被污染）：命令行不能 import Qt 或组件库。
-    # qfluentwidgets 被 import 时会往标准输出打欢迎横幅，`--json` 的输出就不再是
-    # 合法 JSON；界面初始化还会拉起字体、主题等成串依赖。字体常量放在 app/fonts.py。
-    if rel.endswith("cli.py"):
-        for needle in ("PyQt5", "qfluentwidgets", "from app.setup", "import app.setup"):
+    # 规则 34（2026-11-23 CLI 输出被污染）：命令行及其 headless 操作层不能
+    # import Qt 或组件库。qfluentwidgets 被 import 时会往标准输出打欢迎横幅，
+    # `--json` 的输出就不再是合法 JSON；界面初始化还会拉起字体、主题等成串依赖。
+    # 字体常量放在 app/fonts.py。headless 是 CLI 的 import 链，同样不得拉 Qt。
+    if rel.endswith("cli.py") or rel.endswith("headless.py"):
+        if rel.endswith("headless.py"):
+            needles = ("PyQt5", "qfluentwidgets", "from app.setup", "import app.setup",
+                       "from app.ui", "import app.ui")
+        else:
+            needles = ("PyQt5", "qfluentwidgets", "from app.setup", "import app.setup")
+        for needle in needles:
             if needle in source:
                 line = source.count("\n", 0, source.find(needle)) + 1
                 problems.append(
                     f"{rel}:{line} [CLI 输出被污染] 引入了 {needle}："
                     "组件库 import 时会往 stdout 打横幅，JSON 解析直接失败；"
                     "需要的常量放进不依赖 Qt 的模块")
+
+    # 规则 36（2026-11-23 headless 落盘结构分叉）：headless 写缓存的键必须和
+    # 界面一致。memberCache 漏 fetchedAt 会让 CLI 上传重新拉全量团员（慢且易触发
+    # 风控），orgStatsCache 漏 error_rows/transfer 会让界面恢复统计时显示空名单。
+    if rel.endswith("headless.py"):
+        for key in ("fetchedAt", "error_rows", "transfer", "messagesCache"):
+            if f'"{key}"' not in source:
+                problems.append(
+                    f"{rel} [落盘结构分叉] 缺少 {key} 键：headless 与界面 worker "
+                    "写同一份配置，少一个键界面恢复时就会丢状态；"
+                    "对照 org_page_persist_mixin / MemberSyncWorker / messages_page 补齐")
 
     # 规则 35（2026-11-23 更新按钮没有高亮）：检查更新那一格的按钮按状态换成
     # 普通或主色两个实例，文案与启用状态统一走 _set_action。直接对 check_btn

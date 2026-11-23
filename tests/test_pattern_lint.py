@@ -684,3 +684,32 @@ def test_about_card_uses_highlight_helper():
     """当前库干净：文案与启用状态都走 _set_action。"""
     p = ROOT / "app" / "ui" / "about_card.py"
     assert not any("更新按钮绕过高亮" in x for x in lint_patterns.check_file(p))
+
+
+def test_headless_must_not_import_ui():
+    """能拦住旧写法：headless 是 CLI 的 import 链，拉进界面就毁掉 JSON 输出。"""
+    bad = ("from PyQt5.QtCore import QThread\n"
+           "from app.ui.page import BusyOverlay\n")
+    problems = check(bad, "headless.py")
+    assert any("CLI 输出被污染" in p for p in problems), problems
+    bad2 = "from app.services.api import SiteClient\nfrom app.ui.widgets import PillLabel\n"
+    problems2 = check(bad2, "headless.py")
+    assert any("CLI 输出被污染" in p for p in problems2), problems2
+
+
+def test_headless_cache_keys_match_ui():
+    """能拦住旧写法：漏写 fetchedAt 会让上传重新拉全量团员。"""
+    bad = ('cache[user] = {"members": rows}\n'
+           'cfg["error_rows"] = []\n'
+           'cfg["transfer"] = None\n'
+           'cfg["messagesCache"] = {}\n')
+    problems = check(bad, "headless.py")
+    assert any("落盘结构分叉" in p for p in problems), problems
+
+
+def test_headless_module_is_clean():
+    """当前库干净：headless 不拉 Qt，缓存键与界面一致。"""
+    p = ROOT / "app" / "services" / "headless.py"
+    problems = lint_patterns.check_file(p)
+    assert not any("CLI 输出被污染" in x for x in problems), problems
+    assert not any("落盘结构分叉" in x for x in problems), problems
