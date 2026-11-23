@@ -1,7 +1,7 @@
 """窗口材质：Windows 上 acrylic 与 mica 是两条不同的接口，不能混作一谈。
 
-历史实现把 acrylic 也塞进 Fluent 的 Mica 开关，而那个开关在 Win10 上直接
-return，结果两种材质在 Win10 上都不生效。这里锁住分档与降级规则。
+Win11 两档各有系统接口；Win10 的 WCA 亚克力实测出黑块与发灰，2026-11-23 起
+一律不挂、交还纯色底。这里锁住分档与「Win10 不启用」这条边界。
 """
 
 from __future__ import annotations
@@ -71,13 +71,13 @@ def win32(monkeypatch):
 
 
 def test_material_availability_by_windows_build(win32, monkeypatch):
-    """Win10 上 mica 也要算可用（退成亚克力），否则用户选了材质什么都没变。"""
+    """Win10 两档都不可用；Win11 上 Mica 22000 起、Acrylic 22H2 起。"""
     for build, acrylic, mica in [
-        (7601, False, False),     # Win7：两条都没有
-        (10240, False, False),    # Win10 1507：还没亚克力
-        (17134, True, True),      # Win10 1803：有亚克力，mica 退亚克力
-        (19045, True, True),      # Win10 22H2
-        (22621, True, True),      # Win11
+        (7601, False, False),     # Win7
+        (17134, False, False),    # Win10 1803：旧亚克力已停用
+        (19045, False, False),    # Win10 22H2
+        (22000, True, True),      # Win11 21H2：Mica + WCA 亚克力
+        (22621, True, True),      # Win11 22H2：系统背板
     ]:
         win32(build)
         assert materials.windows_material_available("acrylic") is acrylic, build
@@ -85,21 +85,14 @@ def test_material_availability_by_windows_build(win32, monkeypatch):
         assert materials.windows_material_available("none") is False, build
 
 
-def test_acrylic_uses_acrylic_api_not_mica(win32):
-    """acrylic 走 ACCENT_ENABLE_ACRYLICBLURBEHIND，不是 Mica 开关。"""
-    window, effect = win32(19045)
-    assert materials.apply_windows_effect(window, "acrylic") is True
-    assert ("mica", False) in window.calls          # 先关掉 Fluent 的 Mica 开关
-    assert ("blur-on", 42) in effect.calls          # 客户区模糊
-    tints = [c[1] for c in effect.calls if c[0] == "acrylic"]
-    assert tints == [materials.ACRYLIC_TINT_LIGHT] or tints == [materials.ACRYLIC_TINT_DARK]
-
-
-def test_mica_on_win10_falls_back_to_acrylic(win32):
-    window, effect = win32(19045)
-    assert materials.apply_windows_effect(window, "mica") is True
-    assert ("mica", True) not in window.calls       # 没有 Mica 接口，不能假装开了
-    assert any(c[0] == "acrylic" for c in effect.calls)
+def test_win10_applies_nothing(win32):
+    """Win10 两档都不挂效果，并撤掉可能残留的模糊，交给纯色底。"""
+    for material in ("acrylic", "mica"):
+        window, effect = win32(19045)
+        assert materials.apply_windows_effect(window, material) is False, material
+        assert not any(c[0] in ("acrylic", "blur-on") for c in effect.calls), material
+        assert ("blur-off", 42) in effect.calls, material
+        assert ("mica", True) not in window.calls, material
 
 
 def test_mica_on_win11_clears_blur_first(win32):
@@ -116,7 +109,7 @@ def test_old_windows_reports_failure(win32):
     window, effect = win32(7601)
     assert materials.apply_windows_effect(window, "acrylic") is False
     assert materials.apply_windows_effect(window, "mica") is False
-    assert effect.calls == []
+    assert not any(c[0] in ("acrylic", "blur-on") for c in effect.calls)
 
 
 def test_none_removes_everything_and_reports_not_applied(win32):
@@ -149,13 +142,30 @@ def test_acrylic_on_win11_uses_system_backdrop(win32):
     assert not any(c[0] == "acrylic" for c in effect.calls), "旧通路不该再被调用"
 
 
-def test_acrylic_on_win10_keeps_legacy_path(win32):
-    """Win10 没有系统背板，继续用 blur behind + 亚克力 tint。"""
-    window, effect = win32(19045)
+def test_acrylic_on_win11_21h2_keeps_wca_path(win32):
+    """21H2 没有系统背板，但 WCA 亚克力那时还能用：别顺手删掉这条。"""
+    window, effect = win32(22000)
     assert materials.apply_windows_effect(window, "acrylic") is True
     assert ("blur-on", 42) in effect.calls
     assert any(c[0] == "acrylic" for c in effect.calls)
     assert ("dwm", materials.DWMWA_SYSTEMBACKDROP_TYPE) not in effect.calls
+
+
+def test_preferred_keeps_blur_off_on_win10(win32):
+    """Win10 新装默认给 none：选了不会有任何变化，就别让界面半透明发黑。"""
+    win32(19045)
+    assert materials.preferred({}) == "none"
+    win32(22621)
+    assert materials.preferred({}) == "mica"
+    assert materials.preferred({"translucent": False}) == "none"
+    assert materials.preferred({"translucentMaterial": "acrylic"}) == "acrylic"
+
+
+def test_hint_explains_win10_has_no_blur(win32):
+    """Win10 的说明要直说系统没有这个能力，而不是让用户去查具体版本号。"""
+    win32(19045)
+    hint = materials.material_hint("mica")
+    assert "Windows 10" in hint and "Windows 11" in hint
 
 
 def test_none_clears_system_backdrop_on_win11(win32):

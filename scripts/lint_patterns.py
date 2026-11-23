@@ -23,6 +23,7 @@
     27 timeout 配 stdin=DEVNULL 立即退出    28 配对成功未提示未记设备
     29 手机端配对后结束会话或未保存绑定    30 横屏主内容被固定宽度限制
     31 Kotlin 用到语义色但漏了 import    32 手机版更新只认 mobile-v tag
+    33 Win10 重新挂上 WCA 亚克力
 
 结构：规则 1–14、16–23、27 在 check_file() 里按编号注释块排布；规则 15 扫非
 .py 的部署配置（check_deploy_configs）；手机端 Kotlin 模式、更新流程与网络
@@ -443,6 +444,18 @@ def check_file(path: Path) -> list[str]:
                 problems.append(
                     f"{rel}:{node.lineno} [配对无提示] pair() 成功后必须调用 on_paired 回调，"
                     "让界面提示并记下已绑定设备；只发 token 用户看不到手机已连接")
+
+    # 规则 33（2026-11-23 Win10 材质异常）：亚克力可用性不能再放宽到 Windows 10。
+    # Win10 的 WCA 亚克力（blur behind + 亚克力 tint）实测出黑块、边缘发灰、
+    # 不跟系统主题。21H2 的 Win11 仍然用这条通路，所以只锁「Win10 门限」。
+    if rel.endswith("materials.py"):
+        win10_gate = next((k for k in ("17134", "WINDOWS_ACRYLIC_BUILD",
+                                       "win10_acrylic_available") if k in source), "")
+        if win10_gate:
+            line = source.count("\n", 0, source.find(win10_gate)) + 1
+            problems.append(
+                f"{rel}:{line} [Win10 亚克力已停用] {win10_gate} 把模糊放回了 Windows 10；"
+                "Win10 上会出黑块与发灰，模糊只从 Win11 22000 起")
 
     return problems
 

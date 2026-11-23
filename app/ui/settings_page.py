@@ -404,11 +404,14 @@ class SettingsPage(SettingsConfigMixin, SettingsAccountMixin,
         for label in ("关闭模糊", "Acrylic", "Mica"):
             self.material_combo.addItem(label)
         _cfg = store.load()
-        from app.services.materials import preferred
+        from app.services.materials import blur_supported, preferred
 
         _material = preferred(_cfg)
         self.material_combo.setCurrentIndex(MATERIAL_ORDER.index(_material) if _material in MATERIAL_ORDER else 0)
         self.material_combo.currentIndexChanged.connect(self._on_material_changed)
+        # 没有模糊通路的系统（Windows 10 及更早、Linux）直接禁用：留着能点却
+        # 什么都不发生，只会让人反复试。说明行会讲清原因。
+        self.material_combo.setEnabled(blur_supported())
         self.material_row = SettingRow(
             "窗口背景", desc="", icon=FIF.TRANSPARENT,
             control=controls(self.material_combo))

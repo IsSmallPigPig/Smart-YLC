@@ -1,10 +1,11 @@
 """窗口背景材质：配置里只保留 none / acrylic / mica 三种，旧值自动映射。
 
 两档在 Windows 上是两条不同的系统接口，不是同一个开关：
-  * acrylic = ACCENT_ENABLE_ACRYLICBLURBEHIND（Win10 1803 起就有，实时模糊窗口后面）
-  * mica    = DWM 系统背景（Win11 22000 起，取桌面壁纸的色调，不模糊）
-Win10 没有 Mica，选 Mica 时退成亚克力，而不是干脆不生效。更老的系统（Win7/8）
-两条都没有，返回 False 由调用方铺纯色底。macOS 走 mac_effect 的 NSVisualEffectView。
+  * mica    = Win11 系统背景（build 22000 起，取桌面壁纸的色调，不模糊）
+  * acrylic = 实时模糊窗口后面（Win11 起；22H2 之后改走系统背板）
+Windows 10 两条都没有可用的实现：它的 WCA 亚克力（blur behind + 亚克力 tint）
+实测会出黑块、边缘发灰、跟系统主题对不上，2026-11-23 起一律不挂，
+返回 False 由调用方铺纯色底。macOS 走 mac_effect 的 NSVisualEffectView。
 """
 
 from __future__ import annotations
@@ -14,13 +15,14 @@ import sys
 MATERIAL_KEYS = ("none", "acrylic", "mica")
 LEGACY_MATERIALS = {"sidebar": "acrylic", "hud": "acrylic"}
 
-# 亚克力衬纸色，格式 RRGGBBAA（qframelesswindow 内部会反转成 DWM 要的 AABBGGRR）。
-# 半透明而不是全透明：模糊本身不提供对比度，正文压不住桌面上的亮斑。
+# 系统亚克力衬纸色，格式 RRGGBBAA（qframelesswindow 内部会反转成 DWM 要的 AABBGGRR）。
+# 只给 Win11 21H2 的 WCA 通路用：22H2 起走系统背板，不需要 tint。
 ACRYLIC_TINT_LIGHT = "F2F2F2A6"
 ACRYLIC_TINT_DARK = "1E1E1EA6"
 
-# Win10 1803 才有真正的亚克力；再早只有 Aero 模糊，观感差且不跟系统主题
-WINDOWS_ACRYLIC_BUILD = 17134
+# 模糊只有 Win11 有：22000 起有 Mica，22621（22H2）起才有系统亚克力背板。
+# Win10 的 WCA 亚克力出过黑块与发灰，已停用，别再按 Win10 1803 放开。
+WINDOWS_MATERIAL_BUILD = 22000
 WINDOWS_MICA_BUILD = 22000
 
 # DWM 的窗口圆角偏好（Win11 起才认这个属性）
@@ -46,11 +48,15 @@ def preferred(cfg: dict) -> str:
     """配置里该用哪种背景材质；从没设置过时默认 Mica。
 
     只在「旧配置里明确关掉过」时保持关闭（`translucent: false`），
-    其余情况一律按 Mica 起：新装与老配置都直接拿到最好看的那档。"""
+    其余情况一律按 Mica 起：新装与老配置都直接拿到最好看的那档。
+    Windows 10 没有可用的模糊通路，默认给 none——它选了也不会有效果，
+    只会让窗口露出兜底底色，看起来像坏了。"""
     raw = cfg.get("translucentMaterial")
     if raw is not None:
         return normalize(raw)
     if cfg.get("translucent") is False:
+        return "none"
+    if sys.platform == "win32" and not windows_blur_supported():
         return "none"
     return "mica"
 
@@ -70,6 +76,24 @@ def win11_mica_available() -> bool:
     return win11_build() >= WINDOWS_MICA_BUILD
 
 
+def windows_blur_supported() -> bool:
+    """这台 Windows 有没有可用的窗口模糊通路。
+
+    只有 Win11 有。Win10 的 WCA 亚克力（blur behind + 亚克力 tint）在实测里
+    会出黑块、边缘发灰、不跟系统主题，2026-11-23 起停用。
+    """
+    return win11_build() >= WINDOWS_MATERIAL_BUILD
+
+
+def blur_supported() -> bool:
+    """当前系统能不能挂任何一档窗口模糊；设置页用它决定要不要禁用选项。"""
+    if sys.platform == "darwin":
+        return True
+    if sys.platform == "win32":
+        return windows_blur_supported()
+    return False
+
+
 def window_corner_radius(radius: int = 10) -> int:
     """这台机器上窗口应该画多大圆角；Win10 与 Linux 保持直角。
 
@@ -78,11 +102,6 @@ def window_corner_radius(radius: int = 10) -> int:
     if sys.platform == "darwin" or win11_mica_available():
         return radius
     return 0
-
-
-def win10_acrylic_available() -> bool:
-    """亚克力在 Windows 10 1803（build ≥ 17134）及更高版本可用。"""
-    return win11_build() >= WINDOWS_ACRYLIC_BUILD
 
 
 def system_transparency_enabled() -> bool:
@@ -108,15 +127,12 @@ def system_transparency_enabled() -> bool:
 def windows_material_available(material: str) -> bool:
     """这台机器上这套材质能不能挂出效果；UI 用它决定窗口要不要让出底色。
 
-    Mica 在 Win10 上按亚克力实现（见 apply_windows_effect），所以只要亚克力可用
-    就算可用，不能一律按 Win11 判断——那会让 Win10 的用户选了材质却什么都没变。
+    Windows 只在 Win11 上成立：Mica 与 Acrylic 都从 22000 起
+    （22H2 之后 Acrylic 换成系统背板，见 _apply_acrylic）。
+    Win10 返回 False——旧实现靠 WCA 亚克力硬撑，实测是黑块与发灰。
     """
     material = normalize(material)
-    if material == "none":
-        return False
-    if material == "mica" and win11_mica_available():
-        return True
-    return win10_acrylic_available()
+    return material != "none" and windows_blur_supported()
 
 
 def material_hint(material: str) -> str:
@@ -133,17 +149,13 @@ def material_hint(material: str) -> str:
         return "当前系统没有可用的窗口透明接口"
     if material == "none":
         return "关闭后铺纯色底"
+    if not windows_blur_supported():
+        return "Windows 10 没有可用的窗口模糊，升级到 Windows 11 后才能开"
     if not system_transparency_enabled():
         return "系统「透明效果」已关闭，去 设置 → 个性化 → 颜色 打开后才有效果"
     if material == "mica":
-        if win11_mica_available():
-            return "Win11 系统背景，取桌面壁纸的色调；要实时模糊改选 Acrylic"
-        if win10_acrylic_available():
-            return "Mica 需 Windows 11，这台机器按 Acrylic 呈现"
-        return f"需要 Windows 10 1803+（build {WINDOWS_ACRYLIC_BUILD}）"
-    if win10_acrylic_available():
-        return "系统亚克力，实时模糊窗口后面的内容"
-    return f"Acrylic 需要 Windows 10 1803+（build {WINDOWS_ACRYLIC_BUILD}）"
+        return "Win11 系统背景，取桌面壁纸的色调；要实时模糊改选 Acrylic"
+    return "系统亚克力，实时模糊窗口后面的内容"
 
 
 def _window_effect(window):
@@ -208,26 +220,27 @@ def _set_backdrop(window, value: int) -> bool:
 
 
 def _apply_acrylic(window) -> bool:
-    """亚克力背景。Win11 22H2 起走系统背板，更早的 Windows 走 WCA 旧通路。
+    """亚克力背景：Win11 22H2 起走系统背板，21H2 仍用 WCA 亚克力。
 
-    为什么必须分两条：
-      * Win11 22H2 之后 ACCENT_ENABLE_ACRYLICBLURBEHIND 已失效——再调用只会
-        得到一片没有模糊的纯色（深色模式下看起来像坏掉的纯黑，浅色模式下
-        因为 tint 接近白色，干脆看不出效果）。这正是用户报的「深色异常、
-        浅色无效果」。新系统改用 DWMSBT_TRANSIENTWINDOW，由 DWM 真正合成亚克力。
-      * Win10 仍然只有旧通路：blur behind + 亚克力 tint 两个一起下才有观感。
+    分两条的原因：
+      * 22H2（22621）之后 ACCENT_ENABLE_ACRYLICBLURBEHIND 已失效，再调用只会
+        得到一片纯色；新系统改用 DWMSBT_TRANSIENTWINDOW，由 DWM 合成亚克力。
+      * 21H2（22000–22620）没有系统背板，但 WCA 亚克力还能用——这条留给
+        还没升级到 22H2 的机器，不要因为修 Win10 顺手删掉。
+    Win10 两条都不进：它的 WCA 亚克力会出黑块与发灰，见 apply_windows_effect。
 
-    两种情况下都先关掉 Fluent 自己的 Mica 开关，否则主题切换时
+    两种情况都先关掉 Fluent 的 Mica 开关，否则主题切换时
     （_onThemeChangedFinished）它会重挂系统背景，把亚克力顶掉。"""
     try:
         window.setMicaEffectEnabled(False)
     except Exception:
         pass
 
-    if win11_build() >= WINDOWS_BACKDROP_BUILD and _set_backdrop(
-            window, DWMSBT_TRANSIENTWINDOW):
-        return True
-
+    build = win11_build()
+    if build >= WINDOWS_BACKDROP_BUILD:
+        return _set_backdrop(window, DWMSBT_TRANSIENTWINDOW)
+    if build < WINDOWS_MATERIAL_BUILD:
+        return False
     try:
         effect = _window_effect(window)
         hwnd = int(window.winId())
@@ -390,9 +403,9 @@ def remove_windows_effect(window) -> None:
 def apply_windows_effect(window, material: str) -> bool:
     """Windows：按材质选接口，返回是否真的挂上了效果。
 
-    acrylic 走 ACCENT_ENABLE_ACRYLICBLURBEHIND（Win10 1803+），mica 走 Win11 的
-    DWM 系统背景；Win10 选 mica 时退成 acrylic。返回 False 表示这台机器上做不了，
-    调用方要回退纯色底，别让窗口裸透明发黑。
+    mica 走 Win11 的 DWM 系统背景（22000+），acrylic 走系统背板（22621+）。
+    返回 False 表示这台机器上做不了：调用方要铺纯色底，别让窗口裸透明发黑。
+    Win10 一律 False——它的旧亚克力通路实测会出黑块与发灰。
     """
     if sys.platform != "win32":
         return False
@@ -400,9 +413,11 @@ def apply_windows_effect(window, material: str) -> bool:
     if material == "none":
         remove_windows_effect(window)
         return False
-    if material == "mica" and win11_mica_available():
-        if _apply_mica(window):
-            return True
-    if win10_acrylic_available():
-        return _apply_acrylic(window)
-    return False
+    if not windows_blur_supported():
+        # 之前存下过 acrylic/mica 的机器升级/降级后会走到这里：
+        # 把残留的模糊撤干净再交还纯色底，否则旧效果会透出来
+        remove_windows_effect(window)
+        return False
+    if material == "mica":
+        return _apply_mica(window)
+    return _apply_acrylic(window)

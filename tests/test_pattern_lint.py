@@ -631,3 +631,18 @@ def test_mobile_update_must_read_apk_asset_version():
     problems = lint_patterns._kt_problems(bad, "GitHubUpdate.kt")
     assert any("手机版更新漏版本" in x for x in problems)
     assert any("APK 版本未解析" in x for x in problems)
+
+
+def test_win10_acrylic_gate_rejected():
+    """能拦住旧写法：亚克力可用性按 Win10 1803 的 build 号放宽。"""
+    bad = ('WINDOWS_ACRYLIC_BUILD = 17134\n\n\n'
+           'def win10_acrylic_available():\n'
+           '    return build >= WINDOWS_ACRYLIC_BUILD\n')
+    problems = check(bad, "materials.py")
+    assert any("Win10 亚克力已停用" in p for p in problems), problems
+
+
+def test_materials_module_is_clean():
+    """当前库干净：只剩 Win11 的系统接口。"""
+    p = ROOT / "app" / "services" / "materials.py"
+    assert not any("Win10 亚克力已停用" in x for x in lint_patterns.check_file(p))
