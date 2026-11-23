@@ -1,7 +1,7 @@
 """手机同步弹窗：局域网直传（首选），中转作为兜底。
 
 界面要解决的核心问题：让用户在两秒内知道「现在该怎么把手机上的 PDF 送进来」。
-所以顺序是：状态 → 二维码/地址 → 收到的文件；不做没用的设置项。
+所以顺序是：状态 → 二维码/地址 → 已绑定设备 → 收到的文件；不做没用的设置项。
 
 局域网不可用（电脑没连网、或与手机不在同一网段）时，明确给出排查步骤，
 并把云端中转作为备选说明写在这里——不假装直传可用。
@@ -23,6 +23,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QScrollArea,
@@ -31,9 +32,12 @@ from PyQt5.QtWidgets import (
 )
 from qfluentwidgets import (
     BodyLabel,
+    CaptionLabel,
     FluentIcon as FIF,
+    SettingCard,
     StrongBodyLabel,
     ToolButton,
+    TransparentToolButton,
 )
 
 from app.services.lan_share import LanShare, Received, lan_addresses
@@ -172,16 +176,30 @@ class PhoneSyncDialog(FluentPanelDialog):
         self.device_title = BodyLabel("已绑定设备", self.widget)
         self.viewLayout.addWidget(self.device_title)
         self.device_box = QWidget(self.widget)
+        self.device_box.setStyleSheet("background: transparent;")
         self.device_lay = QVBoxLayout(self.device_box)
         self.device_lay.setContentsMargins(0, 0, 0, 0)
-        self.device_lay.setSpacing(4)
+        self.device_lay.setSpacing(6)
         self.device_scroll = QScrollArea(self.widget)
         self.device_scroll.setWidgetResizable(True)
+        # 默认的 QFrame 边框会在列表外围画一个空框：没有设备时就是截图里那块
+        # 「有边框的空白」。去掉边框和底色，只剩卡片本身成形。
+        self.device_scroll.setFrameShape(QFrame.NoFrame)
+        self.device_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }")
+        self.device_scroll.viewport().setStyleSheet("background: transparent;")
         self.device_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.device_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.device_scroll.setMaximumHeight(96)
+        # 两张卡片的高度：再多就滚动，弹窗不会跟着设备数量长高
+        self.device_scroll.setMaximumHeight(152)
         self.device_scroll.setWidget(self.device_box)
         self.viewLayout.addWidget(self.device_scroll)
+        # 没有设备时整块列表收起，只留一句话：scroll 的 sizeHint 会预留一块
+        # 空白，空状态看起来就是一个空框。
+        self.device_empty = CaptionLabel("还没有设备连接过", self.widget)
+        self.device_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.device_empty.setContentsMargins(0, 6, 0, 6)
+        self.viewLayout.addWidget(self.device_empty)
         self._refresh_devices()
 
         self.result_label = BodyLabel("", self.widget)
@@ -349,26 +367,28 @@ class PhoneSyncDialog(FluentPanelDialog):
         try:
             devices = paired_devices.list_devices()
         except (OSError, RuntimeError) as exc:
+            self.device_empty.hide()
+            self.device_scroll.show()
             self.device_lay.addWidget(BodyLabel(f"读取已绑定设备失败：{exc}", self.device_box))
             return
         if not devices:
-            self.device_lay.addWidget(BodyLabel("还没有设备连接过", self.device_box))
+            self.device_scroll.hide()
+            self.device_empty.show()
             return
+        self.device_empty.hide()
+        self.device_scroll.show()
         for dev in devices:
-            row = QWidget(self.device_box)
-            row_lay = QHBoxLayout(row)
-            row_lay.setContentsMargins(0, 0, 0, 0)
-            row_lay.setSpacing(8)
             when = datetime.fromtimestamp(dev.last_at or dev.paired_at).strftime("%m-%d %H:%M")
-            label = BodyLabel(f"{dev.name}（{dev.host or '手机'}）  {when}", row)
-            label.setWordWrap(True)
-            row_lay.addWidget(label, 1)
-            remove = ToolButton(FIF.DELETE, row)
+            card = SettingCard(FIF.PHONE, dev.name,
+                               f"{dev.host or '手机'}，最近连接 {when}", self.device_box)
+            remove = TransparentToolButton(FIF.DELETE, card)
             remove.setToolTip("解除绑定")
             remove.clicked.connect(
                 lambda _checked=False, d=dev: self._forget_device(d.name, d.host))
-            row_lay.addWidget(remove)
-            self.device_lay.addWidget(row)
+            card.hBoxLayout.addSpacing(8)
+            card.hBoxLayout.addWidget(remove)
+            card.hBoxLayout.setContentsMargins(16, 0, 12, 0)
+            self.device_lay.addWidget(card)
 
     def _forget_device(self, name: str, host: str):
         from app.services import paired_devices

@@ -167,8 +167,9 @@ def test_forget_device_updates_list(qapp_session, tmp_path, monkeypatch):
     try:
         dialog._forget_device("旧手机", "10.0.0.5")
         assert paired_devices.list_devices() == []
-        assert "还没有设备" in dialog.device_box.findChild(
-            __import__("PyQt5.QtWidgets", fromlist=["QLabel"]).QLabel).text()
+        assert dialog.device_empty.isVisibleTo(dialog)
+        assert "还没有设备" in dialog.device_empty.text()
+        assert not dialog.device_scroll.isVisibleTo(dialog)
     finally:
         dialog._cleanup()
         dialog.deleteLater()
@@ -192,3 +193,24 @@ def test_dialog_widens_with_host(qapp_session):
     narrow.deleteLater()
     wide._cleanup()
     wide.deleteLater()
+
+
+def test_devices_render_as_cards(qapp_session, tmp_path, monkeypatch):
+    """已绑定设备用卡片展示：名称、来源地址、最近时间、解除按钮各就各位。"""
+    from qfluentwidgets import SettingCard, TransparentToolButton
+
+    from app.services import paired_devices
+
+    monkeypatch.setattr(paired_devices, "PAIRED_FILE", str(tmp_path / "paired.json"))
+    paired_devices.remember("我的手机", "192.168.1.9")
+
+    dialog = _dialog()
+    try:
+        cards = dialog.device_box.findChildren(SettingCard)
+        assert [c.titleLabel.text() for c in cards] == ["我的手机"]
+        assert "192.168.1.9" in cards[0].contentLabel.text()
+        assert cards[0].findChildren(TransparentToolButton)
+        assert not dialog.device_empty.isVisibleTo(dialog)
+    finally:
+        dialog._cleanup()
+        dialog.deleteLater()
