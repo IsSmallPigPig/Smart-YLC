@@ -2659,3 +2659,31 @@ def test_browser_tab_aligns_to_system_button_and_retries(app, monkeypatch):
     monkeypatch.setattr(B, "native_button_center", lambda w: 24)
     B.BrowserWindow._sync_title_metrics(host)
     assert host._tab_top == 24 - half
+
+
+def test_message_title_column_fits_longest_title(app, isolated_store):
+    """标题列按本组最长标题算宽。
+
+    固定 84px 时「志愿书退回修改」这种 7 字类别名会被裁掉半截；列宽仍要
+    组内统一，胶囊标签才能从同一条竖线开始，所以宽度按组算一次。
+    """
+    import types
+
+    from PyQt5.QtGui import QFont
+    from qfluentwidgets import StrongBodyLabel
+
+    from app.ui import palette as P
+    from app.ui.messages_page import MessagesPage
+    from app.ui.page import theme_font
+
+    page = MessagesPage(FakeWindow())
+    long_view = types.SimpleNamespace(mobile="", content="", title="志愿书退回修改",
+                                      kind="archive")
+    short_view = types.SimpleNamespace(mobile="", content="", title="档案审核结果",
+                                       kind="archive")
+
+    probe = theme_font(StrongBodyLabel(""), P.FONT["body"], int(QFont.Weight.DemiBold))
+    need = probe.fontMetrics().horizontalAdvance("志愿书退回修改")
+    assert page._measure_title_width([long_view]) >= need
+    assert page._measure_title_width([]) == 84
+    assert page._measure_title_width([short_view]) < page._measure_title_width([long_view])

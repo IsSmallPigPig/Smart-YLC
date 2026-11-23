@@ -499,6 +499,7 @@ class MessagesPage(FluentPage):
         unread_total = sum(1 for v in self._views if self._is_unread(v))
         group = [v for v in base if v.kind == kind]
         self._filtered = group
+        self._title_w = self._measure_title_width(group)
         self._page = 0  # 换页签、换已读状态或改搜索词都从头看
         self.header.set_desc(
             f"共 {len(self._views)} 条，未读 {unread_total}，"
@@ -513,6 +514,22 @@ class MessagesPage(FluentPage):
                 on_done()
             return
         self._render_page(on_done)
+
+    def _measure_title_width(self, views: list) -> int:
+        """姓名/类别列宽：按本组最长标题算，别把「志愿书退回修改」裁掉。
+
+        列宽固定是为了让每行的胶囊标签从同一条竖线开始；按组算一次，翻页时
+        不跳。上限 180：再长也不该由这一列撑开，宁可让它自己省略。
+        """
+        probe = theme_font(StrongBodyLabel(""), P.FONT["body"], int(QFont.Weight.DemiBold))
+        metrics = probe.fontMetrics()
+        need = 84
+        for view in views:
+            name = guess_member_name(view.mobile, view.content, self._name_index)
+            text = name or clean_title(view.title) or KIND_LABEL[view.kind]
+            need = max(need, metrics.horizontalAdvance(text) + 2)
+        probe.deleteLater()
+        return min(need, 180)
 
     def _clear_list(self):
         self._render_token += 1  # 作废上一轮可能还挂着的续渲染
@@ -609,7 +626,7 @@ class MessagesPage(FluentPage):
         title_text = name or tag_title or KIND_LABEL[v.kind]
         title = theme_font(StrongBodyLabel(title_text), P.FONT["body"], int(QFont.Weight.DemiBold))
         # 姓名、类别、未读各占一列固定宽度，否则每行标签起点都不一样，看着参差不齐
-        title.setFixedWidth(84)
+        title.setFixedWidth(getattr(self, "_title_w", 84))
         head.addWidget(title, 0)
 
         def _tint_title(t=title, dim=not unread):
