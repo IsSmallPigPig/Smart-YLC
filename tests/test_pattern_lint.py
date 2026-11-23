@@ -713,3 +713,21 @@ def test_headless_module_is_clean():
     problems = lint_patterns.check_file(p)
     assert not any("CLI 输出被污染" in x for x in problems), problems
     assert not any("落盘结构分叉" in x for x in problems), problems
+
+
+def test_packaged_cli_must_be_built_and_installed():
+    """能拦住旧写法：只打 GUI 的 build.py 会让 Release 用户拿不到任何命令。"""
+    bad = ("cmd = ['-m', 'PyInstaller', '--windowed', 'main.py']\n"
+           "subprocess.run(cmd)\n")
+    problems = check(bad, "build.py")
+    assert any("打包产物没有命令行" in p for p in problems), problems
+    bad2 = ("cli_cmd = ['--console', 'cli.py']\n"
+            "subprocess.run(cli_cmd)\n")   # 打了但没装进产物
+    problems2 = check(bad2, "build.py")
+    assert any("打包产物没有命令行" in p for p in problems2), problems2
+
+
+def test_build_script_is_clean():
+    """当前库干净：GUI 与 CLI 两个入口都在，CLI 会装进 GUI 产物。"""
+    problems = lint_patterns.check_file(ROOT / "scripts" / "build.py")
+    assert not any("打包产物没有命令行" in p for p in problems), problems

@@ -6,6 +6,9 @@
   macOS     dist/智慧团委.app                    （包内可执行文件仍是 ASCII 的 SmartYouth）
   Linux     dist/SmartYouth/                     （onedir 目录；workflow 用 dpkg-deb 打 .deb）
 
+每个产物里还带一份 SmartYouthCLI（控制台版命令行），位置和调用方式见 README：
+只复制 exe 进 GUI 包，运行时与 GUI 共用同一份 _internal，不额外发一个 Release 产物。
+
 为什么换回 PyInstaller：
   PyMuPDF 2.x 把 SWIG 绑定写成一份 2.7MB 的 pymupdf/mupdf.py。Nuitka 把所有被导入的
   Python 模块编译成 C，单个模块就生成 100MB+ 的 module.pymupdf.mupdf.c，编译要 30 分钟
@@ -37,6 +40,7 @@ sys.path.insert(0, str(ROOT))
 APP_NAME = "SmartYouth"           # 文件名/包名，保持 ASCII
 DISPLAY_NAME = "智慧团委"
 BUNDLE_ID = "com.smallylc.smartyouth"
+CLI_NAME = "SmartYouthCLI"        # 随包分发的控制台入口，不单独发 Release 产物
 
 
 def version() -> str:
@@ -178,12 +182,78 @@ def build_command() -> list[str]:
     return cmd
 
 
+def cli_build_command() -> list[str]:
+    """第二个入口：控制台版 CLI，和 GUI 共用一个 onedir 运行时。
+
+    GUI 是 --windowed，Windows 上没有控制台，stdout 也不连终端；把命令塞进
+    GUI 的 argv 分支既拿不到输出，又会让双击启动弹黑窗口。所以单独打一个
+    --console 的可执行文件，只把 exe 复制进 GUI 包，运行时的 _internal 共用。
+    两边在同一次构建里用同一个 Python / PyInstaller，版本天然一致。
+
+    CLI 链是 Qt-free 的（lint 规则 34/36 守着），显式排除界面库既缩小体积，
+    也防止有人误把 QWidget 拉进命令链后横幅污染 --json。
+    """
+    dist = ROOT / "dist" / "_cli_build"
+    cmd = [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--onedir",
+        "--console",
+        f"--name={CLI_NAME}",
+        f"--distpath={dist}",
+        f"--workpath={ROOT / 'build' / '_cli_build'}",
+        f"--specpath={ROOT / 'build'}",
+        "--exclude-module=PyQt5",
+        "--exclude-module=qfluentwidgets",
+        "--exclude-module=PyQtWebEngine",
+        "--collect-all=numpy",
+        "--collect-all=cv2",
+        "--collect-all=pymupdf",
+        "--hidden-import=fitz",
+        "--hidden-import=cryptography",
+        "--hidden-import=cryptography.hazmat.backends.openssl.backend",
+    ]
+    cmd.append("cli.py")
+    return cmd
+
+
+def cli_source() -> Path:
+    """CLI 构建的 exe 落点（onedir 会在 distpath 下再开一层同名目录）。"""
+    name = CLI_NAME + (".exe" if sys.platform == "win32" else "")
+    return ROOT / "dist" / "_cli_build" / CLI_NAME / name
+
+
+def cli_destination(bundle: Path, platform_name: str | None = None) -> Path:
+    """CLI exe 在安装包里的位置：用户按系统从固定路径调用。"""
+    system = platform_name or sys.platform
+    name = CLI_NAME + (".exe" if system == "win32" else "")
+    if system == "darwin":
+        return bundle / "Contents" / "MacOS" / name
+    return bundle / name
+
+
+def _install_cli(bundle: Path) -> None:
+    src = cli_source()
+    if not src.is_file():
+        raise FileNotFoundError(f"CLI 可执行文件没打出来：{src}")
+    dst = cli_destination(bundle)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    dst.chmod(0o755)
+    shutil.rmtree(src.parent.parent, ignore_errors=True)
+    print(f"CLI：{dst}", flush=True)
+
+
 def _strip_previous() -> None:
     for target in (
         ROOT / f"{APP_NAME}.spec",       # PyInstaller 把 spec 写在 cwd（仓库根）
         ROOT / "build" / APP_NAME,       # PyInstaller 的分析缓存
+        ROOT / "build" / f"{CLI_NAME}.spec",
+        ROOT / "build" / "_cli_build",
         ROOT / "dist" / APP_NAME,
         ROOT / "dist" / DISPLAY_NAME,
+        ROOT / "dist" / "_cli_build",
     ):
         if target.is_dir():
             shutil.rmtree(target, ignore_errors=True)
@@ -294,8 +364,10 @@ def size_mb(path: Path) -> float:
 def main() -> int:
     dry = "--dry-run" in sys.argv
     cmd = build_command()
+    cli_cmd = cli_build_command()
     if dry:
         print(" ".join(cmd))
+        print(" ".join(cli_cmd))
         return 0
 
     _strip_previous()
@@ -324,6 +396,17 @@ def main() -> int:
         final = _postprocess_linux()
     if final is None:
         print("没找到打包产物（dist 下既没有 SmartYouth 也没有 *.app）", file=sys.stderr)
+        return 1
+
+    print("PyInstaller 开始打包命令行…", flush=True)
+    result = subprocess.run(cli_cmd, cwd=ROOT)
+    if result.returncode != 0:
+        print(f"命令行打包失败，退出码 {result.returncode}", file=sys.stderr)
+        return result.returncode
+    try:
+        _install_cli(final)
+    except (OSError, FileNotFoundError) as exc:
+        print(f"命令行没装进产物：{exc}", file=sys.stderr)
         return 1
 
     print(f"产物：{final}  约 {size_mb(final):.0f} MB")

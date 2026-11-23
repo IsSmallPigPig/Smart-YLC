@@ -60,6 +60,13 @@ jobs:
         # 脚本负责资源、bundle id、版本，以及把产物改名成 dist/智慧团委.app
         run: python scripts/build.py
 
+      - name: 冒烟检查（打包后的命令行）
+        run: |
+          set -euo pipefail
+          CLI="dist/智慧团委.app/Contents/MacOS/SmartYouthCLI"
+          test -x "$CLI"
+          "$CLI" --json version | python -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] and d["data"]["version"]; print("命令行版本", d["data"]["version"])'
+
       - name: 校验应用图标
         run: |
           PLIST="dist/$APP_DISPLAY_NAME.app/Contents/Info.plist"
@@ -216,6 +223,16 @@ jobs:
           Write-Host $text
           if ($text -notmatch "SMOKE OK") { throw "冒烟结果里没有 SMOKE OK" }
 
+      - name: 冒烟检查（打包后的命令行）
+        shell: pwsh
+        run: |
+          $cli = "dist\SmartYouth\SmartYouthCLI.exe"
+          if (-not (Test-Path $cli)) { throw "安装包里没有 $cli" }
+          $out = & $cli --json version | Out-String
+          $data = $out | ConvertFrom-Json
+          if (-not $data.ok) { throw "命令行冒烟失败：$($data.error.message)" }
+          Write-Host "命令行版本 $($data.data.version)"
+
       - name: 准备代码签名证书
         id: cert
         # 证书全平台通用，只由 64 位变体生成一份，避免四份重复的 .cer
@@ -361,6 +378,13 @@ jobs:
       - name: PyInstaller 打包（onedir）
         # 脚本在 Linux 上输出 dist/SmartYouth/，并把图标铺进 share/icons/hicolor
         run: python scripts/build.py
+
+      - name: 冒烟检查（打包后的命令行）
+        run: |
+          set -euo pipefail
+          CLI="dist/SmartYouth/SmartYouthCLI"
+          test -x "$CLI"
+          "$CLI" --json version | python -c 'import json,sys; d=json.load(sys.stdin); assert d["ok"] and d["data"]["version"]; print("命令行版本", d["data"]["version"])'
 
       - name: 冒烟检查（Xvfb 真实 X11）
         # 分析期 import 过了不算数：这里验证冻结产物真能构造主窗口。

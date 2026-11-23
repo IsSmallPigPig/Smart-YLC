@@ -26,16 +26,16 @@ def test_build_includes_assets_and_qfluentwidgets():
     out = _dry_run()
     assert "--collect-all=qfluentwidgets" in out
     assert "--add-data=app/assets" in out
-    assert "main.py" in out.splitlines()[-1]
+    assert any(line.endswith("main.py") for line in out.splitlines())
 
 
 def test_build_collects_binary_heavy_packages():
     """numpy / cv2 / pymupdf 都要整包收：只靠 hook 时它们常缺子模块或原生库。"""
-    out = _dry_run().lower()
-    assert "nofollow" not in out
-    assert "exclude-module" not in out
+    gui = _dry_run().splitlines()[0].lower()
+    assert "nofollow" not in gui
+    assert "exclude-module" not in gui
     for pkg in ("numpy", "cv2", "pymupdf"):
-        assert f"--collect-all={pkg}" in out
+        assert f"--collect-all={pkg}" in gui
 
 
 def test_build_targets_current_platform():
@@ -207,3 +207,60 @@ def test_crash_report_survives_windowed_stderr(tmp_path, monkeypatch):
     app_log._stderr("fallback：中文路径报告")
     assert (tmp_path / "fatal.log").read_text(encoding="utf-8").endswith(
         "fallback：中文路径报告\n")
+
+
+def test_build_includes_console_cli():
+    """Release 用户也要能跑命令：CLI 是第二个 --console 入口，不是源码专属。"""
+    out = _dry_run()
+    lines = out.splitlines()
+    assert len(lines) == 2
+    cli = lines[1]
+    assert "-m PyInstaller" in cli
+    assert "--console" in cli and "--windowed" not in cli
+    assert "cli.py" in cli
+    assert "--name=SmartYouthCLI" in cli
+    assert "--exclude-module=PyQt5" in cli
+    assert "cli_destination" not in cli      # 命令里不塞 Python 代码
+
+
+def test_cli_destination_inside_installed_app():
+    """三端路径固定，README 才能给出一条能照抄的命令。"""
+    import scripts.build as build
+
+    bundle = Path("/opt/SmartYouth")
+    assert build.cli_destination(bundle, "linux") == bundle / "SmartYouthCLI"
+    assert build.cli_destination(bundle, "win32") == bundle / "SmartYouthCLI.exe"
+
+    app = Path("/Applications/智慧团委.app")
+    assert build.cli_destination(app, "darwin") == (
+        app / "Contents" / "MacOS" / "SmartYouthCLI")
+
+
+def test_cli_build_shares_gui_runtime(tmp_path, monkeypatch):
+    """只把 exe 复制进 GUI 包，不另带一份 _internal——体积和版本都跟 GUI 一致。"""
+    import scripts.build as build
+
+    src_dir = tmp_path / "dist" / "_cli_build" / "SmartYouthCLI"
+    src_dir.mkdir(parents=True)
+    exe = src_dir / "SmartYouthCLI"
+    exe.write_bytes(b"exe")
+    (src_dir / "_internal").mkdir()
+    (src_dir / "_internal" / "libpython.so").write_bytes(b"shared")
+    bundle = tmp_path / "dist" / "SmartYouth"
+    bundle.mkdir()
+
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    build._install_cli(bundle)
+    dest = build.cli_destination(bundle)
+    assert dest.read_bytes() == b"exe"
+    assert not (bundle / "_internal").exists()
+    assert not (tmp_path / "dist" / "_cli_build").exists()
+
+
+def test_release_workflow_smokes_packaged_cli():
+    """构建脚本产出了 CLI 还不够：CI 要在三端真跑一次，防止空壳进 Release。"""
+    text = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert text.count("冒烟检查（打包后的命令行）") == 3
+    assert "SmartYouthCLI.exe" in text
+    assert "Contents/MacOS/SmartYouthCLI" in text
+    assert "dist/SmartYouth/SmartYouthCLI" in text

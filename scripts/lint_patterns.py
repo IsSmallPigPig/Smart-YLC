@@ -499,6 +499,19 @@ def check_file(path: Path) -> list[str]:
                     f"{rel}:{line} [更新按钮绕过高亮] 直接用 {call[:-1]}) 不会切到主色按钮；"
                     "改用 self._set_action(文案, primary=...)，发现新版本才亮起来")
 
+    # 规则 37（2026-11-23 打包产物用不了命令行）：Release 只打 GUI 入口时，
+    # 用户拿到 dmg / exe / deb 后没有任何办法跑 cli.py——源码不在包里。
+    # 必须在同一次构建里打一个 --console 的 CLI 入口并装进 GUI 包。
+    if rel.endswith("build.py"):
+        for token, hint in (
+            ('"--console"', "CLI 必须是控制台程序，--windowed 在 Windows 上没有 stdout"),
+            ('"cli.py"', "CLI 入口得单独打进包，只打 main.py 用户拿不到命令"),
+            ("_install_cli(final)", "打完还要把 CLI 复制进 GUI 产物，否则它只躺在构建目录里"),
+        ):
+            if token not in source:
+                problems.append(
+                    f"{rel} [打包产物没有命令行] 缺少 {token}：{hint}")
+
     return problems
 
 

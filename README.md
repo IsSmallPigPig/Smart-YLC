@@ -308,6 +308,21 @@ python3 cli.py upload ~/Downloads/档案                # 不带 --yes：预演�
 python3 cli.py upload ~/Downloads/档案 --yes          # 确认后：压缩副本→上传→审核
 ```
 
+安装包里也带命令行，不用另装 Python。打开终端，按系统选一条（路径是默认安装位置）：
+
+```bash
+# macOS：从 dmg 把「智慧团委」拖进应用程序后
+"/Applications/智慧团委.app/Contents/MacOS/SmartYouthCLI" scan ~/Downloads/档案 --json
+
+# Windows：默认装到 %LOCALAPPDATA%\Programs\SmartYouth
+"%LOCALAPPDATA%\Programs\SmartYouth\SmartYouthCLI.exe" scan "%USERPROFILE%\Downloads\档案" --json
+
+# Linux：.deb 默认装到 /opt/SmartYouth
+/opt/SmartYouth/SmartYouthCLI scan ~/Downloads/档案 --json
+```
+
+命令行与界面读写同一份配置（`~/.gd12355-helper/config.json`），界面里同步的名单、登录状态，命令行直接可用。下文示例里的 `python3 cli.py`，在安装包里换成上面对应的路径。
+
 `scan` 和 `cells` 默认只读，不改文件、不写缓存、不联网。`upload` 不带 `--yes` 时只报告会提交哪些支部、多少份；带 `--yes` 才真的压缩、上传、请求自动审核。其余会写盘或改配置的命令（改名、同步、导入、恢复备份、开机自启……）也遵循同一约定。
 
 加 `--json` 后标准输出只有一个对象，别的文字都走标准错误：

@@ -1490,7 +1490,21 @@ def _text(command: str, data: dict, warnings: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _utf8_console() -> None:
+    """打包版在 Windows 终端里默认用 GBK，中文 JSON 会直接抛编码错。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            if (stream.encoding or "").lower().replace("-", "") != "utf8":
+                reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_console()
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
     try:
