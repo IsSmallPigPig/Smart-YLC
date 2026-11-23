@@ -1,5 +1,0 @@
-<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-<map>
-    <string name="accounts_json">[{&quot;userName&quot;:&quot;ylc00000&quot;,&quot;password&quot;:&quot;测试账号-勿用于真实登录&quot;,&quot;remark&quot;:&quot;压测 123 人&quot;}]</string>
-    <string name="active_user">ylc00000</string>
-</map>

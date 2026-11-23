@@ -27,6 +27,8 @@
 * **导出按需组合。** 五类内容（团员信息、未缴费、无档案、转接申请、信息错误）任选，始终导出一个 xlsx：分班时一个班一张表、各类异常都写在这张表的「异常」列里，合并时每项内容一张子表或全部合成一张。
 * **跨学校可用。** 学号与账号编号规则可自定义，占位符描述年级、班号与忽略位，改示例编号就能实时看到解析结果。规则可以导出成 JSON 给别的学校用。
 * **该省的都省了。** 已保存的会话优先复用，登录状态按账号 4 小时节流；更新在后台下载，装好之后才提示你确认重启，不打断手头的活。
+* **三条分支各放一端。** 这个仓库按平台分分支：`main` 只放桌面端，`mobile-v2` 只放手机端，`server` 只放云端中转与备份函数。拉哪条分支就只看到哪一端的代码与构建说明。
+
 * **手机直接传档案。** 同一 Wi-Fi 下扫二维码就能把手机里的 PDF 送到电脑；不在同一网络时用中转，走同一套配置提取码。详见「手机与电脑协同」。
 
 ## 界面预览
@@ -159,7 +161,7 @@ Windows 端用 [Inno Setup](https://jrsoftware.org/isinfo.php) 把 PyInstaller �
 
 ## 手机端
 
-Android 原生端用 Kotlin + Compose + Miuix 构建，源码在 `mobile/`，构建说明见 `mobile/README.md`。当前版本 2.1.1，安装包随桌面端 Release 一起发布。
+Android 原生端用 Kotlin + Compose + Miuix 构建，源码在同仓库的 `mobile-v2` 分支，构建说明见那条分支的 README。当前版本 2.2.1，安装包随桌面端 Release 一起发布。
 
 底部五个标签：首页、名单、扫描、消息、我的。
 
@@ -274,7 +276,7 @@ Android 原生端用 Kotlin + Compose + Miuix 构建，源码在 `mobile/`，构
 - 助手拉不起来或安装失败时保留更新包，按钮回到「打开目录」，并在系统通知里说明需要手动安装。
 - macOS 打包版的后台提醒走系统原生通知，点击会回到对应页面；源码运行没有 bundle id 时回落到应用内浮窗。首次发送需要允许通知权限。
 - macOS 上 Python 不读系统钥匙串，检查前会把系统受信任根证书补进 `SSLContext`，证书校验始终开启。
-- 推 `v*` tag 会触发 `.github/workflows/release.yml`，构建 macOS、Windows 10/11（32/64 位）、Windows 7（32/64 位）、Linux 六个桌面安装包，以及 Android APK，一起发布到 Release。
+- 推 `v*` tag 会触发 `.github/workflows/release.yml`，构建 macOS、Windows 10/11（32/64 位）、Windows 7（32/64 位）、Linux 六个桌面安装包，以及 Android APK，一起发布到 Release。APK 的源码取自 `mobile-v2` 分支，构建日志里会打出发的是哪个提交。
 
 ## 数据与配置
 

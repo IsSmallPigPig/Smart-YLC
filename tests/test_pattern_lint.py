@@ -18,6 +18,10 @@ from scripts import lint_patterns  # noqa: E402
 
 TMP = ROOT / "tests" / "_lint_tmp"
 
+# 手机端源码只在 mobile-v2 分支：本分支跑不动这四条 Kotlin 规则，跳过而不是报"文件不存在"。
+MOBILE = ROOT / "mobile"
+needs_mobile = pytest.mark.skipif(not MOBILE.exists(), reason="手机端源码在 mobile-v2 分支")
+
 
 def check(src: str, name: str = "sample.py") -> list[str]:
     TMP.mkdir(exist_ok=True)
@@ -572,6 +576,7 @@ def test_pair_must_notify_and_record_device():
     assert any("配对无提示" in x for x in check(bad, "lan_share.py"))
 
 
+@needs_mobile
 def test_mobile_pair_must_keep_session_and_save_binding():
     """手机配对后必须落盘绑定且不能结束会话，否则退出页面就断连。"""
     p = (ROOT / "mobile" / "app" / "src" / "main" / "java" /
@@ -588,6 +593,7 @@ def test_mobile_pair_must_keep_session_and_save_binding():
     assert any("配对后结束会话" in x for x in problems)
 
 
+@needs_mobile
 def test_landscape_pager_must_fill_width():
     """横屏主内容不能被 widthIn(max=...) 限宽，否则卡片两侧留白。"""
     p = ROOT / "mobile" / "app" / "src" / "main" / "java" / "com" / "smallylc" / "smartyouth" / "ui" / "MainActivity.kt"
@@ -604,6 +610,7 @@ def test_landscape_pager_must_fill_width():
                for x in lint_patterns._kt_problems(bad, "MainActivity.kt"))
 
 
+@needs_mobile
 def test_kotlin_semantic_color_import():
     """用语义色必须 import，本地编不了 Kotlin，漏了要到 CI 才炸。"""
     root = ROOT / "mobile" / "app" / "src"
@@ -619,6 +626,7 @@ def test_kotlin_semantic_color_import():
     assert any("ToneGreen" in x and "语义色漏 import" in x for x in problems)
 
 
+@needs_mobile
 def test_mobile_update_must_read_apk_asset_version():
     """手机版更新不能写死 mobile-v tag，统一 tag 里的 APK 也要认。"""
     p = (ROOT / "mobile" / "app" / "src" / "main" / "java" /

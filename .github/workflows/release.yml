@@ -419,6 +419,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: 取手机端源码
+        # 手机端在 mobile-v2 分支，本分支只放桌面端。tag 打在 main 上，
+        # 所以这里显式取那一条分支到 mobile/，构建步骤的相对路径不用改。
+        uses: actions/checkout@v5
+        with:
+          ref: mobile-v2
+          path: mobile
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -482,6 +490,7 @@ jobs:
           sudo mkdir -p /Volumes/AnkoQAQ/kotlin-dev/build/smart-youth
           sudo chown -R "$USER":"$(id -g)" /Volumes/AnkoQAQ
           cd mobile
+          echo "手机端源码：$(git rev-parse --short HEAD) $(git log -1 --format=%s)"
           ./gradlew :app:assembleDebug --no-daemon --stacktrace
           VER=$(sed -n 's/.*appVersionName"\] = "\([^"]*\)".*/\1/p' build.gradle.kts)
           test -n "$VER" || { echo "::error::读不到 appVersionName"; exit 1; }
