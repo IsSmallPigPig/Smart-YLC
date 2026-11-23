@@ -7,6 +7,17 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.2.4
+
+- [68891c2d] feat: 命令行覆盖全部业务操作
+- [a1bdb4c6] feat: 发现新版本时更新按钮换成主色
+- [8c3b62b8] fix: 消息标题列按最长标题算宽
+- [0e008b35] feat: 命令行入口，供脚本与 AI 调用
+- [8bb9c822] feat: 界面字体换成 Allo，中文回落 MiSans
+- [73896b6e] refactor: 分支只保留桌面端代码
+
+@IsSmallPigPig
+
 ## v1.2.3
 
 - [ea46159] fix: 已绑定设备改用卡片列表
