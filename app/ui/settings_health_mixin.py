@@ -146,7 +146,7 @@ class SettingsHealthMixin:
         detail = "，".join(f"{k} {v}" for k, v in
                           sorted(buckets.items(), key=lambda kv: -kv[1]))
         InfoBar.warning(f"{bad} 个账号异常",
-                        f"{detail}；点账号行的健康状态可打开网页端重新登录",
+                        f"{detail}；点账号行的健康状态恢复登录",
                         duration=9000, parent=self)
 
     def _on_account_checked(self, user: str, status: str, message: str):

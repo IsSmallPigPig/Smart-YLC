@@ -83,6 +83,12 @@ def _pick(raw: dict, keys: list[str]):
     return None
 
 
+def _has(raw: dict, keys: list[str]) -> bool:
+    """字段是否真的没返回；返回 null 也算返回了，交给枚举翻译处理。"""
+    lower = {str(k).lower() for k in raw}
+    return any(k in raw or k.lower() in lower for k in keys)
+
+
 def _str(v) -> str:
     if v is None or isinstance(v, (dict, list)):
         return ""
@@ -142,7 +148,8 @@ def parse_member(raw: dict, oid: str = "") -> tuple[MemberRecord, list[Diagnosti
         raise ValueError(f"接口返回缺少姓名或手机号码字段，无法识别团员：{str(raw)[:200]}")
 
     for key in _CRITICAL:
-        if get(key) is None:
+        # 字段在、值是 null 是正常的「未采集」；只有键真的消失才报接口漂移。
+        if not _has(raw, ALIASES.get(key, [key])):
             diagnostics.append(Diagnostic(
                 "warn", "parse", f"{name}({mobile})", "PARSE_DRIFT",
                 f"接口未返回「{key}」字段，该字段按空值参与比对，可能误报；请复核字段别名表",

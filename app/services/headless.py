@@ -330,7 +330,7 @@ def _login_for_upload(account: str, password: str) -> tuple[object, str]:
     if kind == "cooldown":
         return None, msg
     if kind == "captcha":
-        return None, "需要验证码（密码失败过多），请先在网页端登录一次"
+        return None, "需要验证码（密码失败过多），在界面系统配置双击该账号填写"
     return None, msg or "登录失败"
 
 

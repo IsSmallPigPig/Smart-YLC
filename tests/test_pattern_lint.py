@@ -731,3 +731,17 @@ def test_build_script_is_clean():
     """当前库干净：GUI 与 CLI 两个入口都在，CLI 会装进 GUI 产物。"""
     problems = lint_patterns.check_file(ROOT / "scripts" / "build.py")
     assert not any("打包产物没有命令行" in p for p in problems), problems
+
+
+def test_field_null_is_not_missing_key():
+    """能拦住旧写法：get(key) is None 把正常的 null 状态报成接口漂移。"""
+    bad = ("for key in _CRITICAL:\n"
+           "    if get(key) is None:\n"
+           "        diagnostics.append(key)\n")
+    problems = check(bad, "field_map.py")
+    assert any("字段 null 被当成缺失" in p for p in problems), problems
+
+
+def test_field_map_is_clean():
+    problems = lint_patterns.check_file(ROOT / "app" / "domain" / "field_map.py")
+    assert not any("字段 null 被当成缺失" in p for p in problems), problems

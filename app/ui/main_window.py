@@ -527,7 +527,7 @@ class MainWindow(MainWindowTrayMixin, MSFluentWindow):
         if not accounts:
             if not silent:
                 hint = (f"{len(excluded)} 个账号均被标记为异常，"
-                        "请先处理（测活或打开网页端重新登录）") if excluded \
+                        "请先处理（测活或双击异常账号恢复）") if excluded \
                     else "先在系统配置添加团支部账号"
                 InfoBar.warning("没有可用账号", hint, duration=6000, parent=self)
             return False

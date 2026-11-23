@@ -54,12 +54,15 @@ from app.ui import palette as P
 from app.domain.naming import Roster
 from app.domain.org_rule import OrgRule, RuleError, describe_code
 from app.domain.transfer import is_graduated
-from app.services import notify_schedule, store
+from app.services import login_gate, notify_schedule, store
 from app.domain.account_health import HEALTH_LABEL, HEALTH_ROLE
 
 # 表格里用的短标签：完整说明（含处理办法）放 tooltip
 HEALTH_SHORT = {"captcha": "需验证码", "cooldown": "登录冷却"}
+# 这几种状态用「密码 + 验证码」弹窗恢复；其余异常仍交给网页端
+CAPTCHA_STATES = {"captcha", "failed", "cooldown"}
 from app.services.api import SiteClient
+from app.ui.captcha_dialog import CaptchaLoginDialog
 
 THEME_INDEX = {"auto": 0, "light": 1, "dark": 2}
 MATERIAL_ORDER = ("none", "acrylic", "mica")   # 下拉框顺序，与 _material_index 一致
@@ -509,8 +512,10 @@ class SettingsAccountMixin:
             health_item = QTableWidgetItem(HEALTH_SHORT.get(status, full))
             health_item.setFlags(self.READONLY_FLAGS)
             health_item.setForeground(P.fg(HEALTH_ROLE.get(status, "muted")))
-            set_tip(health_item, full if status == "ok"
-                                   else f"{full}\n点这一格用内嵌浏览器打开，手动登录一次即可恢复")
+            hint = ("点这一格填密码和验证码，登录成功后恢复"
+                    if status in CAPTCHA_STATES
+                    else "点这一格用内嵌浏览器打开，手动登录一次即可恢复")
+            set_tip(health_item, full if status == "ok" else f"{full}\n{hint}")
             self.table.setItem(i, 6, health_item)
             checked = h.get("checkedAt", "")
             stamp = checked.replace("T", " ")[:19] if checked else ""
@@ -609,16 +614,54 @@ class SettingsAccountMixin:
             self._save_config()
 
     def open_web_for(self, user: str):
-        """在「账号网页」窗口里打开指定账号。
-
-        站点遇到验证码或风控时接口登不上，只能在浏览器里人工输一次；表格里点
-        异常的健康状态、双击某一行都走这里。
-        """
+        """在「账号网页」窗口里打开指定账号。"""
         window = getattr(self, "window_ref", None)
         if window is None or not hasattr(window, "open_browser"):
             InfoBar.warning("无法打开", "账号网页窗口尚未就绪", duration=3000, parent=self)
             return
         window.open_browser(user)
+
+    def _open_captcha_for(self, user: str):
+        """弹验证码登录：账号行双击或点健康状态时走这里。"""
+        acc = next((a for a in self.accounts if a.get("userName") == user), None)
+        if acc is None:
+            return
+        health = acc.get("health") or {}
+        reason = str(health.get("message") or "").strip()
+        if health.get("status") in ("captcha", "cooldown"):
+            reason = "需要输入图片验证码"
+        label = user + (f"（{acc.get('remark')}）" if acc.get("remark") else "")
+        dialog = CaptchaLoginDialog(
+            SiteClient(user, str(acc.get("password") or "")), label, reason, self,
+            on_success=lambda password, client, u=user: self._captcha_login_done(
+                u, password, client),
+            on_browser=lambda u=user: self.open_web_for(u))
+        self._captcha_dialog = dialog
+        dialog.finished.connect(lambda *_: setattr(self, "_captcha_dialog", None))
+        dialog.show()
+
+    def _captcha_login_done(self, user: str, password: str, client):
+        """验证码登录成功：写回新密码、会话与健康状态。"""
+        acc = next((a for a in self.accounts if a.get("userName") == user), None)
+        if acc is None:
+            return
+        acc["password"] = password
+        acc["health"] = {
+            "status": "ok", "message": "手动登录成功",
+            "checkedAt": datetime.now().isoformat(timespec="seconds"),
+        }
+        try:
+            login_gate.record_manual_login(client)
+            login_gate.clear_browser_sessions([user])
+        except (OSError, RuntimeError) as exc:
+            InfoBar.warning("登录成功，会话没保存", str(exc), duration=5000, parent=self)
+        self._client = None
+        try:
+            self._save_config()
+        except (OSError, RuntimeError) as exc:
+            InfoBar.warning("账号已登录，配置没写回", str(exc), duration=5000, parent=self)
+        self._refresh_table()
+        InfoBar.success("登录成功", f"{user} 已恢复登录状态", duration=4000, parent=self)
 
     def _user_at_row(self, row: int) -> str:
         if 0 <= row < len(self.accounts):
@@ -626,21 +669,31 @@ class SettingsAccountMixin:
         return ""
 
     def _on_cell_clicked(self, row: int, col: int):
-        """健康状态不是正常时，点这一格就打开内嵌浏览器手动登录。"""
+        """健康状态不是正常时，点这一格恢复登录。"""
         if col != 6:
             return
         user = self._user_at_row(row)
         acc = next((a for a in self.accounts if a.get("userName") == user), None)
         if not user or acc is None:
             return
-        if (acc.get("health") or {}).get("status", "unknown") == "ok":
+        status = (acc.get("health") or {}).get("status", "unknown")
+        if status == "ok":
             return
-        self.open_web_for(user)
+        if status in CAPTCHA_STATES:
+            self._open_captcha_for(user)
+        else:
+            self.open_web_for(user)
 
     def _on_cell_double_clicked(self, row: int, col: int):
-        """双击任意一行：直接打开这个账号的内嵌浏览器。"""
+        """双击账号行：验证码类异常直接弹窗，其余打开内嵌浏览器。"""
         user = self._user_at_row(row)
-        if user:
+        if not user:
+            return
+        acc = next((a for a in self.accounts if a.get("userName") == user), None)
+        status = ((acc or {}).get("health") or {}).get("status", "unknown")
+        if status in CAPTCHA_STATES:
+            self._open_captcha_for(user)
+        else:
             self.open_web_for(user)
 
     def _open_web(self):

@@ -512,6 +512,15 @@ def check_file(path: Path) -> list[str]:
                 problems.append(
                     f"{rel} [打包产物没有命令行] 缺少 {token}：{hint}")
 
+    # 规则 38（2026-11-24 接口 null 被当成字段消失）：站点对未采集的照片状态
+    # 返回 null，不是没返回字段。用 get(key) is None 判断会把用户正常状态刷成
+    # 一屏 PARSE_DRIFT，还把「未上传」误报成接口漂移。键是否存在要用 _has。
+    if rel.endswith("field_map.py") and "if get(key) is None:" in source:
+        line = source.count("\n", 0, source.find("if get(key) is None:")) + 1
+        problems.append(
+            f"{rel}:{line} [字段 null 被当成缺失] get() 同时吞掉「键不存在」和"
+            "「值为 null」；改用 _has(raw, ALIASES[...]) 判断键是否存在")
+
     return problems
 
 

@@ -113,7 +113,7 @@ class UploadWorker(QThread):
         if kind == "cooldown":
             return None, msg
         if kind == "captcha":
-            return None, "需要验证码（密码失败过多），请先在网页端登录一次"
+            return None, "需要验证码（密码失败过多），在系统配置双击该账号填写"
         return None, msg or "登录失败"
 
     def _member_map(self, client, account: str) -> dict:

@@ -30,7 +30,7 @@ def run_daily_check() -> tuple[bool, str]:
         if not verdict.ok:
             kind = (verdict.data or {}).get("kind") if isinstance(verdict.data, dict) else ""
             if kind == "captcha":
-                return False, f"账号 {acc['userName']} 需要验证码（先在网页端登录一次）"
+                return False, f"账号 {acc['userName']} 需要验证码（在系统配置双击该账号填写）"
             return False, f"账号 {acc['userName']} 登录失败：{verdict.message}"
 
     members, _ = client.get_all_members()

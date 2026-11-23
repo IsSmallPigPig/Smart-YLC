@@ -110,6 +110,15 @@ def _record_login_ok(client) -> None:
     save_session(client)
 
 
+def record_manual_login(client) -> None:
+    """用户在验证码弹窗里登录成功：清掉验证码/风控冷却并保存会话。
+
+    自动链路下一次探测就能复用这份会话；不清冷却会让账号在弹窗登录后
+    仍被闸门挡一小时，用户看到的就是「明明登录成功了，状态还是需验证码」。
+    """
+    _record_login_ok(client)
+
+
 def _record_cooldown(user: str, key: str) -> None:
     until = time.time() + COOLDOWN_SECONDS
     _set_gate(user, lambda st, key=key, until=until: st.update(

@@ -14,7 +14,7 @@ from __future__ import annotations
 HEALTH_LABEL = {
     "ok": "正常",
     "failed": "密码错误",
-    "captcha": "需验证码（先去网页端登录一次）",
+    "captcha": "需验证码（双击账号行恢复）",
     "cooldown": "登录冷却（验证码/风控，1 小时后自动重试）",
     "passwordChange": "需改密（EXPIREDPASS/WEAKPASS）",
     "needMemberName": "需姓名校验",
