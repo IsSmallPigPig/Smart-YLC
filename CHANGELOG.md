@@ -7,6 +7,14 @@
 发版说明只贴本版本这一段（见 `.github/workflows/release.yml`），历史版本留在
 文件里备查。
 
+## v1.2.3
+
+- [ea46159] fix: 已绑定设备改用卡片列表
+- [153ee2b] fix: Windows 10 不再启用窗口模糊
+- [b1557dd] fix(mobile): 更新检查识别统一 tag 里的 APK
+
+@IsSmallPigPig
+
 ## v1.2.2
 
 - [268c5cf] feat(mobile): 配对绑定持久化，新档案默认传电脑
