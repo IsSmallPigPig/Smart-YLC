@@ -10,6 +10,9 @@ import sys
 
 from qfluentwidgets import setFontFamilies, setTheme, Theme, setThemeColor
 
+# 字体清单单独放在 fonts.py：命令行要读这份常量，不能连带 import Qt。
+from app.fonts import CJK_FAMILY, FONT_FAMILY, FONT_FILES, FONTS  # noqa: F401
+
 THEME_MODES = {"auto": Theme.AUTO, "light": Theme.LIGHT, "dark": Theme.DARK}
 
 
@@ -19,30 +22,6 @@ def apply_theme_mode(mode: str) -> Theme:
     setTheme(theme)
     return theme
 
-
-# 内置字体：MiSans（小米，全球免费商用，随程序打包）。
-#
-# 中文、拉丁字母用 MiSans 原字形（比例字形，排版自然）；数字用字体自带的
-# `.tf`（tabular figures）字形，天然等宽——统计值实时跳动时不会左右抖，
-# `245 / 260`、`13 / 52 人` 这类并排数值成列。
-#
-# 数字等宽不动用 OpenType 特性：PyQt5 5.15 没有 QFont.setFeature，开不了
-# `tnum`。打包前已把 cmap 的 U+0030–U+0039 指到 `.tf` 字形（见同目录
-# LICENSE-MiSans.txt），字形轮廓未改。
-#
-# 注册四个字重而不是只注册 Regular：界面用了 Normal / Medium / DemiBold / Bold
-# 四档，只给一个文件的话 Qt 会合成假粗体（笔画糊、字宽也变）。
-FONT_FAMILY = "MiSans"
-FONT_FILES = (
-    "MiSans-Regular.ttf",
-    "MiSans-Medium.ttf",
-    "MiSans-Demibold.ttf",
-    "MiSans-Bold.ttf",
-)
-FONTS = {
-    "darwin": [FONT_FAMILY, "PingFang SC"],
-    "win32": [FONT_FAMILY, "Microsoft YaHei UI", "Microsoft YaHei"],
-}
 
 _UNSET = object()
 _REGISTERED_FAMILY = _UNSET
@@ -99,10 +78,12 @@ def _apply_font(families: list[str] | None) -> None:
 
     font = QApplication.font()
     if families:
-        # 用 setFamily 而不是 setFamilies：Qt5 在 macOS 上 setFamilies 对
-        # QApplication.setFont 不生效（读回来还是 .AppleSystemUIFont），
-        # 只有单族名才会真正换掉界面字体；族栈仍交给 setFontFamilies 兜底。
+        # 先 setFamily 让界面字体真正换掉（Qt5 在 macOS 上只给 setFamilies 时
+        # 读回来还是 .AppleSystemUIFont），再补族栈：Allo 没有汉字，缺字形时
+        # 靠这份族栈逐字回落到 MiSans，而不是系统默认中文字体。
         font.setFamily(families[0])
+        if hasattr(font, "setFamilies"):
+            font.setFamilies(families)
     font.setStyleStrategy(font.styleStrategy() | QFont.StyleStrategy.PreferAntialias)
     QApplication.setFont(font)
 

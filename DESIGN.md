@@ -91,29 +91,36 @@
 
 说明文字统一用 `note_label()`（深浅各一档灰），不要自己写 `#9ca3af` 之类。
 
-**字体：MiSans（中文与字母）+ 等宽数字**。打包 `MiSans` 四个字重
-（`app/assets/fonts/`，小米官方声明全球免费商用，说明同目录），启动时注册。
+**字体：Allo（拉丁字母与数字）+ MiSans（中文）**。两套字体随程序打包
+（`app/assets/fonts/`），启动时注册，字体栈是 `Allo → MiSans`。
 
-分工很明确：
+分工：
 
-- **中文与拉丁字母用 MiSans 原字形**（比例字形）。排版自然，长句读起来不费劲；
-  汉字本身在 MiSans 里就是同宽的，中文排版不会因此歪。
+- **拉丁字母与数字用 Allo**（OFL，从 Inter 重绘，为屏幕与界面调过光学尺寸）。
+- **汉字回落 MiSans**：Allo 不含汉字，Qt 按字形逐字落到族栈里的第二个字体。
+  汉字本身就是同宽的，中文排版不会因此歪。
 - **数字用等宽字形**。统计值实时跳动时每一位宽度不变，不会左右晃；
   `245 / 260`、`13 / 52 人` 这类并排数值天然成列。
 
-数字等宽的做法：MiSans 自带 `tnum`（tabular figures）特性，但 PyQt5 5.15 没有
-`QFont.setFeature`，开不了 OpenType 特性。打包前把 cmap 中 U+0030–U+0039 直接指到
-字体自带的 `.tf` 字形，默认字形就是等宽的，不依赖运行时开关；字形轮廓未改。
+数字等宽的做法：Allo 自带 `tnum`（tabular figures）特性，但 PyQt5 5.15 没有
+`QFont.setFeature`，开不了 OpenType 特性。打包前用 `scripts/patch_allo_digits.py`
+把 cmap 中 U+0030–U+0039 指到 `tnum` 的替换字形，默认字形就是等宽的，不依赖运行时
+开关；字形轮廓未改。改动说明写在 `LICENSE-Allo.txt`。
 
-注册四个字重（Regular / Medium / Demibold / Bold）而不是只注册 Regular：
+注册四个字重（Regular / Medium / SemiBold / Bold）而不是只注册 Regular：
 界面用了这四档，缺文件时 Qt 会合成假粗体——笔画发糊，字宽也不同，等宽数字的列会歪。
 
 不枚举系统字体的原因：没装对应字体的机器会静默回退成比例字体，数字宽度照旧不等，
-每台机器结果还不同，等于没修。`tests/test_ui_tokens.py` 用字体度量实测三件事：
-「数字彼此等宽」「中文彼此等宽」「字母是比例字形（W 明显宽于 i）」，字体名字不作数。
+每台机器结果还不同，等于没修。`tests/test_ui_tokens.py` 实测四件事：数字彼此等宽、
+中文彼此等宽、字母是比例字形（W 明显宽于 i）、汉字渲染与 MiSans 单族一致而拉丁与
+Allo 单族一致。字体名字不作数。
 
-注册用 `QFont.setFamily` 而不是 `setFamilies`：Qt5 在 macOS 上 `QApplication.setFont`
-配 `setFamilies` 读回来仍是 `.AppleSystemUIFont`，只有单族名生效。
+注册时 `setFamily` 与 `setFamilies` 都要写：`setFamily` 让界面字体真正换掉
+（Qt5 在 macOS 上只给 `setFamilies` 时读回来仍是 `.AppleSystemUIFont`），
+`setFamilies` 提供缺字形时的回落顺序。
+
+改字体后先跑 `python scripts/check_text_fit.py --shots`：它把各页面与弹窗真实构造
+出来，报出比控件宽的单行文本、比控件高的多行文本，并留下截图。
 
 **文本左缘对齐**：同一张卡内的行、页面内相邻区块，文字起始 x 必须落在同一条竖线上。
 已修的两处典型错位——首页欢迎块两行字距不同（`AbsoluteSpacing` 会在首字前也加间隙，

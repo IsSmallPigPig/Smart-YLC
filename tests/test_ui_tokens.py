@@ -104,46 +104,48 @@ def test_fonts_are_bundled_and_registered(app):
     from PyQt5.QtGui import QFontDatabase
     from PyQt5.QtWidgets import QLabel
 
-    from app.setup import FONT_FAMILY, FONT_FILES, register_fonts
+    from app.setup import CJK_FAMILY, FONT_FAMILY, FONT_FILES, register_fonts
     from app.ui.brand import assets_dir
     from app.ui.widgets import tabular_label
 
     folder = assets_dir() / "fonts"
     for name in FONT_FILES:
         assert (folder / name).is_file(), f"打包缺字体文件：{folder / name}"
+    assert (folder / "LICENSE-Allo.txt").is_file(), "字体许可证要随包分发"
     assert (folder / "LICENSE-MiSans.txt").is_file(), "字体许可证要随包分发"
 
     # 只比名字不够：注册失败时代码会回落成系统族名，这里确认字体真在库里
     assert register_fonts() == FONT_FAMILY
     assert FONT_FAMILY in QFontDatabase().families(), f"字体未注册到 Qt：{FONT_FAMILY}"
+    assert CJK_FAMILY in QFontDatabase().families(), f"中文回落字体未注册：{CJK_FAMILY}"
     lbl = tabular_label(QLabel("42/260（16%）"))
     assert lbl.font().family() == FONT_FAMILY
 
 
 def test_bundled_font_has_monospaced_digits(app):
-    """数字必须等宽，中文与字母保持 MiSans 的比例字形。
+    """数字必须等宽，字母保持 Allo 的比例字形。
 
     数字等宽是硬要求：统计值实时跳动时宽度不变，`245 / 260`、`13 / 52 人`
-    这类并排数值才成列。中英文用 MiSans 原字形，读起来比全等宽自然。
+    这类并排数值才成列。字母若被误烧成等宽，说明 cmap 改过头了。
     用字体度量实测，不信字体名字。
     """
     from PyQt5.QtGui import QFont, QFontMetricsF
 
-    from app.setup import FONT_FAMILY, register_fonts
+    from app.setup import CJK_FAMILY, FONT_FAMILY, register_fonts
 
     assert register_fonts() == FONT_FAMILY
-    font = QFont(FONT_FAMILY)
+    font = QFont()
+    font.setFamilies([FONT_FAMILY, CJK_FAMILY])
     font.setPixelSize(14)
     fm = QFontMetricsF(font)
 
     digits = [fm.horizontalAdvance(c) for c in "0123456789"]
     assert max(digits) - min(digits) < 0.5, f"数字不等宽：{digits}"
 
-    # 中文在 MiSans 里也是等宽的（每个汉字同宽），这是 CJK 排版的基础
+    # 汉字由 MiSans 回落，每个汉字同宽，这是 CJK 排版的基础
     cjk = [fm.horizontalAdvance(c) for c in "团员状况信息错误欠缴"]
     assert max(cjk) - min(cjk) < 0.5, f"中文不等宽：{cjk}"
 
-    # 字母是比例字形：若被误烧成等宽，说明 cmap 改过头了
     latin = {c: fm.horizontalAdvance(c) for c in "iW"}
     assert latin["W"] - latin["i"] > 1.0, f"字母应为比例字形：{latin}"
 
@@ -161,7 +163,7 @@ def test_every_bundled_weight_resolves(app):
     assert register_fonts() == FONT_FAMILY
     db = QFontDatabase()
     # 四档字重要落到四个不同的字体文件。判据用字体库给的样式名，不用字宽：
-    # MiSans 各字重刻意共用同一字宽，按宽度判断会在真字重齐全的机器上误报。
+    # 静态字体各字重刻意共用同一字宽，按宽度判断会在真字重齐全的机器上误报。
     styles = set()
     for weight in (QFont.Weight.Normal, QFont.Weight.Medium,
                    QFont.Weight.DemiBold, QFont.Weight.Bold):
@@ -187,3 +189,45 @@ def test_inner_radius_is_concentric():
     # 内边距超过外层半径：装不下，直接直角，别挤出畸形弧
     assert P.inner_radius(10, 18) == 0
     assert P.RADIUS["window"] >= P.RADIUS["card"], "窗口圆角不该小于卡片圆角"
+
+
+def test_latin_and_cjk_split_between_bundled_fonts(app):
+    """字母数字来自 Allo，汉字回落 MiSans——这是字体栈的契约。
+
+    两个族名都注册了不等于栈生效：丢掉族栈后，汉字会静默改用系统中文
+    （PingFang / 微软雅黑），同一版程序在各人机器上长得不一样。按渲染像素比对。
+    """
+    import sys
+
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QColor, QFont, QImage, QPainter
+
+    from app.setup import CJK_FAMILY, FONT_FAMILY, FONTS, _apply_font, register_fonts
+
+    assert register_fonts() == FONT_FAMILY
+    _apply_font(FONTS[sys.platform])
+
+    def shot(text, font):
+        img = QImage(420, 48, QImage.Format_ARGB32)
+        img.fill(QColor("white"))
+        painter = QPainter(img)
+        painter.setFont(font)
+        painter.setPen(QColor("black"))
+        painter.drawText(img.rect(), Qt.AlignLeft | Qt.AlignVCenter, text)
+        painter.end()
+        return bytes(img.constBits().asstring(img.byteCount()))
+
+    def single(family):
+        font = QFont()
+        font.setFamilies([family])
+        font.setPixelSize(16)
+        return font
+
+    applied = QApplication.font()
+    applied.setPixelSize(16)
+
+    assert shot("智慧团委", applied) == shot("智慧团委", single(CJK_FAMILY)), "汉字没有走 MiSans"
+    assert shot("Smart 42", applied) == shot("Smart 42", single(FONT_FAMILY)), "字母数字没有走 Allo"
+    mixed = shot("团员 42 人", applied)
+    assert mixed != shot("团员 42 人", single(FONT_FAMILY))
+    assert mixed != shot("团员 42 人", single(CJK_FAMILY))
