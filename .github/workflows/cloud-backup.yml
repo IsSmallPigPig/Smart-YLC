@@ -2,7 +2,7 @@ name: Cloud Backup
 
 on:
   push:
-    branches: ["server", "main"]
+    branches: ["server"]
     paths:
       - "netlify/**"
       - "netlify.toml"
@@ -31,7 +31,7 @@ jobs:
         run: npx --yes esbuild functions/backup.mts --bundle --platform=node --format=esm --external:@netlify/blobs --outfile=/tmp/backup.js
 
       - name: 部署到 Netlify
-        if: github.ref == 'refs/heads/server' || github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/server'
         working-directory: .
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
