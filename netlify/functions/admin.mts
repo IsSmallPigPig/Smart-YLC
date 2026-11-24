@@ -37,7 +37,7 @@ export default async (req: Request): Promise<Response> => {
         code: stored.code,
         boundAt: stored.updatedAt,
         lastSeenAt: stored.updatedAt,
-        relayAllowed: false,
+        relayAllowed: true,   // 没有登记记录时中转接口按允许处理，开关要照实显示
         backupUpdatedAt: stored.updatedAt,
         relayFiles: 0,
         relayBytes: 0,

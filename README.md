@@ -1,29 +1,19 @@
 # 智慧团委 · 云端服务
 
-这个分支只放部署到 Netlify 的两个函数。桌面端在 `main` 分支，手机端在 `mobile-v2` 分支，两边都通过网络调用这里的接口。
+这个分支只放部署到 Netlify 的三个函数。桌面端在 `main` 分支，手机端在 `mobile-v2` 分支，两边都通过网络调用这里的接口。
 
-两个函数、一个键值存储：`backup` 存加密后的配置信封（服务端看不到明文）；
-`archive` 为手机连不上局域网时的中转档案——按 3MB 分片收发，避开函数 6MB 请求/响应墙。
-两端都以 6 位提取码为键，不需要数据库。
+三个函数、三块键值存储：`backup` 存加密后的配置信封（服务端看不到明文）；
+`archive` 为手机连不上局域网时的中转档案——按 3MB 分片收发，避开函数 6MB 请求/响应墙；
+`admin` 给后台和公开统计用。都以 6 位提取码为键，不需要数据库。
 
-## 部署到 Netlify
+## 部署
 
-`.github/workflows/cloud-backup.yml` 在推到本分支时先做打包校验，再部署。需要两个仓库 secret：
+推 `server` 分支触发 CI：打包校验三个函数、构建前端、检查产物样式，再部署到 Netlify。
+首次部署、环境变量、本地调试、验收与回滚见 [`docs/deploy.md`](docs/deploy.md)。
 
-| Secret | 取处 |
-|---|---|
-| `NETLIFY_AUTH_TOKEN` | Netlify → User settings → Applications → Personal access tokens |
-| `NETLIFY_SITE_ID` | 站点 → Project configuration → General → Project details → Project information → Project ID（旧界面叫 Site ID） |
-
-没配这两个 secret 时工作流只跑校验、跳过部署（日志里有 warning），不会红。
-
-这个 workflow 只在 `server` 分支上，GitHub 页面的「Run workflow」按钮读取默认分支的 workflow 定义，所以这里看不到它。改 `netlify/` 下的文件并推到 `server` 就会触发部署；GitHub Actions 页面点旧运行右侧的 `··· → Re-run all jobs` 也可以。
-
-也可以让 Netlify 直接连仓库：仓库根的 `netlify.toml` 已声明发布目录 `netlify/public`、函数目录 `netlify/functions`，Netlify 会自动读到，不用手填构建参数。
-
-`@netlify/blobs` 在 Netlify 运行时自带，环境变量不需要配置。部署后地址形如 `https://<站点>.netlify.app`，在客户端「设置 → 系统备份 → 云端备份」里填站点根地址即可。
-
-函数按需安装依赖：Netlify 会自动读取 `netlify/package.json` 并在部署时安装 `@netlify/blobs`。
+函数按需安装依赖：Netlify 读 `netlify/package.json` 并在部署时安装 `@netlify/blobs`。
+`@netlify/blobs` 在运行时自带，不需要配环境变量。客户端「设置 → 系统备份 → 云端备份」里
+填站点根地址即可。
 
 ## 接口（v2）
 
@@ -80,8 +70,9 @@
 | `/api/admin?action=code` | POST | `{code, relayAllowed}` |
 | `/api/admin?action=code&id=CODE` | DELETE | 移除记录及其设备 |
 
-提取码首次备份时自动登记，默认允许中转。后台关掉「允许中转」后，该提取码的中转接口返回 403；
-备份接口不受影响。移除记录同时清掉关联设备，下次使用时重新登记。
+提取码首次备份时自动登记，默认允许中转。后台关掉「允许中转」后，该提取码的中转接口返回 403，
+备份接口不受影响。列表按存储里的实际备份生成，早于登记逻辑的老备份也会列出来。
+「移除」删除该提取码的备份信封、中转索引与全部分片，并从列表消失，不可恢复。
 
 中转分片默认存在 Netlify Blobs。选 Cloudflare R2 时，在后台填存储桶名称，并把凭据配到站点环境变量：
 `R2_ACCOUNT_ID`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`（可用 `R2_BUCKET` 代替后台填写）。
