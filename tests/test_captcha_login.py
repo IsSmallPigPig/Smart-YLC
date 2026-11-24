@@ -6,6 +6,7 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
+from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
 from requests.cookies import RequestsCookieJar
 
@@ -146,3 +147,32 @@ def test_manual_login_writes_password_health_and_clears_gate(monkeypatch):
     cfg = store.load()
     assert cfg["loginGate"]["u1"]["captchaUntil"] == 0
     assert cfg["sessionCookies"]["u1"][0]["name"] == "SESSION"
+
+
+def test_password_is_visible_in_captcha_dialog():
+    """密码不遮：这行就是要核对的那个密码，遮起来等于让用户盲改。"""
+    from PyQt5.QtWidgets import QLineEdit
+
+    client = FakeClient(ApiResult(True, "登录成功", {"kind": "ok"}))
+    dlg = _dialog(client, [])
+    try:
+        assert dlg.password_edit.text() == "old"
+        assert dlg.password_edit.echoMode() == QLineEdit.EchoMode.Normal
+    finally:
+        dlg.reject()
+        QTest.qWait(50)
+
+
+def test_clicking_captcha_image_refreshes_it():
+    """换图靠点验证码图片本身，不再单独摆一个「换一张」按钮。"""
+    client = FakeClient(ApiResult(True, "登录成功", {"kind": "ok"}))
+    dlg = _dialog(client, [])
+    try:
+        assert not hasattr(dlg, "refresh_btn")
+        before = client.fetches
+        QTest.mouseClick(dlg.image, Qt.MouseButton.LeftButton)
+        QTest.qWait(300)
+        assert client.fetches == before + 1
+    finally:
+        dlg.reject()
+        QTest.qWait(50)

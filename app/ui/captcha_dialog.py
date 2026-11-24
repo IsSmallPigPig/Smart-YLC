@@ -13,7 +13,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal as Signal
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from qfluentwidgets import CaptionLabel, LineEdit, PushButton, SubtitleLabel
 
@@ -65,7 +65,7 @@ class CaptchaLoginDialog(FluentPanelDialog):
 
         self.password_edit = LineEdit(form)
         self.password_edit.setPlaceholderText("登录密码")
-        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        # 不遮：这行密码就是账号表里那条，用户要能立刻看清有没有填错
         self.password_edit.setText(str(getattr(client, "password", "") or ""))
         lay.addWidget(self._field("密码", self.password_edit, form))
 
@@ -76,6 +76,7 @@ class CaptchaLoginDialog(FluentPanelDialog):
         self.image = _ClickableLabel(captcha_row)
         self.image.setFixedSize(120, 40)
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image.setCursor(Qt.CursorShape.PointingHandCursor)
         self.image.setStyleSheet(
             f"QLabel{{background:{self.palette().base().color().name()};"
             f"border:1px solid {self.palette().mid().color().name()};border-radius:4px;}}")
@@ -89,9 +90,6 @@ class CaptchaLoginDialog(FluentPanelDialog):
         self.captcha_edit.returnPressed.connect(self._submit)
         row.addWidget(self.captcha_edit, 1)
 
-        self.refresh_btn = PushButton("换一张", captcha_row)
-        self.refresh_btn.clicked.connect(self.refresh_captcha)
-        row.addWidget(self.refresh_btn)
         if on_browser is not None:
             web_btn = PushButton("网页登录", captcha_row)
             web_btn.clicked.connect(self._open_browser)
@@ -151,23 +149,26 @@ class CaptchaLoginDialog(FluentPanelDialog):
 
     # ---------- 验证码 ----------
 
+    def _placeholder(self, text: str):
+        """图片位置显示文字：先清掉旧图，QLabel 有 pixmap 时不会显示文字。"""
+        self.image.clear()
+        self.image.setText(text)
+
     def refresh_captcha(self):
         if self._future is not None:
             return
-        self.image.setText("加载中…")
-        self.refresh_btn.setEnabled(False)
+        self._placeholder("加载中…")
         self._run(self.client.fetch_captcha, self._show_captcha)
 
     def _show_captcha(self, data):
-        self.refresh_btn.setEnabled(True)
         if isinstance(data, Exception):
-            self.image.setText("加载失败")
+            self._placeholder("点击重试")
             self.error.setText(f"验证码取不到：{data}")
             return
         pixmap = QPixmap()
         if not data or not pixmap.loadFromData(data):
-            self.image.setText("加载失败")
-            self.error.setText("验证码取不到，点「换一张」重试")
+            self._placeholder("点击重试")
+            self.error.setText("验证码取不到，点图片重新加载")
             return
         self.image.setPixmap(pixmap.scaled(
             self.image.size(), Qt.AspectRatioMode.KeepAspectRatio,
