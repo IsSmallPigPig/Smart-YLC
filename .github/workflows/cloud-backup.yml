@@ -41,8 +41,16 @@ jobs:
 
       - name: 校验后台产物含组件库样式
         run: |
-          if ! grep -rq -- "--f-text-3:" netlify/public/assets/*.css; then
+          CSS=$(ls netlify/public/assets/*.css 2>/dev/null || true)
+          if [ -z "$CSS" ]; then
+            echo "::error::构建没有产出样式文件"
+            ls -R netlify/public | head -40
+            exit 1
+          fi
+          if ! grep -l -- "--f-text-3:" $CSS; then
             echo "::error::产物缺少 react-fluent 样式，页面会退回浏览器默认控件。检查入口是否引入 react-fluent/style.css"
+            ls -l $CSS
+            head -c 300 $CSS
             exit 1
           fi
 
