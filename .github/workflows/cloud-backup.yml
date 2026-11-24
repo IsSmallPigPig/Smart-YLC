@@ -39,6 +39,13 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
 
+      - name: 校验后台产物含组件库样式
+        run: |
+          if ! grep -rq -- "--f-text-3:" netlify/public/assets/*.css; then
+            echo "::error::产物缺少 react-fluent 样式，页面会退回浏览器默认控件。检查入口是否引入 react-fluent/style.css"
+            exit 1
+          fi
+
       - name: 部署到 Netlify
         if: github.ref == 'refs/heads/server'
         working-directory: .

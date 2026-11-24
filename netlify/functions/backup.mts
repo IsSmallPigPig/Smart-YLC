@@ -1,7 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getStore } from "@netlify/blobs";
-import { mutateState, touchCode } from "./_shared.mjs";
+import { mutateState, touchCode, touchDevice } from "./_shared.mjs";
 
 /**
  * 云端备份 v2：以 6 位提取码为键存取一份**已加密**的信封。
@@ -117,7 +117,11 @@ export default async (req: Request, _context: Context) => {
       owner: sha256Hex(ownerKey),
       updatedAt,
     });
-    await mutateState((state) => touchCode(state, code, { backupUpdatedAt: updatedAt }));
+    await mutateState((state) => {
+      touchCode(state, code, { backupUpdatedAt: updatedAt });
+      // 备份接口没有设备头，用所有权凭据的散列当设备标识：一机一凭据，稳定且不泄露原文。
+      touchDevice(state, req, code, `owner-${sha256Hex(ownerKey).slice(0, 12)}`);
+    });
     return json({ ok: true, code });
   }
 

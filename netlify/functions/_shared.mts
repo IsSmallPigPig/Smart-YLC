@@ -105,8 +105,12 @@ export function touchCode(
   return record;
 }
 
-export function touchDevice(state: State, req: Request, code: string): void {
-  const id = safeId(req.headers.get("x-device-id") ?? "", 64);
+/**
+ * 登记设备。`knownId` 用于没有设备头的旧客户端——备份接口只有所有权凭据，
+ * 同一个凭据就是同一台机器，用它区分设备比按 UA 合并更准。
+ */
+export function touchDevice(state: State, req: Request, code: string, knownId = ""): void {
+  const id = safeId(req.headers.get("x-device-id") ?? "", 64) || safeId(knownId, 64);
   const ua = (req.headers.get("user-agent") ?? "").slice(0, 120);
   if (!id && !ua) return;
   const key = id || sha256Hex(`${ua}|${code}`).slice(0, 16);
