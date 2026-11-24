@@ -58,6 +58,8 @@ body {
   margin-right: auto;
 }
 
+.table-scroll { overflow-x: auto; }
+
 .table {
   width: 100%;
   border-collapse: collapse;

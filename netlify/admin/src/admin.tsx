@@ -49,22 +49,16 @@ function Login({ onDone }: { onDone: () => void }) {
 
 function Codes({ session, reload }: { session: Session; reload: () => void }) {
   const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
 
-  async function toggle(code: string, allowed: boolean) {
+  async function run(code: string, action: () => Promise<unknown>) {
     setBusy(code)
+    setError('')
     try {
-      await api.code(code, allowed)
+      await action()
       reload()
-    } finally {
-      setBusy('')
-    }
-  }
-
-  async function remove(code: string) {
-    setBusy(code)
-    try {
-      await api.removeCode(code)
-      reload()
+    } catch (e) {
+      setError((e as Error).message)
     } finally {
       setBusy('')
     }
@@ -77,7 +71,7 @@ function Codes({ session, reload }: { session: Session; reload: () => void }) {
         <span className="hint">{session.codes.length} 个</span>
       </div>
       {session.codes.length === 0 ? <div className="empty">还没有设备连接</div> : (
-        <table className="table">
+        <div className="table-scroll"><table className="table">
           <thead><tr><th>提取码</th><th>最近活动</th><th>备份</th><th>中转文件</th><th>允许中转</th><th /></tr></thead>
           <tbody>
             {session.codes.map((c) => (
@@ -91,19 +85,20 @@ function Codes({ session, reload }: { session: Session; reload: () => void }) {
                     key={`${c.code}-${c.relayAllowed}`}
                     defaultChecked={c.relayAllowed}
                     disabled={busy === c.code}
-                    onChange={(next) => toggle(c.code, next)}
+                    onChange={(next) => run(c.code, () => api.code(c.code, next))}
                   />
                 </td>
                 <td>
                   <div className="row-actions">
-                    <PushButton disabled={busy === c.code} onClick={() => remove(c.code)}>移除</PushButton>
+                    <PushButton disabled={busy === c.code} onClick={() => run(c.code, () => api.removeCode(c.code))}>移除</PushButton>
                   </div>
                 </td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       )}
+      {error && <p className="error">{error}</p>}
     </Card>
   )
 }
@@ -116,7 +111,7 @@ function Devices({ session }: { session: Session }) {
         <span className="hint">{session.devices.length} 台</span>
       </div>
       {session.devices.length === 0 ? <div className="empty">还没有中转记录</div> : (
-        <table className="table">
+        <div className="table-scroll"><table className="table">
           <thead><tr><th>设备</th><th>类型</th><th>提取码</th><th>最近活动</th></tr></thead>
           <tbody>
             {session.devices.map((d) => (
@@ -128,7 +123,7 @@ function Devices({ session }: { session: Session }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       )}
     </Card>
   )
@@ -154,7 +149,14 @@ function Relay({ session, reload }: { session: Session; reload: () => void }) {
 
   return (
     <Card>
-      <div className="card-head"><h2>中转存储</h2></div>
+      <div className="card-head">
+        <h2>中转存储</h2>
+        <span className="hint">
+          当前：{session.settings.relay === 'r2'
+            ? `Cloudflare R2 · ${session.settings.r2Bucket || '未填桶名'}`
+            : 'Netlify'}
+        </span>
+      </div>
       <div className="stack">
         <div className="inline">
           <RadioButton text="Netlify" checked={provider === 'netlify'} onChange={() => setProvider('netlify')} />
