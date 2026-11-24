@@ -38,21 +38,12 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm run build
-
-      - name: 校验后台产物含组件库样式
-        run: |
-          CSS=$(ls netlify/public/assets/*.css 2>/dev/null || true)
-          if [ -z "$CSS" ]; then
-            echo "::error::构建没有产出样式文件"
-            ls -R netlify/public | head -40
+          # 组件库样式是副作用导入，构建链一旦漏掉，页面会退回浏览器默认控件
+          grep -l -- "--f-text-3:" ../public/assets/*.css >/dev/null || {
+            echo "::error::产物缺少 react-fluent 样式，检查入口是否引入 react-fluent/style.css"
+            pwd; ls ../public/assets
             exit 1
-          fi
-          if ! grep -l -- "--f-text-3:" $CSS; then
-            echo "::error::产物缺少 react-fluent 样式，页面会退回浏览器默认控件。检查入口是否引入 react-fluent/style.css"
-            ls -l $CSS
-            head -c 300 $CSS
-            exit 1
-          fi
+          }
 
       - name: 部署到 Netlify
         if: github.ref == 'refs/heads/server'
