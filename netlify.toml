@@ -16,3 +16,13 @@
   for = "/api/archive"
   [headers.values]
     Cache-Control = "no-store"
+
+[[headers]]
+  for = "/api/admin"
+  [headers.values]
+    Cache-Control = "no-store"
+
+[[redirects]]
+  from = "/admin"
+  to = "/admin.html"
+  status = 200

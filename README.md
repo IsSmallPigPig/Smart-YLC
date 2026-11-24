@@ -64,3 +64,29 @@
 ## 为什么 6 位码够用
 
 提取码同时是解密口令。服务端只存密文，猜中码也只是拿到一堆密文；真正的门槛在客户端 `PBKDF2-SHA256`（20 万次）——6 位码熵不高，靠迭代次数和限流把在线爆破成本拉高。若要更强，可在设置里允许「自定义长口令」，协议不变。
+
+## 云端管理后台
+
+站点根路径 `/` 展示不敏感的使用数据：备份份数、同步设备数、中转文件数与中转流量。
+接口 `GET /api/admin?action=public` 返回同一组汇总数字，不含提取码、设备名或 IP。
+
+后台在 `/admin`（也接受 `/admin.html`）。管理接口用站点环境变量 `ADMIN_TOKEN`
+鉴权，页面把它放在 `x-admin-token` 头里；没配这个变量时管理接口返回 401。
+
+| 动作 | 方法 | 说明 |
+|---|---|---|
+| `/api/admin?action=session` | GET | 提取码、同步设备、中转存储设置与汇总数字 |
+| `/api/admin?action=relay` | POST | `{provider:"netlify"|"r2", r2Bucket:"..."}` |
+| `/api/admin?action=code` | POST | `{code, relayAllowed}` |
+| `/api/admin?action=code&id=CODE` | DELETE | 移除记录及其设备 |
+
+提取码首次备份时自动登记，默认允许中转。后台关掉「允许中转」后，该提取码的中转接口返回 403；
+备份接口不受影响。移除记录同时清掉关联设备，下次使用时重新登记。
+
+中转分片默认存在 Netlify Blobs。选 Cloudflare R2 时，在后台填存储桶名称，并把凭据配到站点环境变量：
+`R2_ACCOUNT_ID`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`（可用 `R2_BUCKET` 代替后台填写）。
+索引与提取码留在 Netlify，只有分片字节写到 R2；切换后新上传走新存储，已上传的按原位置读取。
+
+后台页面是 `netlify/admin/` 下的 React + TypeScript 应用，组件来自
+[react-fluent](https://github.com/zhouchentao666/react-fluent)。CI 在部署前执行
+`npm install && npm run build`，产物输出到 `netlify/public/`，与函数一起部署。

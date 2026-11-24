@@ -28,7 +28,16 @@ jobs:
         run: npm install --no-audit --no-fund
 
       - name: 打包校验
-        run: npx --yes esbuild functions/backup.mts --bundle --platform=node --format=esm --external:@netlify/blobs --outfile=/tmp/backup.js
+        run: |
+          npx --yes esbuild functions/backup.mts --bundle --platform=node --format=esm --external:@netlify/blobs --outfile=/tmp/backup.js
+          npx --yes esbuild functions/archive.mts --bundle --platform=node --format=esm --external:@netlify/blobs --outfile=/tmp/archive.js
+          npx --yes esbuild functions/admin.mts --bundle --platform=node --format=esm --external:@netlify/blobs --outfile=/tmp/admin.js
+
+      - name: 构建前台与后台页面
+        working-directory: netlify/admin
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
 
       - name: 部署到 Netlify
         if: github.ref == 'refs/heads/server'

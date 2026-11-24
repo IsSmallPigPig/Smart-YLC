@@ -1,6 +1,8 @@
 import type { Config, Context } from "@netlify/functions";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getStore } from "@netlify/blobs";
+import { deletePart, getPart, putPart } from "./_relay.mjs";
+import { loadState, mutateState, touchCode, touchDevice } from "./_shared.mjs";
 
 /**
  * 中转档案 v1：手机连不上局域网时，把 PDF 分片传到中转站，电脑再分片拉回。
@@ -85,6 +87,14 @@ export default async (req: Request, _context: Context) => {
 
   // consistency: strong——init 写完立刻 part/finish 必须读到同一份索引
   const store = getStore({ name: "smartyouth-archive", consistency: "strong" });
+  const adminState = await loadState();
+  if (adminState.codes[code]?.relayAllowed === false) {
+    return json({ ok: false, error: "提取码未允许中转" }, 403);
+  }
+  const activity = () => mutateState((state) => {
+    touchCode(state, code);
+    touchDevice(state, req, code);
+  });
   const indexKey = `archive:${code}`;
   const loadIndex = async () =>
     (await store.get(indexKey, { type: "json" })) as ArchiveIndex | null;
@@ -98,6 +108,7 @@ export default async (req: Request, _context: Context) => {
 
   // ---- 读：清单与分片拉取（只需 code）----
   if (req.method === "GET" && action === "list") {
+    await activity();
     const idx = await loadIndex();
     const files = (idx?.files ?? []).filter((f) => f.ready).map((f) => ({
       id: f.id, name: f.name, size: f.size, sha256: f.sha256,
@@ -108,6 +119,7 @@ export default async (req: Request, _context: Context) => {
 
   if (req.method === "GET" && action === "pull") {
     if (!ID_RE.test(fileId)) return json({ ok: false, error: "文件 id 格式不对" }, 400);
+    await activity();
     const idx = await loadIndex();
     const file = idx?.files.find((f) => f.id === fileId);
     if (!file || !file.ready) return json({ ok: false, error: "文件不存在或未完成" }, 404);
@@ -115,13 +127,14 @@ export default async (req: Request, _context: Context) => {
     if (!Number.isInteger(part) || part < 0 || part >= file.parts) {
       return json({ ok: false, error: "分片序号超出范围" }, 400);
     }
-    const chunk = await store.get(`archive:${code}:${fileId}:${part}`, { type: "data" });
+    const chunk = await getPart(adminState, code, fileId, part);
     if (!chunk) return json({ ok: false, error: "分片丢失，请手机端重传" }, 404);
-    return bytes(new Uint8Array(await chunk.arrayBuffer()));
+    return bytes(chunk);
   }
 
   // ---- 写：分片上传（需 owner key）----
   if ((req.method === "PUT" || req.method === "POST") && action === "init") {
+    await activity();
     if (!KEY_RE.test(ownerKey)) {
       return json({ ok: false, error: "缺少所有权凭据" }, 403);
     }
@@ -172,7 +185,7 @@ export default async (req: Request, _context: Context) => {
     if (chunk.length > PART_BYTES + 1024) {
       return json({ ok: false, error: "分片超过 3MB" }, 413);
     }
-    await store.set(`archive:${code}:${fileId}:${part}`, chunk, { type: "data" });
+    await putPart(adminState, code, fileId, part, chunk);
     return json({ ok: true });
   }
 
@@ -188,9 +201,8 @@ export default async (req: Request, _context: Context) => {
     const pieces: Uint8Array[] = [];
     let total = 0;
     for (let i = 0; i < file.parts; i++) {
-      const blob = await store.get(`archive:${code}:${fileId}:${i}`, { type: "data" });
-      if (!blob) return json({ ok: false, error: `缺少分片 ${i}，请重传` }, 409);
-      const piece = new Uint8Array(await blob.arrayBuffer());
+      const piece = await getPart(adminState, code, fileId, i);
+      if (!piece) return json({ ok: false, error: `缺少分片 ${i}，请重传` }, 409);
       pieces.push(piece);
       total += piece.length;
     }
@@ -205,6 +217,11 @@ export default async (req: Request, _context: Context) => {
     }
     file.ready = true;
     await saveIndex(idx!);
+    await mutateState((state) => {
+      const record = touchCode(state, code);
+      record.relayFiles += 1;
+      record.relayBytes += total;
+    });
     return json({ ok: true, id: fileId, size: total });
   }
 
@@ -218,10 +235,15 @@ export default async (req: Request, _context: Context) => {
     if (pos < 0) return json({ ok: true });   // 已删过，幂等
     const file = idx!.files[pos];
     for (let i = 0; i < file.parts; i++) {
-      await store.delete(`archive:${code}:${fileId}:${i}`);
+      await deletePart(adminState, code, fileId, i);
     }
     idx!.files.splice(pos, 1);
     await saveIndex(idx!);
+    await mutateState((state) => {
+      const record = touchCode(state, code);
+      record.relayFiles = Math.max(0, record.relayFiles - 1);
+      record.relayBytes = Math.max(0, record.relayBytes - file.size);
+    });
     return json({ ok: true });
   }
 

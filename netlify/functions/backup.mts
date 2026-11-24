@@ -1,6 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getStore } from "@netlify/blobs";
+import { mutateState, touchCode } from "./_shared.mjs";
 
 /**
  * 云端备份 v2：以 6 位提取码为键存取一份**已加密**的信封。
@@ -110,11 +111,13 @@ export default async (req: Request, _context: Context) => {
       // v1 老记录没有 owner，等价于任何人都不匹配——只能被读取，不能被改写。
       return json({ ok: false, error: "这个提取码的配置属于别人" }, 403);
     }
+    const updatedAt = new Date().toISOString();
     await store.setJSON(code, {
       ...envelope,
       owner: sha256Hex(ownerKey),
-      updatedAt: new Date().toISOString(),
+      updatedAt,
     });
+    await mutateState((state) => touchCode(state, code, { backupUpdatedAt: updatedAt }));
     return json({ ok: true, code });
   }
 
