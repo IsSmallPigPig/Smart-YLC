@@ -8,6 +8,10 @@ macOS 打包成 .app 后用 UNUserNotificationCenter 发通知，点击回调能
 Windows 的 toast 必须挂在托盘图标上，而主界面模式本身可能还没建托盘，所以这里
 按需借一个：没有现成托盘就临时建一个（只建一次）。没有这层回落时，Windows 上的
 新站内信、更新提醒、测试通知全部静默丢掉了。
+
+界面建好正式托盘后要用 `register_tray` 登记进来：临时的那个随即收起。留着两个
+「智慧团委」图标时，用户点到的可能是没有任何点击回调的那一个——双击没反应，
+看上去就像「叫不出主窗口」。
 """
 
 from __future__ import annotations
@@ -17,8 +21,22 @@ import subprocess
 from collections import deque
 
 _FALLBACK_TRAY = None
+_PRIMARY_TRAY = None
 # 气泡不携带「是哪一条被点了」的信息，按发送顺序排队，点一次取一条
 _PENDING_CLICKS: deque = deque()
+
+
+def register_tray(tray) -> None:
+    """界面自己的托盘图标建好后登记进来，之后发通知都走它。"""
+    global _PRIMARY_TRAY, _FALLBACK_TRAY
+
+    _PRIMARY_TRAY = tray
+    if _FALLBACK_TRAY is not None and _FALLBACK_TRAY is not tray:
+        try:
+            _FALLBACK_TRAY.hide()
+        except RuntimeError:
+            pass        # 已经被 Qt 回收，没什么可收的
+        _FALLBACK_TRAY = None
 
 
 def _bind_click(tray) -> None:
@@ -40,8 +58,10 @@ def _fire_pending_click() -> None:
 
 
 def _fallback_tray():
-    """非 macOS 的托盘回落：拿不到就返回 None，由调用方判失败。"""
+    """没传托盘时用哪个：先认界面登记的，再认临时建的那个。"""
     global _FALLBACK_TRAY
+    if _PRIMARY_TRAY is not None:
+        return _PRIMARY_TRAY
     if _FALLBACK_TRAY is not None:
         return _FALLBACK_TRAY
     from PyQt5.QtWidgets import QApplication, QSystemTrayIcon

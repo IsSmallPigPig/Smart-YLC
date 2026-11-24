@@ -63,3 +63,54 @@ def test_macos_native_unavailable_returns_false_for_click(monkeypatch):
     monkeypatch.setattr(notify.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(macos_notify, "send", lambda *a, **k: False)
     assert notify.send("标题", "内容", on_click=lambda: None) is False
+
+
+class _Tray(FakeTray):
+    def __init__(self):
+        super().__init__()
+        self.hidden = False
+
+    def hide(self):
+        self.hidden = True
+
+
+def test_register_tray_replaces_temporary_icon(monkeypatch):
+    """界面托盘登记后，通知模块临时建的那个要收起来：托盘区只留一个图标。"""
+    from app.services import notify
+
+    temporary, real = _Tray(), _Tray()
+    monkeypatch.setattr(notify, "_FALLBACK_TRAY", temporary)
+    monkeypatch.setattr(notify, "_PRIMARY_TRAY", None)
+
+    notify.register_tray(real)
+
+    assert temporary.hidden is True
+    assert notify._FALLBACK_TRAY is None
+    assert notify._fallback_tray() is real
+
+
+def test_send_without_tray_uses_registered_icon(monkeypatch):
+    """调用点没传托盘时走界面那个，不再另建一个没有点击回调的图标。"""
+    from app.services import notify
+
+    real = _Tray()
+    monkeypatch.setattr(notify.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(notify, "_PRIMARY_TRAY", real)
+
+    assert notify.send("标题", "正文") is True
+    assert len(real.calls) == 1
+
+
+def test_tray_daemon_notifies_through_window_icon():
+    """后台模式开过主窗口后，气泡挂在窗口那个图标上。
+
+    后台自己的图标这时已收起来；往隐藏的图标上 showMessage，Windows 不一定弹。"""
+    from types import SimpleNamespace
+
+    from app.tray import TrayDaemon
+
+    daemon = SimpleNamespace(window=SimpleNamespace(tray="window-icon"),
+                             tray="daemon-icon")
+    assert TrayDaemon._notify_tray(daemon) == "window-icon"
+    daemon.window = None
+    assert TrayDaemon._notify_tray(daemon) == "daemon-icon"

@@ -81,6 +81,11 @@ class TrayDaemon(QObject):
         self._self_popup = bind_tray_menu(self.tray, menu)
         self.tray.activated.connect(self._on_activated)
         self.tray.show()
+        # 通知模块默认会给没有托盘的调用点临时建一个图标；登记之后它用这个，
+        # 托盘区才不会出现两个「智慧团委」。
+        from app.services import notify
+
+        notify.register_tray(self.tray)
 
         # 后台模式没有主窗口：点提醒就去建/叫出主界面
         from app.ui import bg_toast
@@ -121,19 +126,50 @@ class TrayDaemon(QObject):
         from app.ui import bg_toast
 
         bg_toast.alert("团员情况" if ok else "每日检查失败", message,
-                       tone="info" if ok else "error", tray=self.tray,
+                       tone="info" if ok else "error", tray=self._notify_tray(),
                        on_click=self.open_window)
 
+    def _notify_tray(self):
+        """发通知用哪个图标：主窗口开过就用它的，否则用后台自己的。
+
+        后台图标在主窗口出现后会收起来，往一个隐藏的图标上挂气泡，Windows
+        不一定弹得出来。"""
+        window = self.window
+        if window is not None:
+            try:
+                tray = getattr(window, "tray", None)
+            except RuntimeError:
+                tray = None
+            if tray is not None:
+                return tray
+        return self.tray
+
     def open_window(self):
-        if self.window is None:
+        from PyQt5.QtCore import Qt
+
+        window = self.window
+        if window is not None:
+            try:
+                window.setWindowState(
+                    (window.windowState() & ~Qt.WindowState.WindowMinimized)
+                    | Qt.WindowState.WindowActive)
+            except RuntimeError:
+                window = self.window = None    # 已被 Qt 回收，下面重建
+        if window is None:
             from app.ui.main_window import MainWindow
 
-            self.window = MainWindow()
-        self.window.show()
-        self.window.raise_()
+            window = self.window = MainWindow()
+        window.showNormal()
+        window.raise_()
+        window.activateWindow()
+        # 主窗口自带托盘图标；后台这个收起来，否则同一个进程里同时亮着两个
+        # 「智慧团委」，看上去就像开了两份程序。
+        if getattr(window, "tray", None) is not None:
+            self.tray.hide()
 
     def _on_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
             self.open_window()
         elif (reason == QSystemTrayIcon.ActivationReason.Context
               and self._self_popup):

@@ -421,15 +421,38 @@ def check_file(path: Path) -> list[str]:
                 f"{rel}:{node.lineno} [拖放路径未归一] _drop_payload 用了 toLocalFile() 但没 "
                 "os.path.normpath：Windows 上是正斜杠，与内部路径比较会失配、目录被重复添加")
 
-    # 规则 27（2026-11-22 自动重开竞态）：timeout.exe 在 stdin 被重定向到
-    # DEVNULL 时立即报错退出，延迟形同虚设——新进程会在安装器还在替换文件时
-    # 启动、重新锁住 exe。重开延时要用不读 stdin 的 ping -n。
-    if not rel.endswith("lint_patterns.py") \
-            and "timeout /t" in source and "DEVNULL" in source:
-        line = source.count("\n", 0, source.find("timeout /t")) + 1
+    # 规则 27（2026-11-24 更新时弹出 ping 黑窗）：重开新版本不能借 cmd 脚本。
+    # 上一版用 `cmd /c ping -n 13 127.0.0.1 & start "" exe` 做延时重开：父进程是
+    # DETACHED_PROCESS，没有控制台，cmd 与 ping 这两个控制台程序于是各自新开一个
+    # 黑窗口，用户更新完看到的就是一个 ping 窗口；而且安装器的 [Run] 已经启动过
+    # 一份新版本，这里再起一份就成了两个进程。
+    # 现在 exe 由 installer.iss 的 [Run]（skipifnotsilent）重开，msi 直接 Popen 自身。
+    if rel.endswith("silent_update.py"):
+        for needle in ("cmd /c", "ping -n", "timeout /t"):
+            if needle in source:
+                line = source.count("\n", 0, source.find(needle)) + 1
+                problems.append(
+                    f"{rel}:{line} [重开借了控制台窗口] 出现了 {needle}：cmd 与 ping 都是"
+                    "控制台程序，在没有控制台的父进程里会新开黑窗口；改用安装器的 "
+                    "[Run] 或直接 Popen 自身")
+
+    # 规则 39（2026-11-24 托盘出现两个图标）：任何自建托盘图标的地方都要登记。
+    # 通知模块在没有托盘时会临时建一个；界面自己的托盘不登记，两者就会并存，
+    # 用户点到的可能是没有点击回调的那个——双击没反应，看着像没叫出主窗口。
+    if "QSystemTrayIcon(" in source and not rel.endswith("notify.py"):
+        if "register_tray(" not in source:
+            line = source.count("\n", 0, source.find("QSystemTrayIcon(")) + 1
+            problems.append(
+                f"{rel}:{line} [托盘图标重复] 自建托盘后没调 notify.register_tray："
+                "通知模块会再建一个临时图标，托盘区出现两个「智慧团委」")
+
+    # 规则 40（2026-11-24 单实例各开一套）：单实例必须先用文件锁。
+    # 只靠 QLocalServer 连接判定时，两个进程都在启动、都还没 listen，就都能拿到
+    # 「没有别的实例」的结论，各自建托盘与窗口；双击托盘叫出的可能是另一份。
+    if rel.endswith("single_instance.py") and "QLockFile(" not in source:
         problems.append(
-            f"{rel}:{line} [timeout 延迟失效] stdin=DEVNULL 时 timeout.exe 立即退出，"
-            "延迟为 0；装完立刻重开会锁住正在替换的 exe。改用 ping -n <秒+1> 127.0.0.1")
+            f"{rel} [单实例只靠管道] 缺少 QLockFile：只连命名管道时，"
+            "两个进程同时启动会各自 listen，出现两套托盘与窗口")
 
     # 规则 28（2026-11-22 手机配对无感知）：配对成功必须同时提醒用户并记下设备。
     # 旧实现 pair() 只发 token，电脑端界面毫无变化，用户不知道手机已经连上，

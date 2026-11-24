@@ -546,24 +546,15 @@ def test_exif_second_decode_without_correction_flagged():
 
 # —— 自动重开竞态（2026-11-22）：timeout + DEVNULL 延迟失效 ——
 
-def test_timeout_with_devnull_rejected():
-    """能拦住旧写法：timeout /t 配 stdin=DEVNULL，延迟立即失效。"""
+def test_console_delay_script_rejected():
+    """能拦住旧写法：cmd 加 ping 做延时，会在无控制台的父进程里弹出黑窗口。"""
     bad = '''\
-def schedule():
-    command = 'timeout /t 12 /nobreak >nul & start "" exe'
-    Popen(["cmd", "/c", command], stdin=subprocess.DEVNULL)
-'''
-    assert any("timeout 延迟失效" in p for p in check(bad)), check(bad)
-
-
-def test_ping_delay_is_allowed():
-    """当前库干净：ping -n 不读 stdin，延迟可靠。"""
-    good = '''\
 def schedule():
     command = 'ping -n 13 127.0.0.1 >nul & start "" exe'
     Popen(["cmd", "/c", command], stdin=subprocess.DEVNULL)
 '''
-    assert check(good) == []
+    problems = check(bad, "silent_update.py")
+    assert any("重开借了控制台窗口" in p for p in problems), problems
 
 
 def test_pair_must_notify_and_record_device():
@@ -745,3 +736,73 @@ def test_field_null_is_not_missing_key():
 def test_field_map_is_clean():
     problems = lint_patterns.check_file(ROOT / "app" / "domain" / "field_map.py")
     assert not any("字段 null 被当成缺失" in p for p in problems), problems
+
+
+def test_relaunch_must_not_open_console_window():
+    """能拦住旧写法：cmd /c ping 做延时，在没有控制台的父进程里弹黑窗口。"""
+    bad = ('cmd = ["cmd", "/c", f\'ping -n 13 127.0.0.1 >nul & start "" "{exe}"\']\n'
+           'subprocess.Popen(cmd, creationflags=DETACHED_PROCESS)\n')
+    problems = check(bad, "silent_update.py")
+    assert any("重开借了控制台窗口" in p for p in problems), problems
+
+
+def test_tray_icon_must_be_registered():
+    """能拦住旧写法：自建托盘不登记，托盘区就多出一个点不动的图标。"""
+    bad = ("from PyQt5.QtWidgets import QSystemTrayIcon\n"
+           "self.tray = QSystemTrayIcon(icon)\n"
+           "self.tray.show()\n")
+    problems = check(bad, "main_window_tray_mixin.py")
+    assert any("托盘图标重复" in p for p in problems), problems
+
+
+def test_single_instance_needs_file_lock():
+    """能拦住旧写法：只连命名管道时，两个进程同时启动会各开一套窗口。"""
+    bad = ("from PyQt5.QtNetwork import QLocalServer\n"
+           "server = QLocalServer(self)\n"
+           "server.listen(name)\n")
+    problems = check(bad, "single_instance.py")
+    assert any("单实例只靠管道" in p for p in problems), problems
+
+
+def test_update_and_tray_modules_are_clean():
+    """当前库干净：更新重开、托盘、单实例三个模块都不再犯上面三条。"""
+    for rel in ("app/services/silent_update.py", "app/tray.py",
+                "app/ui/main_window_tray_mixin.py",
+                "app/services/single_instance.py"):
+        problems = lint_patterns.check_file(ROOT / rel)
+        assert not problems, (rel, problems)
+
+
+def test_relaunch_must_not_open_console_window():
+    """能拦住旧写法：cmd /c ping 做延时，在没有控制台的父进程里弹黑窗口。"""
+    bad = ('cmd = ["cmd", "/c", f\'ping -n 13 127.0.0.1 >nul & start "" "{exe}"\']\n'
+           'subprocess.Popen(cmd, creationflags=DETACHED_PROCESS)\n')
+    problems = check(bad, "silent_update.py")
+    assert any("重开借了控制台窗口" in p for p in problems), problems
+
+
+def test_tray_icon_must_be_registered():
+    """能拦住旧写法：自建托盘不登记，托盘区就多出一个点不动的图标。"""
+    bad = ("from PyQt5.QtWidgets import QSystemTrayIcon\n"
+           "self.tray = QSystemTrayIcon(icon)\n"
+           "self.tray.show()\n")
+    problems = check(bad, "main_window_tray_mixin.py")
+    assert any("托盘图标重复" in p for p in problems), problems
+
+
+def test_single_instance_needs_file_lock():
+    """能拦住旧写法：只连命名管道时，两个进程同时启动会各开一套窗口。"""
+    bad = ("from PyQt5.QtNetwork import QLocalServer\n"
+           "server = QLocalServer(self)\n"
+           "server.listen(name)\n")
+    problems = check(bad, "single_instance.py")
+    assert any("单实例只靠管道" in p for p in problems), problems
+
+
+def test_update_and_tray_modules_are_clean():
+    """当前库干净：更新重开、托盘、单实例三个模块都不再犯上面三条。"""
+    for rel in ("app/services/silent_update.py", "app/tray.py",
+                "app/ui/main_window_tray_mixin.py",
+                "app/services/single_instance.py"):
+        problems = lint_patterns.check_file(ROOT / rel)
+        assert not problems, (rel, problems)

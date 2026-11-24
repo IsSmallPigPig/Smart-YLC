@@ -12,8 +12,10 @@ Windows 有两条硬约束，决定了这里的实现：
   1. 安装程序要替换正在运行的 exe。任何还活着的 SmartYouth 进程都会锁住它，
      Inno 的「文件被占用」对话框在 /SUPPRESSMSGBOXES 下默认选「中止」，
      安装器就以退出码 5 结束——这正是「托盘还在、更新失败」的现场。
-  2. 因此安装助手不能是自家 exe：从安装目录再起一个 SmartYouth.exe，等于
-     自己锁自己。改用 cmd 延迟脚本拉起安装器，进程模型与本程序彻底脱钩。
+  2. 重开新版本交给安装器自己：installer.iss 的 [Run] 里有一条 skipifnotsilent，
+     安装写完文件才启动 exe，时间点由 Inno 定。本模块不再挂延迟重开——那既要
+     借 cmd 现开一个控制台（黑窗一闪一闪），又会在安装器已经重开一份之后再起
+     一份，用户看到两个托盘图标、两套窗口。
 """
 
 from __future__ import annotations
@@ -143,17 +145,14 @@ def take_updated(version: str) -> str:
 
 
 def _start_windows(target: Path) -> bool:
-    """直接拉起安装器，然后由调用方退出主程序。
+    """拉起安装器，然后由调用方退出主程序。
 
     不用「自家 exe 当助手」：从安装目录再起一个 SmartYouth.exe，等于自己锁住
     正在被替换的文件，安装器的「文件被占用」在静默模式下默认选中止，退出码 5。
 
-    也不再写 .cmd 做延迟：路径里可能有中文用户名，批处理按控制台代码页解析，
-    写错编码就静默失败。安装器的 /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS
-    本来就会等（必要时强制关闭）仍占用文件的进程，比脚本 sleep 更可靠。
-
-    安装器单独拉起、不与后续启动串成一条命令：串起来一旦 cmd 解析出错，
-    连安装都不会执行。启动另挂延迟任务，最坏只是没自动打开，安装照常完成。
+    /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS 会让安装器等（必要时强制关闭）
+    仍占用文件的进程；装完由 installer.iss 的 [Run] 启动新版本。这里只管起安装器，
+    不再另挂重开任务。
     """
     log = Path(os.path.expanduser("~")) / ".gd12355-helper" / "updates" / "install.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -166,29 +165,30 @@ def _start_windows(target: Path) -> bool:
                      stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=flags, close_fds=True)
-    _schedule_windows_relaunch()
     return True
 
 
-def _schedule_windows_relaunch(delay: int = 12) -> None:
-    """装完后把新版本重新打开，让「重启」真正回到应用。"""
+def _relaunch_windows() -> bool:
+    """装完直接打开新版本，给没有 [Run] 的安装包（msi）兜底。
+
+    直接起自家 exe：它是窗口程序，DETACHED_PROCESS 下不会带出控制台。不能借
+    cmd 加 ping 做延时——两者都是控制台程序，在无控制台的父进程里各自会新开
+    一个黑窗口，用户看到的就是「更新时弹出 ping」。
+    """
     if not _packaged():
-        return      # 源码版的解释器也叫 python.exe，按扩展名判断会连开发机一起重开
+        return False    # 源码版的解释器也叫 python.exe，不能把开发机重开一遍
     exe = Path(sys.executable)
-    # 不用 timeout：stdin 重定向到 DEVNULL 时 Windows 的 timeout.exe 直接报错退出，
-    # 12 秒延迟形同虚设，新进程会在安装器还在替换文件时启动、重新锁住 exe。
-    # ping 的 -n 计时不读 stdin，在 DETACHED_PROCESS 下照样可靠。
-    command = f'ping -n {int(delay) + 1} 127.0.0.1 >nul & start "" "{exe}"'
     flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
              | getattr(subprocess, "CREATE_NO_WINDOW", 0)
              | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     try:
-        subprocess.Popen(["cmd", "/c", command],
+        subprocess.Popen([str(exe)], cwd=str(exe.parent),
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL,
                          creationflags=flags, close_fds=True)
+        return True
     except OSError:
-        pass        # 自动重开失败不影响安装，用户可从桌面图标打开
+        return False    # 自动重开失败不影响安装，用户可从桌面图标打开
 
 
 def _relaunch_macos() -> bool:
@@ -272,6 +272,9 @@ def install(path: str) -> None:
         # 3010 / 1641 是 MSI 的「成功但需要重启」，这里由用户自己决定何时重启
         if result.returncode not in (0, 3010, 1641):
             raise SilentInstallError(f"安装程序退出码 {result.returncode}")
+        if sys.platform == "win32" and target.suffix.lower() == ".msi":
+            # exe 安装包会由 installer.iss 的 [Run] 重开；msi 没有这一步
+            _relaunch_windows()
         return
 
     if sys.platform == "darwin" and target.suffix.lower() == ".dmg":
@@ -304,6 +307,10 @@ def install_and_notify(path: str) -> int:
         _notify("更新未完成", f"{e}。请到「系统配置 - 关于项目」手动安装。")
         return 1
     if sys.platform == "darwin" and _relaunch_macos():
+        return 0
+    if sys.platform == "win32" and Path(path).suffix.lower() == ".exe":
+        # exe 安装包的 installer.iss [Run] 已经启动新版本，这里只补一条提示
+        _notify("更新已完成", "智慧团委已更新，新版本正在打开。")
         return 0
     # 自动打开失败（或非 mac）：至少让用户知道该手动打开
     _notify("更新已完成", "智慧团委已更新，重启应用后生效。")

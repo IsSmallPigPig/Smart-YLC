@@ -1,8 +1,13 @@
 """单实例：第二次启动不再开一套窗口，只把已有实例叫到前面。
 
-用 QLocalServer / QLocalSocket 做进程间通知：先试着连名字；连上就发送
-show 并退出，连不上才在本进程监听。服务名按登录用户区分，同一台机器上
-不同用户各开一份互不影响。
+两层：先用 QLockFile 抢一把文件锁，抢到才算本进程是唯一的实例；再用
+QLocalServer / QLocalSocket 把「show」发给已有实例。
+
+只用命名管道是不够的：连接有 350ms 超时，双方都在启动时都可能连不上，
+第二个进程于是也去 listen——Windows 上就出现两份托盘图标、两套窗口，
+双击托盘有时叫出的是另一份。文件锁由内核保证互斥，没有这个窗口期。
+
+服务名与锁文件都按登录用户区分，同一台机器上不同用户各开一份互不影响。
 
 `--tray` 与普通启动共用这一把锁：先有托盘、再双击图标时，由托盘进程
 打开主窗口；先有主窗口、再启动托盘时，同样只把现有窗口叫出来。
@@ -12,8 +17,10 @@ from __future__ import annotations
 
 import getpass
 import os
+import time
+from pathlib import Path
 
-from PyQt5.QtCore import QObject, pyqtSignal as Signal
+from PyQt5.QtCore import QLockFile, QObject, pyqtSignal as Signal
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 
 COMMAND_SHOW = b"show"
@@ -31,17 +38,35 @@ def server_name() -> str:
     return f"{SERVER_PREFIX}-{user}{tail}"
 
 
-def notify_running(command: bytes = COMMAND_SHOW) -> bool:
+def lock_path() -> Path:
+    """锁文件与配置同目录：测试与 --config-dir 换目录时自动跟着换。"""
+    from app.services import store
+
+    return Path(store.CONFIG_FILE).parent / f"instance{'-' + SUFFIX if SUFFIX else ''}.lock"
+
+
+def notify_running(command: bytes = COMMAND_SHOW, timeout: int = 350) -> bool:
     """已有实例在跑就发一条命令并返回 True；没有则返回 False。"""
     sock = QLocalSocket()
     sock.connectToServer(server_name())
-    if not sock.waitForConnected(350):
+    if not sock.waitForConnected(timeout):
         return False
     sock.write(command)
     sock.flush()
-    sock.waitForBytesWritten(350)
+    sock.waitForBytesWritten(timeout)
     sock.disconnectFromServer()
     return True
+
+
+def _notify_with_retry(command: bytes = COMMAND_SHOW,
+                       tries: int = 12, gap: float = 0.25) -> bool:
+    """对方刚抢到锁时可能还没开始 listen，隔一会儿重试，别把命令丢掉。"""
+    for attempt in range(tries):
+        if notify_running(command):
+            return True
+        if attempt + 1 < tries:
+            time.sleep(gap)
+    return False
 
 
 class SingleInstance(QObject):
@@ -53,21 +78,44 @@ class SingleInstance(QObject):
         super().__init__(parent)
         self._handler = None
         self._pending: list[str] = []
+        self._lock: QLockFile | None = None
         self._server = QLocalServer(self)
         self._server.newConnection.connect(self._on_connection)
 
     def attach(self) -> bool:
         """拿到锁返回 True；已有实例返回 False（调用方应直接退出）。"""
-        if notify_running():
-            return False
+        path = lock_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass        # 目录建不出来时下面的锁会失败，走退路
+        self._lock = QLockFile(str(path))
+        # 默认 30 秒的「过期」只是兜底：QLockFile 会先看持有者进程还在不在，
+        # 被任务管理器强杀留下的锁文件下次启动照样能拿走。
+        if not self._lock.tryLock(120):
+            if not path.exists():
+                # 锁文件根本建不出来（配置目录只读）：退回只看命名管道，
+                # 不能因为拿不到锁就不让程序启动
+                self._lock = None
+                if notify_running():
+                    return False
+            else:
+                _notify_with_retry()
+                return False
         # 上一次进程异常退出可能留下 socket 文件；先清掉再监听
         QLocalServer.removeServer(server_name())
         if not self._server.listen(server_name()):
-            # 监听失败说明刚有另一个进程抢先；再通知一次，避免两个都退出
+            # 锁拿到了却抢不到名字：旧版本进程还活着（它没有文件锁），让位给它
             if notify_running():
+                self._release_lock()
                 return False
             raise RuntimeError(f"无法建立单实例通道：{self._server.errorString()}")
         return True
+
+    def _release_lock(self) -> None:
+        if self._lock is not None:
+            self._lock.unlock()
+            self._lock = None
 
     def set_handler(self, handler) -> None:
         self._handler = handler
@@ -98,3 +146,4 @@ class SingleInstance(QObject):
     def close(self):
         self._server.close()
         QLocalServer.removeServer(server_name())
+        self._release_lock()

@@ -685,8 +685,9 @@ def test_start_launches_detached_helper(tmp_path, monkeypatch):
     assert "start_new_session" in kwargs
 
 
-def test_start_on_windows_launches_installer_first(tmp_path, monkeypatch):
-    """Windows：先起安装器（第一次 Popen），重开另挂延迟任务，别混在一起断言。"""
+def test_start_on_windows_only_launches_installer(tmp_path, monkeypatch):
+    """Windows：只起安装器。重开由 installer.iss 的 [Run] 负责，这里再起一份
+    就会多出一个进程（两个托盘图标、两套窗口）。"""
     from app.services import silent_update
 
     pkg = tmp_path / "setup.exe"
@@ -695,7 +696,6 @@ def test_start_on_windows_launches_installer_first(tmp_path, monkeypatch):
     monkeypatch.setattr(silent_update, "sys", _fake_sys("win32", executable=str(pkg)))
     monkeypatch.setattr(silent_update.subprocess, "Popen",
                         lambda cmd, **kwargs: calls.append((cmd, kwargs)))
-    monkeypatch.setattr(silent_update, "_schedule_windows_relaunch", lambda *a, **k: None)
 
     assert silent_update.start(str(pkg)) is True
     cmd, kwargs = calls[0]
@@ -713,23 +713,26 @@ def test_relaunch_skips_source_build(monkeypatch):
                         _fake_sys("win32", executable="/usr/bin/python3"))
     monkeypatch.setattr(silent_update.subprocess, "Popen",
                         lambda cmd, **kwargs: calls.append(cmd))
-    silent_update._schedule_windows_relaunch()
+    assert silent_update._relaunch_windows() is False
     assert calls == []
 
 
-def test_relaunch_starts_packaged_app(monkeypatch):
+def test_relaunch_starts_packaged_app_without_console(monkeypatch):
+    """msi 装完直接起自家 exe：窗口程序不会带出控制台，也不经过 cmd。"""
     from app.services import silent_update
 
     calls = []
     monkeypatch.setattr(silent_update, "sys", _fake_sys(
         "win32", executable="/opt/智慧团委.exe", frozen=True))
     monkeypatch.setattr(silent_update.subprocess, "Popen",
-                        lambda cmd, **kwargs: calls.append(cmd))
-    silent_update._schedule_windows_relaunch(delay=3)
-    assert calls, "打包版装完应该自动重开"
-    assert "智慧团委.exe" in calls[0][-1]
-    assert "ping -n 4 127.0.0.1" in calls[0][-1]
-    assert "timeout /t" not in calls[0][-1]
+                        lambda cmd, **kwargs: calls.append((cmd, kwargs)))
+
+    assert silent_update._relaunch_windows() is True
+    cmd, kwargs = calls[0]
+    assert cmd == ["/opt/智慧团委.exe"], "不能再借 cmd /c ping 做延时"
+    detached = getattr(subprocess, "DETACHED_PROCESS", 0)
+    if detached:
+        assert kwargs["creationflags"] & detached
 
 
 def test_install_and_notify_restart_hint(monkeypatch):
@@ -895,3 +898,13 @@ def test_windows_installer_forces_close_and_logs(monkeypatch, tmp_path):
     for flag in ("/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES",
                  "/NOCANCEL", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS"):
         assert flag in cmd, flag
+
+
+def test_installer_relaunches_after_silent_install():
+    """静默安装完重开新版本是安装脚本的职责。
+
+    这一条是 silent_update 不再自己挂延时重开的前提：删掉它，更新完应用就
+    不再自己回来，用户只能从桌面图标打开。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    text = open(os.path.join(root, "installer.iss"), encoding="utf-8").read()
+    assert "skipifnotsilent" in text, "静默安装后要由安装器启动新版本"

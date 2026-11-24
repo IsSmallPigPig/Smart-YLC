@@ -47,6 +47,11 @@ class MainWindowTrayMixin:
         self._tray_self_popup = bind_tray_menu(self.tray, menu)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
+        # 通知模块会按需临时建一个托盘图标；登记之后它改用这一个，并收起临时的。
+        # 留着两个「智慧团委」时，用户点到的可能是没有点击回调的那一个。
+        from app.services import notify
+
+        notify.register_tray(self.tray)
 
     def _on_tray_activated(self, reason):
         from PyQt5.QtWidgets import QSystemTrayIcon
@@ -62,6 +67,13 @@ class MainWindowTrayMixin:
             self.tray_menu.exec(QCursor.pos())
 
     def _restore_from_tray(self):
+        """从托盘回到主界面。
+
+        先清掉最小化标记再显示：窗口被最小化后又缩进托盘时，单独调用
+        showNormal() 有时只闪一下任务栏，窗口仍停在最小化状态。
+        """
+        self.setWindowState((self.windowState() & ~Qt.WindowState.WindowMinimized)
+                            | Qt.WindowState.WindowActive)
         self.showNormal()
         self.raise_()
         self.activateWindow()
