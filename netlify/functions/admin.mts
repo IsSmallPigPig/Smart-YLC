@@ -5,7 +5,7 @@ import {
   json,
   loadState,
   mutateState,
-  publicStats,
+  liveStats,
 } from "./_shared.mjs";
 
 /**
@@ -17,7 +17,7 @@ export default async (req: Request): Promise<Response> => {
   const action = url.searchParams.get("action") ?? "";
 
   if (action === "public" && req.method === "GET") {
-    return json(publicStats(await loadState()));
+    return json(await liveStats(await loadState()));
   }
 
   if (!adminAuthorized(req)) {
@@ -31,7 +31,7 @@ export default async (req: Request): Promise<Response> => {
       settings: state.settings,
       codes: Object.values(state.codes).sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)),
       devices: Object.values(state.devices).sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)),
-      stats: publicStats(state),
+      stats: await liveStats(state),
     });
   }
 

@@ -124,12 +124,39 @@ export function touchDevice(state: State, req: Request, code: string): void {
   };
 }
 
-export function publicStats(state: State) {
-  const codes = Object.values(state.codes);
+const backupStore = getStore({ name: "smartyouth-backup", consistency: "strong" });
+const archiveStore = getStore({ name: "smartyouth-archive", consistency: "strong" });
+
+type IndexFile = { ready: boolean; size: number };
+
+/** 公开统计直接数存储，历史备份和升级前上传的中转文件都算进来。 */
+export async function liveStats(state: State) {
+  let backups = 0;
+  for await (const page of backupStore.list({ paginate: true })) {
+    backups += page.blobs.filter((blob) => CODE_RE.test(blob.key)).length;
+  }
+
+  let relayFiles = 0;
+  let relayBytes = 0;
+  for await (const page of archiveStore.list({ paginate: true, prefix: "archive:" })) {
+    for (const blob of page.blobs) {
+      const parts = blob.key.split(":");
+      if (parts.length !== 2 || !CODE_RE.test(parts[1])) continue;
+      const index = (await archiveStore.get(blob.key, { type: "json" })) as
+        | { files?: IndexFile[] }
+        | null;
+      for (const file of index?.files ?? []) {
+        if (!file.ready) continue;
+        relayFiles += 1;
+        relayBytes += file.size;
+      }
+    }
+  }
+
   return {
-    backups: codes.filter((c) => c.backupUpdatedAt).length,
-    relayFiles: codes.reduce((sum, c) => sum + c.relayFiles, 0),
-    relayBytes: codes.reduce((sum, c) => sum + c.relayBytes, 0),
+    backups,
+    relayFiles,
+    relayBytes,
     devices: Object.keys(state.devices).length,
     updatedAt: new Date().toISOString(),
   };
