@@ -5,6 +5,7 @@ import {
   RadioButton, SwitchButton, applyThemeColor,
 } from 'react-fluent'
 import { api, setToken, size, time, token, type Session } from './api'
+import 'react-fluent/style.css'
 import './style.css'
 
 applyThemeColor('#0078d4')

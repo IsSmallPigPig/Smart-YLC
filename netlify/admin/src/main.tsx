@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Card, applyThemeColor } from 'react-fluent'
 import { api, size, type Stats } from './api'
+import 'react-fluent/style.css'
 import './style.css'
 
 applyThemeColor('#0078d4')
