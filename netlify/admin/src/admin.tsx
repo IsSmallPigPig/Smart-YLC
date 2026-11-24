@@ -1,10 +1,11 @@
 import { StrictMode, useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  Card, LineEdit, PasswordLineEdit, PrimaryPushButton, PushButton,
+  LineEdit, PasswordLineEdit, PrimaryPushButton, PushButton,
   RadioButton, SwitchButton, applyThemeColor,
 } from 'react-fluent'
 import { api, setToken, size, time, token, type Session } from './api'
+import { Group, Row, Shell } from './shell'
 import 'react-fluent/style.css'
 import './style.css'
 
@@ -31,20 +32,27 @@ function Login({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <main className="page login">
-      <h1>云端管理</h1>
-      <PasswordLineEdit
-        width={320}
-        placeholder="管理口令"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && enter()}
-      />
-      <div className="inline">
-        <PrimaryPushButton disabled={busy || !password.trim()} onClick={enter}>进入</PrimaryPushButton>
-      </div>
-      {error && <p className="error">{error}</p>}
-    </main>
+    <Shell title="云端管理" caption="管理提取码、同步设备与中转存储">
+      <Group title="管理口令">
+        <div className="setcard setcard--form">
+          <div className="setcard__text">
+            <div className="row-title">口令</div>
+            <div className="setcard__content">站点环境变量里的 ADMIN_TOKEN</div>
+          </div>
+          <div className="setcard__control row-control">
+            <PasswordLineEdit
+              width={240}
+              placeholder="管理口令"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && enter()}
+            />
+            <PrimaryPushButton disabled={busy || !password.trim()} onClick={enter}>进入</PrimaryPushButton>
+          </div>
+        </div>
+      </Group>
+      {error && <p className="form-error">{error}</p>}
+    </Shell>
   )
 }
 
@@ -66,67 +74,57 @@ function Codes({ session, reload }: { session: Session; reload: () => void }) {
   }
 
   return (
-    <Card>
-      <div className="card-head">
-        <h2>提取码</h2>
-        <span className="hint">{session.codes.length} 个</span>
-      </div>
-      {session.codes.length === 0 ? <div className="empty">还没有提取码</div> : (
-        <div className="table-scroll"><table className="table">
-          <thead><tr><th>提取码</th><th>最近活动</th><th>备份</th><th>中转文件</th><th>允许中转</th><th /></tr></thead>
-          <tbody>
-            {session.codes.map((c) => (
-              <tr key={c.code}>
-                <td className="mono">{c.code}</td>
-                <td>{time(c.lastSeenAt)}</td>
-                <td>{c.backupUpdatedAt ? time(c.backupUpdatedAt) : '—'}</td>
-                <td>{c.relayFiles} · {size(c.relayBytes)}</td>
-                <td>
-                  <SwitchButton
-                    key={`${c.code}-${c.relayAllowed}`}
-                    defaultChecked={c.relayAllowed}
-                    disabled={busy === c.code}
-                    onChange={(next) => run(c.code, () => api.code(c.code, next))}
-                  />
-                </td>
-                <td>
-                  <div className="row-actions">
-                    <PushButton disabled={busy === c.code} onClick={() => run(c.code, () => api.removeCode(c.code))}>移除</PushButton>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table></div>
-      )}
-      {error && <p className="error">{error}</p>}
-    </Card>
+    <>
+      <Group
+        title="提取码"
+        aside={session.codes.length > 0 ? `${session.codes.length} 个` : undefined}
+      >
+        {session.codes.length === 0
+          ? <Row content="还没有提取码。桌面端上传一次备份后，这里会出现它的提取码。" />
+          : session.codes.map((c) => (
+            <Row
+              key={c.code}
+              title={c.code}
+              mono
+              content={`最近活动 ${time(c.lastSeenAt)}，备份 ${time(c.backupUpdatedAt)}，中转 ${c.relayFiles} 个文件 ${size(c.relayBytes)}`}
+              control={<>
+                <SwitchButton
+                  key={`${c.code}-${c.relayAllowed}`}
+                  defaultChecked={c.relayAllowed}
+                  disabled={busy === c.code}
+                  onText="允许中转"
+                  offText="不允许中转"
+                  onChange={(next) => run(c.code, () => api.code(c.code, next))}
+                />
+                <PushButton
+                  disabled={busy === c.code}
+                  onClick={() => run(c.code, () => api.removeCode(c.code))}
+                >移除</PushButton>
+              </>}
+            />
+          ))}
+      </Group>
+      {error && <p className="form-error">{error}</p>}
+    </>
   )
 }
 
 function Devices({ session }: { session: Session }) {
   return (
-    <Card>
-      <div className="card-head">
-        <h2>同步设备</h2>
-        <span className="hint">{session.devices.length} 台</span>
-      </div>
-      {session.devices.length === 0 ? <div className="empty">还没有设备连接</div> : (
-        <div className="table-scroll"><table className="table">
-          <thead><tr><th>设备</th><th>类型</th><th>提取码</th><th>最近活动</th></tr></thead>
-          <tbody>
-            {session.devices.map((d) => (
-              <tr key={d.id}>
-                <td>{d.name}</td>
-                <td>{d.platform}</td>
-                <td className="mono">{d.code}</td>
-                <td>{time(d.lastSeenAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table></div>
-      )}
-    </Card>
+    <Group
+      title="同步设备"
+      aside={session.devices.length > 0 ? `${session.devices.length} 台` : undefined}
+    >
+      {session.devices.length === 0
+        ? <Row content="还没有设备连接。桌面端上传备份或走中转后，这里会出现对应的设备。" />
+        : session.devices.map((d) => (
+          <Row
+            key={d.id}
+            title={`${d.name}（${d.platform}）`}
+            content={`提取码 ${d.code}，最近活动 ${time(d.lastSeenAt)}`}
+          />
+        ))}
+    </Group>
   )
 }
 
@@ -148,38 +146,42 @@ function Relay({ session, reload }: { session: Session; reload: () => void }) {
     }
   }
 
+  const current = session.settings.relay === 'r2'
+    ? `Cloudflare R2，${session.settings.r2Bucket || '未填桶名'}`
+    : 'Netlify'
+
   return (
-    <Card>
-      <div className="card-head">
-        <h2>中转存储</h2>
-        <span className="hint">
-          当前：{session.settings.relay === 'r2'
-            ? `Cloudflare R2 · ${session.settings.r2Bucket || '未填桶名'}`
-            : 'Netlify'}
-        </span>
-      </div>
-      <div className="stack">
-        <div className="inline">
-          <RadioButton text="Netlify" checked={provider === 'netlify'} onChange={() => setProvider('netlify')} />
-          <RadioButton text="Cloudflare R2" checked={provider === 'r2'} onChange={() => setProvider('r2')} />
-        </div>
+    <>
+      <Group title="中转存储" aside={`当前 ${current}`}>
+        <Row
+          title="文件存放位置"
+          content="设备之间传的文件中转到这里"
+          control={<>
+            <RadioButton text="Netlify" checked={provider === 'netlify'} onChange={() => setProvider('netlify')} />
+            <RadioButton text="Cloudflare R2" checked={provider === 'r2'} onChange={() => setProvider('r2')} />
+          </>}
+        />
         {provider === 'r2' && (
-          <div className="inline">
-            <LineEdit
-              width={320}
-              placeholder="存储桶名称"
-              value={bucket}
-              onChange={(e) => setBucket(e.target.value)}
-            />
-          </div>
+          <Row
+            title="存储桶名称"
+            content="填 Cloudflare 上已有的桶"
+            control={
+              <LineEdit
+                width={240}
+                placeholder="存储桶名称"
+                value={bucket}
+                onChange={(e) => setBucket(e.target.value)}
+              />
+            }
+          />
         )}
-        <div className="inline">
-          <PrimaryPushButton onClick={save}>保存</PrimaryPushButton>
-          {saved && <span className="hint">已保存</span>}
-        </div>
-        {error && <p className="error">{error}</p>}
-      </div>
-    </Card>
+        <Row
+          content={saved ? '已保存，之后上传的中转文件走新位置' : '保存后只影响之后上传的中转文件'}
+          control={<PrimaryPushButton onClick={save}>保存</PrimaryPushButton>}
+        />
+      </Group>
+      {error && <p className="form-error">{error}</p>}
+    </>
   )
 }
 
@@ -202,20 +204,24 @@ function Dashboard() {
 
   useEffect(reload, [reload])
 
-  if (!session) return <main className="page"><p className="hint">{error || '载入中'}</p></main>
-
   return (
-    <main className="page">
-      <div className="card-head">
-        <h1>云端管理</h1>
-        <PushButton onClick={reload}>刷新</PushButton>
-      </div>
-      <div className="stack">
-        <Codes session={session} reload={reload} />
-        <Devices session={session} />
-        <Relay session={session} reload={reload} />
-      </div>
-    </main>
+    <Shell
+      title="云端管理"
+      caption="提取码、同步设备与中转存储"
+      actions={<PushButton onClick={reload}>刷新</PushButton>}
+    >
+      {session ? (
+        <>
+          <Codes session={session} reload={reload} />
+          <Devices session={session} />
+          <Relay session={session} reload={reload} />
+        </>
+      ) : (
+        <Group title="状态">
+          <Row content={error || '正在读取云端状态'} />
+        </Group>
+      )}
+    </Shell>
   )
 }
 
