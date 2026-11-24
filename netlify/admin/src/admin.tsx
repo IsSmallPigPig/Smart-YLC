@@ -1,7 +1,7 @@
 import { StrictMode, useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  LineEdit, PasswordLineEdit, PrimaryPushButton, PushButton,
+  LineEdit, MessageBox, PasswordLineEdit, PrimaryPushButton, PushButton,
   RadioButton, SwitchButton, applyThemeColor,
 } from 'react-fluent'
 import { api, setToken, size, time, token, type Session } from './api'
@@ -59,6 +59,8 @@ function Login({ onDone }: { onDone: () => void }) {
 function Codes({ session, reload }: { session: Session; reload: () => void }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+  const [confirming, setConfirming] = useState<string | null>(null)
+  const target = session.codes.find((c) => c.code === confirming)
 
   async function run(code: string, action: () => Promise<unknown>) {
     setBusy(code)
@@ -96,14 +98,25 @@ function Codes({ session, reload }: { session: Session; reload: () => void }) {
                   offText="不允许中转"
                   onChange={(next) => run(c.code, () => api.code(c.code, next))}
                 />
-                <PushButton
-                  disabled={busy === c.code}
-                  onClick={() => run(c.code, () => api.removeCode(c.code))}
-                >移除</PushButton>
+                <PushButton disabled={busy === c.code} onClick={() => setConfirming(c.code)}>移除</PushButton>
               </>}
             />
           ))}
       </Group>
+      <MessageBox
+        open={confirming !== null}
+        title={`移除 ${confirming ?? ''}？`}
+        content={target
+          ? `云端备份和 ${target.relayFiles} 个中转文件会被删除，这份配置之后无法再从云端恢复。`
+          : ''}
+        yesText="移除"
+        onYes={() => {
+          const code = confirming
+          setConfirming(null)
+          if (code) run(code, () => api.removeCode(code))
+        }}
+        onCancel={() => setConfirming(null)}
+      />
       {error && <p className="form-error">{error}</p>}
     </>
   )

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getStore } from "@netlify/blobs";
+import { deletePart } from "./_relay.mjs";
 
 export const CODE_RE = /^[A-Z2-9]{6}$/;
 export const KEY_RE = /^[0-9a-f]{64}$/;
@@ -130,6 +131,38 @@ export function touchDevice(state: State, req: Request, code: string, knownId = 
 
 const backupStore = getStore({ name: "smartyouth-backup", consistency: "strong" });
 const archiveStore = getStore({ name: "smartyouth-archive", consistency: "strong" });
+
+/**
+ * 删掉一个提取码的全部云端数据：备份信封、中转索引与分片。
+ * 管理页的「移除」必须落到这里，否则列表按存储生成，刷新后那一行会回来。
+ */
+export async function deleteCodeData(
+  state: State,
+  code: string,
+): Promise<{ backup: boolean; files: number; parts: number }> {
+  const backup = await backupStore.get(code);
+  if (backup) await backupStore.delete(code);
+
+  const indexKey = `archive:${code}`;
+  const index = (await archiveStore.get(indexKey, { type: "json" })) as
+    | { files?: { id: string; parts?: number }[] }
+    | null;
+  let files = 0;
+  let parts = 0;
+  for (const file of index?.files ?? []) {
+    for (let i = 0; i < (file.parts ?? 0); i += 1) {
+      try {
+        await deletePart(state, code, file.id, i);
+        parts += 1;
+      } catch {
+        // 分片可能已在上次清理中删掉，继续删剩下的
+      }
+    }
+    files += 1;
+  }
+  if (index) await archiveStore.delete(indexKey);
+  return { backup: Boolean(backup), files, parts };
+}
 
 /**
  * 存储里真实存在的提取码。管理页照着它列，老备份不必等设备再连一次才会出现。

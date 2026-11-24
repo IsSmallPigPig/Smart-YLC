@@ -5,6 +5,7 @@ import {
   json,
   loadState,
   mutateState,
+  deleteCodeData,
   listStoredCodes,
   liveStats,
 } from "./_shared.mjs";
@@ -120,15 +121,15 @@ export default async (req: Request): Promise<Response> => {
   if (action === "code" && req.method === "DELETE") {
     const code = (url.searchParams.get("id") ?? "").toUpperCase();
     if (!CODE_RE.test(code)) return json({ ok: false, error: "提取码格式不对" }, 400);
-    const removed = await mutateState((state) => {
-      const existed = Boolean(state.codes[code]);
-      delete state.codes[code];
-      for (const [id, device] of Object.entries(state.devices)) {
-        if (device.code === code) delete state.devices[id];
+    const state = await loadState();
+    const deleted = await deleteCodeData(state, code);
+    await mutateState((next) => {
+      delete next.codes[code];
+      for (const [id, device] of Object.entries(next.devices)) {
+        if (device.code === code) delete next.devices[id];
       }
-      return existed;
     });
-    return json({ ok: true, removed });
+    return json({ ok: true, removed: true, ...deleted });
   }
 
   return json({ ok: false, error: "不支持的请求" }, 405);

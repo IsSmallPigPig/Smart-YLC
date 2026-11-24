@@ -1,11 +1,11 @@
 /* 控件、卡片、间距尺度全部来自 fluent.css，这里只补演示站没有的页面级细节 */
 
-/* 内容列居中，宽度按阅读舒适度收住；左右内边距由 g-page 与 g-page__body 给出 */
+/* 底色铺满整个窗口，内容列居中收宽；左右内边距由 g-page 与 g-page__body 给出 */
+.f-window { background: #fff; }
 .g-page {
   width: 100%;
   max-width: 960px;
   margin: 0 auto;
-  background: rgba(255, 255, 255, 0.5);   /* 与演示站 StackedWidget 同底色 */
 }
 
 /* 标题行右侧放刷新等动作 */
