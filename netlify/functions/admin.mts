@@ -5,6 +5,7 @@ import {
   json,
   loadState,
   mutateState,
+  listStoredCodes,
   liveStats,
 } from "./_shared.mjs";
 
@@ -26,10 +27,26 @@ export default async (req: Request): Promise<Response> => {
 
   if (action === "session" && req.method === "GET") {
     const state = await loadState();
+    const codes = Object.values(state.codes);
+    const known = new Set(codes.map((record) => record.code));
+    for (const stored of await listStoredCodes()) {
+      if (known.has(stored.code)) continue;
+      // 早于登记逻辑上传的备份只有密文，没有活动记录，按备份时间展示
+      codes.push({
+        code: stored.code,
+        boundAt: stored.updatedAt,
+        lastSeenAt: stored.updatedAt,
+        relayAllowed: false,
+        backupUpdatedAt: stored.updatedAt,
+        relayFiles: 0,
+        relayBytes: 0,
+      });
+    }
+    codes.sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
     return json({
       ok: true,
       settings: state.settings,
-      codes: Object.values(state.codes).sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)),
+      codes,
       devices: Object.values(state.devices).sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)),
       stats: await liveStats(state),
     });
@@ -77,13 +94,26 @@ export default async (req: Request): Promise<Response> => {
     if (!CODE_RE.test(code)) {
       return json({ ok: false, error: "提取码格式不对" }, 400);
     }
+    const relayAllowed = body.relayAllowed === true;
+    const stored = await listStoredCodes();
+    if (!stored.some((item) => item.code === code)) {
+      return json({ ok: false, error: "没有这个提取码" }, 404);
+    }
     const record = await mutateState((state) => {
-      const current = state.codes[code];
-      if (!current) return null;
-      current.relayAllowed = body.relayAllowed === true;
+      const now = new Date().toISOString();
+      const current = state.codes[code] ?? {
+        code,
+        boundAt: now,
+        lastSeenAt: now,
+        relayAllowed: false,
+        backupUpdatedAt: now,
+        relayFiles: 0,
+        relayBytes: 0,
+      };
+      current.relayAllowed = relayAllowed;
+      state.codes[code] = current;
       return current;
     });
-    if (!record) return json({ ok: false, error: "没有这个提取码" }, 404);
     return json({ ok: true, code: record.code, relayAllowed: record.relayAllowed });
   }
 

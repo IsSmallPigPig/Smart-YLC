@@ -71,7 +71,7 @@ function Codes({ session, reload }: { session: Session; reload: () => void }) {
         <h2>提取码</h2>
         <span className="hint">{session.codes.length} 个</span>
       </div>
-      {session.codes.length === 0 ? <div className="empty">还没有设备连接</div> : (
+      {session.codes.length === 0 ? <div className="empty">还没有提取码</div> : (
         <div className="table-scroll"><table className="table">
           <thead><tr><th>提取码</th><th>最近活动</th><th>备份</th><th>中转文件</th><th>允许中转</th><th /></tr></thead>
           <tbody>
@@ -111,7 +111,7 @@ function Devices({ session }: { session: Session }) {
         <h2>同步设备</h2>
         <span className="hint">{session.devices.length} 台</span>
       </div>
-      {session.devices.length === 0 ? <div className="empty">还没有中转记录</div> : (
+      {session.devices.length === 0 ? <div className="empty">还没有设备连接</div> : (
         <div className="table-scroll"><table className="table">
           <thead><tr><th>设备</th><th>类型</th><th>提取码</th><th>最近活动</th></tr></thead>
           <tbody>

@@ -131,6 +131,34 @@ export function touchDevice(state: State, req: Request, code: string, knownId = 
 const backupStore = getStore({ name: "smartyouth-backup", consistency: "strong" });
 const archiveStore = getStore({ name: "smartyouth-archive", consistency: "strong" });
 
+/**
+ * 存储里真实存在的提取码。管理页照着它列，老备份不必等设备再连一次才会出现。
+ */
+export async function listStoredCodes(): Promise<{ code: string; updatedAt: string }[]> {
+  const out: { code: string; updatedAt: string }[] = [];
+  for await (const page of backupStore.list({ paginate: true })) {
+    for (const blob of page.blobs) {
+      const code = blob.key.toUpperCase();
+      if (!CODE_RE.test(code)) continue;
+      const raw = (blob as unknown as { lastModified?: Date | string }).lastModified;
+      let updatedAt =
+        raw instanceof Date
+          ? raw.toISOString()
+          : typeof raw === "string" && raw
+            ? new Date(raw).toISOString()
+            : "";
+      if (!updatedAt) {
+        const record = (await backupStore.get(code, { type: "json" })) as
+          | { updatedAt?: string }
+          | null;
+        updatedAt = record?.updatedAt ?? "";
+      }
+      out.push({ code, updatedAt });
+    }
+  }
+  return out;
+}
+
 type IndexFile = { ready: boolean; size: number };
 
 /** 公开统计直接数存储，历史备份和升级前上传的中转文件都算进来。 */
