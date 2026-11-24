@@ -107,6 +107,13 @@
 把 cmap 中 U+0030–U+0039 指到 `tnum` 的替换字形，默认字形就是等宽的，不依赖运行时
 开关；字形轮廓未改。改动说明写在 `LICENSE-Allo.txt`。
 
+Windows 用 Allo 的 TrueType 版本（`Allo-*-tt.ttf`）：Qt 5 在 Windows 上渲染 CFF/OTF
+轮廓会出毛边，macOS 的 CoreText 没有这个问题，仍用原来的 OTF。TTF 由
+`scripts/build_allo_ttf.py` 从官方可变字体生成四个静态字重，沿用等宽数字补丁，
+并把行高与基线度量对齐 MiSans，避免数字和汉字混排时上下错位。Windows 还关掉
+次像素抗锯齿——Mica / 亚克力是半透明背景，ClearType 按不透明背景算出的子像素
+颜色会在字边留下彩边。
+
 注册四个字重（Regular / Medium / SemiBold / Bold）而不是只注册 Regular：
 界面用了这四档，缺文件时 Qt 会合成假粗体——笔画发糊，字宽也不同，等宽数字的列会歪。
 

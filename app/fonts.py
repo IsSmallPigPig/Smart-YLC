@@ -22,10 +22,21 @@ FONT_FILES = (
     "MiSans-Demibold.ttf",
     "MiSans-Bold.ttf",
 )
+# Qt 5 在 Windows 上把 CFF/OTF 轮廓渲成毛边；同一套 Allo 的 TrueType 版本
+# 由 scripts/build_allo_ttf.py 从官方可变字体生成，度量也对齐了 MiSans。
+WINDOWS_FONT_FILES = tuple(
+    name.replace(".otf", "-tt.ttf") if name.startswith("Allo-") else name
+    for name in FONT_FILES
+)
 FONTS = {
     "darwin": [FONT_FAMILY, CJK_FAMILY, "PingFang SC"],
     "win32": [FONT_FAMILY, CJK_FAMILY, "Microsoft YaHei UI", "Microsoft YaHei"],
 }
+
+
+def font_files(platform: str) -> tuple[str, ...]:
+    """当前平台该注册的字体文件；macOS 用原来的 OTF，Windows 用 TrueType。"""
+    return WINDOWS_FONT_FILES if platform == "win32" else FONT_FILES
 
 
 def fonts_dir() -> Path:

@@ -11,7 +11,7 @@ import sys
 from qfluentwidgets import setFontFamilies, setTheme, Theme, setThemeColor
 
 # 字体清单单独放在 fonts.py：命令行要读这份常量，不能连带 import Qt。
-from app.fonts import CJK_FAMILY, FONT_FAMILY, FONT_FILES, FONTS  # noqa: F401
+from app.fonts import CJK_FAMILY, FONT_FAMILY, FONT_FILES, FONTS, font_files  # noqa: F401
 
 THEME_MODES = {"auto": Theme.AUTO, "light": Theme.LIGHT, "dark": Theme.DARK}
 
@@ -44,7 +44,7 @@ def register_fonts() -> str | None:
 
         folder = assets_dir() / "fonts"
         found: list[str] = []
-        for name in FONT_FILES:
+        for name in font_files(sys.platform):
             path = folder / name
             if not path.is_file():
                 continue
@@ -84,7 +84,12 @@ def _apply_font(families: list[str] | None) -> None:
         font.setFamily(families[0])
         if hasattr(font, "setFamilies"):
             font.setFamilies(families)
-    font.setStyleStrategy(font.styleStrategy() | QFont.StyleStrategy.PreferAntialias)
+    strategy = font.styleStrategy() | QFont.StyleStrategy.PreferAntialias
+    if sys.platform == "win32":
+        # Mica / 亚克力是半透明背景：ClearType 的次像素抗锯齿按不透明背景算颜色，
+        # 边缘会带彩边。Windows 改用灰度抗锯齿；macOS 的 CoreText 不走这条路。
+        strategy |= QFont.StyleStrategy.NoSubpixelAntialias
+    font.setStyleStrategy(strategy)
     QApplication.setFont(font)
 
 

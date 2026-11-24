@@ -806,3 +806,20 @@ def test_update_and_tray_modules_are_clean():
                 "app/services/single_instance.py"):
         problems = lint_patterns.check_file(ROOT / rel)
         assert not problems, (rel, problems)
+
+
+def test_windows_font_rules_catch_old_setup():
+    """能拦住旧写法：setup 不按平台挑字体、Windows 不关次像素抗锯齿。"""
+    bad = ("from app.fonts import FONT_FILES\n"
+           "for name in FONT_FILES:\n"
+           "    QFontDatabase.addApplicationFont(name)\n"
+           "font.setStyleStrategy(font.styleStrategy() | QFont.PreferAntialias)\n")
+    problems = check(bad, "setup.py")
+    assert any("Windows 用了 OTF 字体" in p for p in problems), problems
+    assert any("半透明背景有彩边" in p for p in problems), problems
+
+
+def test_setup_and_cli_font_rules_are_clean():
+    """当前库干净：界面和命令行都按平台挑字体，Windows 关掉次像素抗锯齿。"""
+    for rel in ("app/setup.py", "app/cli.py"):
+        assert lint_patterns.check_file(ROOT / rel) == []

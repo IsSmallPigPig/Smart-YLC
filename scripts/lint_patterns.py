@@ -454,6 +454,21 @@ def check_file(path: Path) -> list[str]:
             f"{rel} [单实例只靠管道] 缺少 QLockFile：只连命名管道时，"
             "两个进程同时启动会各自 listen，出现两套托盘与窗口")
 
+    # 规则 41（2026-11-24 Windows 字体毛边）：Windows 不能注册 CFF/OTF 轮廓。
+    # Qt 5 在 Windows 上渲染 OTF 字形是毛边，同一字体的 TrueType 版本正常；
+    # macOS 的 CoreText 没这问题，仍用 OTF。setup 必须按平台挑文件。
+    if rel.endswith("setup.py") and "font_files(sys.platform)" not in source:
+        problems.append(
+            f"{rel} [Windows 用了 OTF 字体] 注册字体时用 font_files(sys.platform)："
+            "Windows 要 Allo 的 TrueType 静态字重，用 OTF 会出现毛边")
+
+    # 规则 42（2026-11-24 半透明材质彩边）：Windows 要关掉次像素抗锯齿。
+    # Mica / 亚克力是半透明背景，ClearType 按不透明背景算子像素颜色，字边留彩边。
+    if rel.endswith("setup.py") and "NoSubpixelAntialias" not in source:
+        problems.append(
+            f"{rel} [半透明背景有彩边] Windows 的 style strategy 要加 "
+            "NoSubpixelAntialias，ClearType 在 Mica / 亚克力上会留彩色毛边")
+
     # 规则 28（2026-11-22 手机配对无感知）：配对成功必须同时提醒用户并记下设备。
     # 旧实现 pair() 只发 token，电脑端界面毫无变化，用户不知道手机已经连上，
     # 也看不到哪些设备配过；失败时也无法给提示。

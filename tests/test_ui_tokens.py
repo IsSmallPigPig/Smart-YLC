@@ -231,3 +231,62 @@ def test_latin_and_cjk_split_between_bundled_fonts(app):
     mixed = shot("团员 42 人", applied)
     assert mixed != shot("团员 42 人", single(FONT_FAMILY))
     assert mixed != shot("团员 42 人", single(CJK_FAMILY))
+
+
+def test_windows_fonts_are_truetype_and_tabular(app):
+    """Windows 用 TrueType 轮廓的 Allo：CFF/OTF 在 Qt5 的 Windows 渲染里出毛边。"""
+    from fontTools.ttLib import TTFont
+
+    from app.fonts import WINDOWS_FONT_FILES, font_files, fonts_dir
+    from app.ui.brand import assets_dir
+
+    assert font_files("win32") == WINDOWS_FONT_FILES
+    assert font_files("darwin") == tuple(
+        name for name in font_files("darwin") if name.endswith((".otf", ".ttf")))
+    assert "Allo-Regular-tt.ttf" in WINDOWS_FONT_FILES
+    assert "Allo-Regular.otf" not in WINDOWS_FONT_FILES
+
+    folder = fonts_dir()
+    for name in WINDOWS_FONT_FILES:
+        assert (folder / name).is_file(), f"缺 Windows 字体：{name}"
+
+    cjk = TTFont(str(assets_dir() / "fonts" / "MiSans-Regular.ttf"))
+    factor = 2048 / cjk["head"].unitsPerEm
+    expected = (round(cjk["hhea"].ascent * factor),
+                round(cjk["hhea"].descent * factor))
+    for name in WINDOWS_FONT_FILES:
+        if not name.startswith("Allo-"):
+            continue
+        font = TTFont(str(folder / name))
+        assert "glyf" in font, f"{name} 仍是 CFF 轮廓"
+        assert (font["hhea"].ascent, font["hhea"].descent) == expected, \
+            f"{name} 行高未对齐 MiSans"
+        widths = {font["hmtx"][font.getBestCmap()[c]][0] for c in range(0x30, 0x3A)}
+        assert len(widths) == 1, f"{name} 数字不等宽"
+
+
+def test_windows_disables_subpixel_antialiasing(app, monkeypatch):
+    """半透明材质上 ClearType 的彩色子像素会留下彩边，Windows 改灰度抗锯齿。"""
+    from types import SimpleNamespace
+
+    from PyQt5.QtGui import QFont
+    from PyQt5.QtWidgets import QApplication
+
+    from app import setup
+
+    monkeypatch.setattr(setup, "sys", SimpleNamespace(platform="win32"))
+    setup._apply_font(None)
+    strategy = QApplication.font().styleStrategy()
+    assert strategy & QFont.StyleStrategy.NoSubpixelAntialias
+    assert strategy & QFont.StyleStrategy.PreferAntialias
+
+
+def test_windows_allo_ttf_registers_as_allo(app):
+    """生成的 TTF 必须仍叫 Allo，否则字体栈第一项匹配不上，等于没换。"""
+    from PyQt5.QtGui import QFontDatabase
+
+    from app.fonts import FONT_FAMILY, fonts_dir
+
+    fid = QFontDatabase.addApplicationFont(str(fonts_dir() / "Allo-Regular-tt.ttf"))
+    assert fid != -1
+    assert FONT_FAMILY in QFontDatabase.applicationFontFamilies(fid)

@@ -12,6 +12,12 @@ Allo-1.0.3.zip 的 fonts/otf/，仅做一处改动：把 cmap 中 U+0030–U+003
 原因：Allo 的 `tnum` 需要调用方主动开启，而 PyQt5 5.15 没有 QFont.setFeature。
 Allo 不带汉字，界面的中文由同目录 MiSans 逐字回落。
 
+`Allo-*-tt.ttf` 是另一个修改版：取自同一项目的官方可变字体 AlloVariable.ttf，
+用 scripts/build_allo_ttf.py 生成 Regular / Medium / SemiBold / Bold 四个静态字重，
+沿用等宽数字替换，并把行高与基线度量对齐 MiSans。Windows 用这份 TrueType 轮廓——
+Qt 5 在 Windows 上渲染 CFF/OTF 字体有毛边；macOS 继续用上面的 OTF。
+两版都只改 cmap 与度量，轮廓来自同一套原字体。
+
 ---- 以下为原始许可全文 ----
 
 Copyright 2026 Josh Puckett (https://joshpuckett.me)
